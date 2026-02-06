@@ -45,11 +45,22 @@ class SimulationCacheManager {
   }
 
   /**
-   *   Better error handling with abort support and longer timeout
+   * ✅ ENHANCED: Generate batch cache with progress callback
+   * @param {string} sceneId 
+   * @param {number} agentCount 
+   * @param {number} duration 
+   * @param {Function} progressCallback - Optional (percent, message) => void
    */
-  async generateBatchCache(sceneId, agentCount, duration) {
+  async generateBatchCache(sceneId, agentCount, duration, progressCallback = null) {
     console.log(`🔄 Generating cache for all age groups...`);
     console.log(`   Scene: ${sceneId}, Agents: ${agentCount}, Duration: ${duration}s`);
+    
+    // Helper to update progress
+    const updateProgress = (percent, message) => {
+      if (progressCallback) {
+        progressCallback(percent, message);
+      }
+    };
     
     // Evict oldest if needed
     this.evictOldestIfNeeded();
@@ -60,11 +71,15 @@ class SimulationCacheManager {
     this.activeRequests.set(requestId, controller);
     
     try {
-      //   Extended timeout for batch simulations (25 minutes instead of 12)
+      updateProgress(5, 'Starting batch simulation...');
+      
+      // Extended timeout for batch simulations (10 minutes)
       const timeoutId = setTimeout(() => {
         console.error('⚠️ Batch simulation timeout - aborting...');
         controller.abort();
       }, this.TIMEOUT_MS);
+
+      updateProgress(10, 'Sending simulation request...');
 
       const response = await fetch('/api/simulate/batch-all-ages', {
         method: 'POST',
@@ -86,7 +101,8 @@ class SimulationCacheManager {
         throw new Error(data.error || 'Batch simulation failed');
       }
 
-      console.log(' Batch simulation completed, loading results...');
+      updateProgress(30, 'Batch simulation completed, loading results...');
+      console.log('✅ Batch simulation completed, loading results...');
 
       // Create cache structure with size limit
       if (!this.cache.has(sceneId)) {
@@ -102,8 +118,17 @@ class SimulationCacheManager {
       const ageGroups = Object.keys(data.results);
       let successCount = 0;
 
-      for (const ageGroupId of ageGroups) {
-        //   Check if aborted before each fetch
+      for (let i = 0; i < ageGroups.length; i++) {
+        const ageGroupId = ageGroups[i];
+        
+        // Calculate progress (30% to 90% range)
+        const baseProgress = 30;
+        const progressRange = 60;
+        const currentProgress = baseProgress + (progressRange * (i / ageGroups.length));
+        
+        updateProgress(currentProgress, `Loading ${ageGroupId} data (${i + 1}/${ageGroups.length})...`);
+        
+        // Check if aborted before each fetch
         if (controller.signal.aborted) {
           throw new Error('Request aborted by timeout or user');
         }
@@ -121,7 +146,7 @@ class SimulationCacheManager {
           const simController = new AbortController();
           const simTimeoutId = setTimeout(() => simController.abort(), 30000);
 
-          //   Add AbortSignal to fetch
+          // Add AbortSignal to fetch
           const simResponse = await fetch(`/api/simulate/${info.simulationId}/status`, {
             signal: simController.signal
           });
@@ -134,15 +159,15 @@ class SimulationCacheManager {
 
           const simData = await simResponse.json();
           
-          //   Aggressive data compression
+          // Aggressive data compression
           const compactData = this.compressSimulationData(simData);
           
           sceneCache.set(ageGroupId, compactData);
           successCount++;
           
-          console.log(`    ${ageGroupId} loaded (${successCount}/${ageGroups.length})`);
+          console.log(`   ✅ ${ageGroupId} loaded (${successCount}/${ageGroups.length})`);
           
-          //   Log memory usage
+          // Log memory usage
           const memUsageMB = this.getApproximateCacheSizeMB();
           console.log(`   💾 Cache size: ${memUsageMB}MB`);
 
@@ -157,9 +182,13 @@ class SimulationCacheManager {
 
       this.currentSceneId = sceneId;
       
-      console.log(` Cache ready: ${successCount}/${ageGroups.length} age groups loaded`);
+      updateProgress(95, 'Finalizing cache...');
+      
+      console.log(`✅ Cache ready: ${successCount}/${ageGroups.length} age groups loaded`);
       console.log(`   Cache size: ${this.cache.size}/${this.MAX_SCENES} scenes`);
       console.log(`   Total memory: ${this.getApproximateCacheSizeMB()}MB`);
+      
+      updateProgress(100, 'Cache generation complete!');
       
       return successCount > 0;
 
@@ -171,6 +200,8 @@ class SimulationCacheManager {
       } else {
         console.error('❌ Cache generation failed:', error.message);
       }
+      
+      updateProgress(0, `Error: ${error.message}`);
       return false;
       
     } finally {
@@ -284,7 +315,7 @@ class SimulationCacheManager {
     // Also abort any active requests
     this.abortActiveRequests();
     
-    //   Force garbage collection if available
+    // Force garbage collection if available
     if (global.gc) {
       global.gc();
       console.log('🗑️ Garbage collection triggered');
@@ -372,7 +403,7 @@ class SimulationCacheManager {
         }
       }
       
-      console.log(` Evicted ${evictedCount} scenes`);
+      console.log(`✅ Evicted ${evictedCount} scenes`);
       console.log(`   Cache memory now: ${this.getApproximateCacheSizeMB()}MB`);
       
       // Force GC after eviction
