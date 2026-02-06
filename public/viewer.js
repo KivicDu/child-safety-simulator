@@ -1,181 +1,703 @@
 import * as THREE from 'three';
-import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import cacheManager from './cacheManager.js';
 
-// Global variables
-let scene, camera, renderer, controls;
-let currentModel = null;
-let currentSceneId = null;
-let currentSimulationId = null;
-let simulationData = null;
+// ============================================================================
+// GLOBAL STATE
+// ============================================================================
+const state = {
+  scene: null,
+  camera: null,
+  renderer: null,
+  controls: null,
+  currentSceneId: null,
+  currentAgeGroup: 'toddler',
+  currentSimulation: null,
+  loadedModel: null,
+  agents: [],
+  heatmapMesh: null,
+  playbackState: {
+    isPlaying: false,
+    currentFrame: 0,
+    totalFrames: 0,
+    speed: 1.0
+  }
+};
 
-// Agent visualization
-let agentMeshes = [];
-let isPlayingSimulation = false;
-let simulationStartTime = 0;
-let animationFrameId = null;
-let currentFrame = 0;
+// ============================================================================
+// INITIALIZATION
+// ============================================================================
 
-// Heatmap visualization
-let heatmapMesh = null;
-let heatmapTexture = null;
-let heatmapVisible = true;
-let hotspotMarkers = [];
-
-// Initialize viewer on page load
-document.addEventListener('DOMContentLoaded', () => {
-  initViewer();
-  setupEventListeners();
-});
-
-function initViewer() {
+/**
+ * Initialize Three.js scene
+ */
+function initThreeJS() {
   const canvas = document.getElementById('canvas3d');
-  const container = document.getElementById('viewer');
+  const viewer = document.getElementById('viewer');
 
   // Scene
-  scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x0a0a0a);
+  state.scene = new THREE.Scene();
+  state.scene.background = new THREE.Color(0x0a0a0a);
+  state.scene.fog = new THREE.Fog(0x0a0a0a, 20, 50);
 
   // Camera
-  camera = new THREE.PerspectiveCamera(
-    75,
-    container.clientWidth / container.clientHeight,
-    0.1,
-    1000
-  );
-  camera.position.set(5, 5, 5);
+  const aspect = viewer.clientWidth / viewer.clientHeight;
+  state.camera = new THREE.PerspectiveCamera(60, aspect, 0.1, 1000);
+  state.camera.position.set(8, 8, 8);
+  state.camera.lookAt(0, 0, 0);
 
   // Renderer
-  renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
-  renderer.setSize(container.clientWidth, container.clientHeight);
-  renderer.setPixelRatio(window.devicePixelRatio);
-
-  // Controls
-  controls = new OrbitControls(camera, renderer.domElement);
-  controls.enableDamping = true;
+  state.renderer = new THREE.WebGLRenderer({ 
+    canvas, 
+    antialias: true,
+    alpha: true 
+  });
+  state.renderer.setSize(viewer.clientWidth, viewer.clientHeight);
+  state.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  state.renderer.shadowMap.enabled = true;
+  state.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
   // Lights
   const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
-  scene.add(ambientLight);
+  state.scene.add(ambientLight);
 
-  const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
-  directionalLight.position.set(5, 10, 5);
-  scene.add(directionalLight);
+  const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+  dirLight.position.set(10, 20, 10);
+  dirLight.castShadow = true;
+  dirLight.shadow.camera.left = -20;
+  dirLight.shadow.camera.right = 20;
+  dirLight.shadow.camera.top = 20;
+  dirLight.shadow.camera.bottom = -20;
+  dirLight.shadow.mapSize.width = 2048;
+  dirLight.shadow.mapSize.height = 2048;
+  state.scene.add(dirLight);
 
-  // Grid
-  const gridHelper = new THREE.GridHelper(20, 20, 0x444444, 0x222222);
-  scene.add(gridHelper);
+  // Grid helper
+  const gridHelper = new THREE.GridHelper(20, 20, 0x00d4ff, 0x444444);
+  state.scene.add(gridHelper);
 
-  // Axes
-  const axesHelper = new THREE.AxesHelper(5);
-  scene.add(axesHelper);
+  // Controls
+  state.controls = new OrbitControls(state.camera, canvas);
+  state.controls.enableDamping = true;
+  state.controls.dampingFactor = 0.05;
+  state.controls.maxPolarAngle = Math.PI / 2.1; // Don't go below floor
+  state.controls.minDistance = 2;
+  state.controls.maxDistance = 30;
 
+  // Handle resize
+  window.addEventListener('resize', onWindowResize);
+
+  // Start animation loop
   animate();
 
-  window.addEventListener('resize', onWindowResize);
+  console.log('✅ Three.js initialized');
+}
+
+function onWindowResize() {
+  const viewer = document.getElementById('viewer');
+  const aspect = viewer.clientWidth / viewer.clientHeight;
+  
+  state.camera.aspect = aspect;
+  state.camera.updateProjectionMatrix();
+  
+  state.renderer.setSize(viewer.clientWidth, viewer.clientHeight);
 }
 
 function animate() {
   requestAnimationFrame(animate);
-  controls.update();
-
-  // Update agent positions if playing simulation
-  if (isPlayingSimulation && simulationData) {
-    updateAgentPositions();
+  
+  if (state.controls) {
+    state.controls.update();
   }
 
-  renderer.render(scene, camera);
-}
-
-function onWindowResize() {
-  const container = document.getElementById('viewer');
-  camera.aspect = container.clientWidth / container.clientHeight;
-  camera.updateProjectionMatrix();
-  renderer.setSize(container.clientWidth, container.clientHeight);
-}
-
-function setupEventListeners() {
-  // Upload button
-  document.getElementById('uploadBtn').addEventListener('click', handleUpload);
-  
-  // Run simulation button
-  document.getElementById('runSimBtn').addEventListener('click', runSimulation);
-  
-  // Playback button
-  document.getElementById('playbackBtn').addEventListener('click', togglePlayback);
-  
-  // Show events button
-  document.getElementById('showEventsBtn').addEventListener('click', showCollisionEvents);
-  
-  //  Toggle heatmap button
-  const toggleHeatmapBtn = document.getElementById('toggleHeatmapBtn');
-  if (toggleHeatmapBtn) {
-    toggleHeatmapBtn.addEventListener('click', toggleHeatmapVisibility);
+  // Update playback if playing
+  if (state.playbackState.isPlaying) {
+    updatePlayback();
   }
   
-  //  Age group change listener
-  document.getElementById('ageGroup').addEventListener('change', handleAgeGroupChange);
-  
-  // File input
-  document.getElementById('fileInput').addEventListener('change', (e) => {
-    if (e.target.files.length > 0) {
-      updateStatus(`📂 Selected: ${e.target.files[0].name}`, 'info');
-    }
+  state.renderer.render(state.scene, state.camera);
+}
+
+// ============================================================================
+// SCENE LOADING
+// ============================================================================
+
+/**
+ * Load GLB model into scene
+ */
+async function loadGLBModel(sceneId, filePath) {
+  showStatus('Loading 3D model...', 'info');
+
+  return new Promise((resolve, reject) => {
+    const loader = new GLTFLoader();
+    
+    loader.load(
+      filePath,
+      (gltf) => {
+        // Remove old model
+        if (state.loadedModel) {
+          state.scene.remove(state.loadedModel);
+          state.loadedModel.traverse((child) => {
+            if (child.geometry) child.geometry.dispose();
+            if (child.material) {
+              if (Array.isArray(child.material)) {
+                child.material.forEach(m => m.dispose());
+              } else {
+                child.material.dispose();
+              }
+            }
+          });
+        }
+
+        state.loadedModel = gltf.scene;
+        
+        // Enable shadows
+        state.loadedModel.traverse((child) => {
+          if (child.isMesh) {
+            child.castShadow = true;
+            child.receiveShadow = true;
+          }
+        });
+
+        state.scene.add(state.loadedModel);
+        state.currentSceneId = sceneId;
+
+        // Center camera on model
+        const box = new THREE.Box3().setFromObject(state.loadedModel);
+        const center = box.getCenter(new THREE.Vector3());
+        const size = box.getSize(new THREE.Vector3());
+        
+        const maxDim = Math.max(size.x, size.y, size.z);
+        const fov = state.camera.fov * (Math.PI / 180);
+        let cameraZ = Math.abs(maxDim / 2 / Math.tan(fov / 2));
+        cameraZ *= 1.5; // Add margin
+
+        state.camera.position.set(
+          center.x + cameraZ * 0.5,
+          center.y + cameraZ * 0.8,
+          center.z + cameraZ * 0.5
+        );
+        state.camera.lookAt(center);
+        state.controls.target.copy(center);
+
+        showStatus('3D model loaded successfully', 'success');
+        resolve(gltf.scene);
+      },
+      (progress) => {
+        const percent = (progress.loaded / progress.total) * 100;
+        updateLoadingProgress(percent);
+      },
+      (error) => {
+        console.error('GLB load error:', error);
+        showStatus('Failed to load 3D model', 'error');
+        reject(error);
+      }
+    );
   });
 }
 
+// ============================================================================
+// AGE GROUP SLIDER & DYNAMIC UPDATE
+// ============================================================================
+
 /**
- * ✅ FIXED: Safe JSON parsing helper
+ * Setup age group change handler - DAY 20 CRITICAL FEATURE
  */
-async function safeJsonParse(response) {
+function setupAgeGroupControls() {
+  const ageSelect = document.getElementById('ageGroup');
+  
+  ageSelect.addEventListener('change', async (e) => {
+    const newAgeGroup = e.target.value;
+    console.log(`🔄 Age group changed to: ${newAgeGroup}`);
+    
+    if (!state.currentSceneId) {
+      showStatus('Please upload a scene first', 'warning');
+      return;
+    }
+
+    // Update state
+    state.currentAgeGroup = newAgeGroup;
+
+    // Check if we have cached simulation for this age group
+    const cached = cacheManager.getCachedSimulation(
+      state.currentSceneId, 
+      newAgeGroup
+    );
+
+    if (cached) {
+      console.log(`📦 Using cached simulation for ${newAgeGroup}`);
+      showStatus(`Switching to ${newAgeGroup} (cached)`, 'info');
+      loadSimulationResults(cached);
+      updateHeatmap(cached);
+    } else {
+      console.log(`🔄 No cache found, running new simulation for ${newAgeGroup}`);
+      showStatus(`Running simulation for ${newAgeGroup}...`, 'info');
+      
+      // Get current simulation parameters
+      const agentCount = parseInt(document.getElementById('agentCount').value) || 10;
+      const duration = parseInt(document.getElementById('duration').value) || 10;
+      
+      await runSimulation(state.currentSceneId, newAgeGroup, agentCount, duration);
+    }
+  });
+
+  console.log('✅ Age group controls initialized');
+}
+
+// ============================================================================
+// SIMULATION EXECUTION
+// ============================================================================
+
+/**
+ * Run simulation for specific age group
+ */
+async function runSimulation(sceneId, ageGroupId, agentCount, duration) {
+  showLoading(`Running simulation for ${ageGroupId}...`);
+  updateLoadingProgress(10);
+
   try {
-    // Check if response is ok
+    // Start simulation
+    const response = await fetch('/api/simulate/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sceneId,
+        ageGroupId,
+        agentCount,
+        duration
+      })
+    });
+
     if (!response.ok) {
-      const errorText = await response.text();
-      console.error(`❌ Server error (${response.status}):`, errorText);
-      throw new Error(`Server error: ${response.status} - ${errorText.substring(0, 100)}`);
+      throw new Error(`Simulation failed: ${response.status}`);
     }
+
+    const data = await response.json();
+    const simulationId = data.simulationId;
+
+    updateLoadingProgress(30);
+
+    // Poll for completion
+    const result = await pollSimulationStatus(simulationId);
     
-    // Get response text first
-    const text = await response.text();
+    updateLoadingProgress(80);
+
+    // Load results
+    loadSimulationResults(result);
     
-    // Check if empty
-    if (!text || text.trim() === '') {
-      console.error('❌ Empty response from server');
-      throw new Error('Empty response from server');
-    }
-    
-    // Try to parse
-    try {
-      return JSON.parse(text);
-    } catch (parseError) {
-      console.error('❌ JSON parse error:', parseError);
-      console.error('   Response text:', text.substring(0, 500));
-      throw new Error(`Invalid JSON response: ${text.substring(0, 100)}`);
-    }
-    
+    // Generate and display heatmap
+    await loadAndDisplayHeatmap(simulationId);
+
+    updateLoadingProgress(100);
+    hideLoading();
+
+    showStatus('Simulation completed successfully!', 'success');
+
   } catch (error) {
-    console.error('❌ safeJsonParse error:', error);
-    throw error;
+    console.error('Simulation error:', error);
+    hideLoading();
+    showStatus(`Simulation failed: ${error.message}`, 'error');
   }
 }
 
-async function handleUpload() {
-  const fileInput = document.getElementById('fileInput');
-  const file = fileInput.files[0];
+/**
+ * Poll simulation status until complete
+ */
+async function pollSimulationStatus(simulationId, maxWait = 120000) {
+  const startTime = Date.now();
+  const pollInterval = 1000; // 1 second
+
+  while (Date.now() - startTime < maxWait) {
+    const response = await fetch(`/api/simulate/${simulationId}/status`);
+    
+    if (!response.ok) {
+      throw new Error('Failed to check simulation status');
+    }
+
+    const data = await response.json();
+
+    if (data.status === 'completed') {
+      return data;
+    } else if (data.status === 'failed') {
+      throw new Error(data.error || 'Simulation failed');
+    }
+
+    // Update progress
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(0);
+    updateLoadingText(`Simulating... ${elapsed}s`);
+
+    await new Promise(resolve => setTimeout(resolve, pollInterval));
+  }
+
+  throw new Error('Simulation timeout');
+}
+
+// ============================================================================
+// RESULTS VISUALIZATION
+// ============================================================================
+
+/**
+ * Load and display simulation results
+ */
+function loadSimulationResults(simData) {
+  console.log('📊 Loading simulation results...');
   
-  if (!file) {
-    updateStatus('⚠️ Please select a GLB file first', 'warning');
+  state.currentSimulation = simData;
+
+  // Update summary cards
+  updateSummaryCards(simData);
+
+  // Setup trajectory visualization
+  setupTrajectoryVisualization(simData);
+
+  // Show results section
+  document.getElementById('simulationResults').style.display = 'block';
+
+  console.log('✅ Results loaded');
+}
+
+/**
+ * Update summary statistics cards
+ */
+function updateSummaryCards(simData) {
+  const collisionEvents = simData.collisionEvents || [];
+  
+  // Total collisions
+  document.getElementById('totalCollisions').textContent = collisionEvents.length;
+
+  // Unique agents involved
+  const uniqueAgents = new Set(collisionEvents.map(e => e.agentId));
+  document.getElementById('agentsInvolved').textContent = uniqueAgents.size;
+
+  // Unique objects hit
+  const uniqueObjects = new Set(collisionEvents.map(e => e.objectId));
+  document.getElementById('objectsHit').textContent = uniqueObjects.size;
+}
+
+/**
+ * Setup trajectory visualization with agent paths
+ */
+function setupTrajectoryVisualization(simData) {
+  // Clear old agents
+  state.agents.forEach(agentMesh => {
+    state.scene.remove(agentMesh);
+    if (agentMesh.geometry) agentMesh.geometry.dispose();
+    if (agentMesh.material) agentMesh.material.dispose();
+  });
+  state.agents = [];
+
+  if (!simData.trajectories || simData.trajectories.length === 0) {
+    console.warn('No trajectory data available');
     return;
   }
 
-  if (!file.name.endsWith('.glb')) {
-    updateStatus('❌ Please select a valid .glb file', 'error');
-    return;
+  // Get age group config for agent size
+  const ageGroupId = simData.ageGroupId || 'toddler';
+  const ageGroupConfig = getAgeGroupConfig(ageGroupId);
+
+  // Create agent meshes
+  simData.trajectories.forEach((trajectory, index) => {
+    // Create capsule geometry for agent
+    const radius = ageGroupConfig.capsuleRadius || 0.25;
+    const height = ageGroupConfig.height || 1.0;
+    
+    const geometry = new THREE.CapsuleGeometry(radius, height - radius * 2, 8, 16);
+    const material = new THREE.MeshPhongMaterial({
+      color: 0x00d4ff,
+      transparent: true,
+      opacity: 0.7
+    });
+
+    const agentMesh = new THREE.Mesh(geometry, material);
+    agentMesh.castShadow = true;
+    
+    // Set initial position (will be animated later)
+    if (trajectory.positions && trajectory.positions.length > 0) {
+      const startPos = trajectory.positions[0];
+      agentMesh.position.set(startPos[0], startPos[1], startPos[2]);
+    }
+
+    state.scene.add(agentMesh);
+    state.agents.push(agentMesh);
+
+    // Store trajectory data on mesh
+    agentMesh.userData = {
+      trajectory: trajectory.positions || [],
+      agentId: trajectory.agentId
+    };
+  });
+
+  // Setup playback
+  state.playbackState.totalFrames = simData.trajectories[0]?.positions?.length || 0;
+  state.playbackState.currentFrame = 0;
+
+  console.log(`✅ Created ${state.agents.length} agent visualizations`);
+}
+
+/**
+ * Update playback frame
+ */
+function updatePlayback() {
+  if (!state.currentSimulation || state.agents.length === 0) return;
+
+  const { currentFrame, totalFrames, speed } = state.playbackState;
+
+  // Update agent positions
+  state.agents.forEach(agentMesh => {
+    const trajectory = agentMesh.userData.trajectory;
+    if (!trajectory || currentFrame >= trajectory.length) return;
+
+    const pos = trajectory[currentFrame];
+    agentMesh.position.set(pos[0], pos[1], pos[2]);
+  });
+
+  // Update playback info
+  const time = (currentFrame / 60).toFixed(1); // Assuming 60 FPS
+  document.getElementById('playbackTime').textContent = time;
+  document.getElementById('activeAgents').textContent = state.agents.length;
+
+  // Advance frame
+  state.playbackState.currentFrame += speed;
+
+  // Loop or stop at end
+  if (state.playbackState.currentFrame >= totalFrames) {
+    state.playbackState.currentFrame = 0;
+    // state.playbackState.isPlaying = false; // Uncomment to stop at end
+  }
+}
+
+// ============================================================================
+// HEATMAP VISUALIZATION - DAY 18-19 CRITICAL
+// ============================================================================
+
+/**
+ * Load and display heatmap overlay
+ */
+async function loadAndDisplayHeatmap(simulationId) {
+  try {
+    const response = await fetch(`/api/simulate/${simulationId}/heatmap`);
+    
+    if (!response.ok) {
+      throw new Error('Failed to load heatmap');
+    }
+
+    const heatmapData = await response.json();
+    
+    displayHeatmap(heatmapData);
+    displayHotspots(heatmapData.hotspots);
+
+  } catch (error) {
+    console.error('Heatmap error:', error);
+    showStatus('Failed to load heatmap', 'warning');
+  }
+}
+
+/**
+ * Update heatmap when age group changes
+ */
+function updateHeatmap(simData) {
+  if (!simData || !simData.simulationId) return;
+  
+  loadAndDisplayHeatmap(simData.simulationId);
+}
+
+/**
+ * Display heatmap as 3D plane overlay
+ */
+function displayHeatmap(heatmapData) {
+  // Remove old heatmap
+  if (state.heatmapMesh) {
+    state.scene.remove(state.heatmapMesh);
+    if (state.heatmapMesh.geometry) state.heatmapMesh.geometry.dispose();
+    if (state.heatmapMesh.material) {
+      state.heatmapMesh.material.map?.dispose();
+      state.heatmapMesh.material.dispose();
+    }
   }
 
-  updateStatus('⏳ Uploading...', 'info');
+  const { width, height, cellSize, bounds, data } = heatmapData;
+
+  // Create canvas for heatmap texture
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d');
+
+  // Draw heatmap
+  for (let row = 0; row < height; row++) {
+    for (let col = 0; col < width; col++) {
+      const riskScore = data[row][col];
+      const color = getRiskColor(riskScore);
+      
+      ctx.fillStyle = color;
+      ctx.fillRect(col, height - row - 1, 1, 1); // Flip Y
+    }
+  }
+
+  // Create texture
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.minFilter = THREE.LinearFilter;
+  texture.magFilter = THREE.LinearFilter;
+
+  // Create plane geometry
+  const planeWidth = bounds.maxX - bounds.minX;
+  const planeHeight = bounds.maxZ - bounds.minZ;
+  
+  const geometry = new THREE.PlaneGeometry(planeWidth, planeHeight);
+  const material = new THREE.MeshBasicMaterial({
+    map: texture,
+    transparent: true,
+    opacity: 0.6,
+    side: THREE.DoubleSide
+  });
+
+  state.heatmapMesh = new THREE.Mesh(geometry, material);
+  
+  // Position at floor level + small offset
+  state.heatmapMesh.rotation.x = -Math.PI / 2; // Face up
+  state.heatmapMesh.position.set(
+    (bounds.minX + bounds.maxX) / 2,
+    0.01, // Slightly above floor
+    (bounds.minZ + bounds.maxZ) / 2
+  );
+
+  state.scene.add(state.heatmapMesh);
+  
+  // Initially hidden, toggle with button
+  state.heatmapMesh.visible = false;
+
+  console.log('✅ Heatmap rendered');
+}
+
+/**
+ * Get color for risk score (0-100)
+ */
+function getRiskColor(score) {
+  if (score < 20) return 'rgba(34, 197, 94, 0.5)';   // Green - Safe
+  if (score < 45) return 'rgba(234, 179, 8, 0.6)';   // Yellow - Watch
+  if (score < 70) return 'rgba(249, 115, 22, 0.7)';  // Orange - Warning
+  if (score < 90) return 'rgba(239, 68, 68, 0.8)';   // Red - Critical
+  return 'rgba(127, 29, 29, 0.9)';                    // Dark Red - Dangerous
+}
+
+/**
+ * Display hotspot markers in 3D scene
+ */
+function displayHotspots(hotspots) {
+  if (!hotspots || hotspots.length === 0) return;
+
+  // Create markers for top 5 hotspots
+  const topHotspots = hotspots.slice(0, 5);
+
+  topHotspots.forEach(hotspot => {
+    const geometry = new THREE.SphereGeometry(0.2, 16, 16);
+    const material = new THREE.MeshBasicMaterial({
+      color: 0xff0000,
+      transparent: true,
+      opacity: 0.8
+    });
+
+    const marker = new THREE.Mesh(geometry, material);
+    marker.position.set(hotspot.position.x, 0.5, hotspot.position.z);
+
+    state.scene.add(marker);
+
+    // Add pulsing animation
+    const scale = { value: 1 };
+    const pulse = () => {
+      scale.value = 1 + 0.3 * Math.sin(Date.now() * 0.003);
+      marker.scale.setScalar(scale.value);
+    };
+    marker.userData.update = pulse;
+  });
+
+  console.log(`✅ Displayed ${topHotspots.length} hotspot markers`);
+}
+
+// ============================================================================
+// EVENT HANDLERS
+// ============================================================================
+
+/**
+ * Setup all UI event handlers
+ */
+function setupEventHandlers() {
+  // File upload
+  const uploadBtn = document.getElementById('uploadBtn');
+  const fileInput = document.getElementById('fileInput');
+
+  uploadBtn.addEventListener('click', async () => {
+    const file = fileInput.files[0];
+    if (!file) {
+      showStatus('Please select a file', 'warning');
+      return;
+    }
+
+    await uploadAndProcessGLB(file);
+  });
+
+  // Run simulation
+  const runSimBtn = document.getElementById('runSimBtn');
+  runSimBtn.addEventListener('click', async () => {
+    if (!state.currentSceneId) {
+      showStatus('Please upload a scene first', 'warning');
+      return;
+    }
+
+    const agentCount = parseInt(document.getElementById('agentCount').value);
+    const duration = parseInt(document.getElementById('duration').value);
+    const ageGroupId = document.getElementById('ageGroup').value;
+
+    await runSimulation(state.currentSceneId, ageGroupId, agentCount, duration);
+  });
+
+  // Playback control
+  const playbackBtn = document.getElementById('playbackBtn');
+  playbackBtn.addEventListener('click', () => {
+    state.playbackState.isPlaying = !state.playbackState.isPlaying;
+    
+    if (state.playbackState.isPlaying) {
+      playbackBtn.textContent = '⏸️ Pause Simulation';
+      document.getElementById('playbackInfo').style.display = 'block';
+    } else {
+      playbackBtn.textContent = '▶️ Play Simulation';
+    }
+  });
+
+  // Show collision events
+  const showEventsBtn = document.getElementById('showEventsBtn');
+  showEventsBtn.addEventListener('click', () => {
+    displayCollisionEventsTable();
+  });
+
+  // Toggle heatmap
+  const toggleHeatmapBtn = document.getElementById('toggleHeatmapBtn');
+  toggleHeatmapBtn.addEventListener('click', () => {
+    if (state.heatmapMesh) {
+      state.heatmapMesh.visible = !state.heatmapMesh.visible;
+      
+      const heatmapInfo = document.getElementById('heatmapInfo');
+      heatmapInfo.style.display = state.heatmapMesh.visible ? 'block' : 'none';
+      
+      toggleHeatmapBtn.textContent = state.heatmapMesh.visible 
+        ? '🗺️ Hide Heatmap' 
+        : '🗺️ Show Heatmap';
+    }
+  });
+
+  // Age group controls - DAY 20 CRITICAL
+  setupAgeGroupControls();
+
+  console.log('✅ Event handlers initialized');
+}
+
+/**
+ * Upload and process GLB file
+ */
+async function uploadAndProcessGLB(file) {
+  showLoading('Uploading and processing GLB...');
+  updateLoadingProgress(10);
 
   const formData = new FormData();
   formData.append('model', file);
@@ -186,513 +708,121 @@ async function handleUpload() {
       body: formData
     });
 
-    // ✅ FIXED: Use safe JSON parsing
-    const data = await safeJsonParse(response);
+    updateLoadingProgress(40);
 
-    if (data.success) {
-      currentSceneId = data.sceneId;
-      updateStatus('✅ Upload successful! Loading 3D model...', 'success');
-      
-      // Display scene info
-      document.getElementById('sceneInfo').style.display = 'block';
-      document.getElementById('sceneData').textContent = JSON.stringify(data.scene, null, 2);
-      
-      // Load GLB into viewer
-      loadGLB(data.filePath, data.scene);
-    } else {
-      updateStatus('❌ Upload failed: ' + data.error, 'error');
+    if (!response.ok) {
+      throw new Error('Upload failed');
     }
+
+    const data = await response.json();
+    
+    updateLoadingProgress(60);
+
+    // Load model into Three.js
+    await loadGLBModel(data.sceneId, data.filePath);
+
+    updateLoadingProgress(80);
+
+    // Display scene info
+    displaySceneInfo(data.scene);
+
+    // Show simulation controls
+    document.getElementById('simulationControls').style.display = 'block';
+
+    updateLoadingProgress(100);
+    hideLoading();
+
   } catch (error) {
-    console.error('❌ Upload error:', error);
-    updateStatus('❌ Upload error: ' + error.message, 'error');
+    console.error('Upload error:', error);
+    hideLoading();
+    showStatus(`Upload failed: ${error.message}`, 'error');
   }
 }
 
-function displaySimulationResults(summary) {
-  document.getElementById('simulationResults').style.display = 'block';
-  document.getElementById('totalCollisions').textContent = summary.totalCollisions;
-  document.getElementById('agentsInvolved').textContent = summary.agentsInvolved;
-  document.getElementById('objectsHit').textContent = summary.objectsHit;
-  
-  // Show heatmap legend
-  document.getElementById('heatmapInfo').style.display = 'block';
+/**
+ * Display scene information
+ */
+function displaySceneInfo(sceneData) {
+  const sceneInfo = document.getElementById('sceneInfo');
+  const sceneDataPre = document.getElementById('sceneData');
+
+  const info = {
+    objects: sceneData.objects.length,
+    boundingBox: sceneData.boundingBox,
+    floor: sceneData.floor
+  };
+
+  sceneDataPre.textContent = JSON.stringify(info, null, 2);
+  sceneInfo.style.display = 'block';
 }
 
-async function loadSimulationData(simulationId) {
-  try {
-    const response = await fetch(`/api/simulate/${simulationId}/status`);
-    
-    // ✅ FIXED: Use safe JSON parsing
-    const data = await safeJsonParse(response);
-    
-    simulationData = data;
-    console.log('📊 Simulation data loaded:', simulationData);
-    
-    // Create agent meshes
-    createAgentMeshes();
-    
-  } catch (error) {
-    console.error('❌ Error loading simulation data:', error);
-    updateStatus('❌ Error loading simulation: ' + error.message, 'error');
-  }
-}
-
-//  Load and render heatmap from backend
-async function loadAndRenderHeatmap(simulationId) {
-  try {
-    updateStatus('⏳ Generating heatmap...', 'info');
-    
-    const response = await fetch(`/api/simulate/${simulationId}/heatmap?cellSize=0.5&smoothing=true`);
-    
-    // ✅ FIXED: Use safe JSON parsing
-    const data = await safeJsonParse(response);
-    
-    if (data.success) {
-      console.log('🗺️ Heatmap data received:', data.heatmap);
-      renderHeatmap(data.heatmap);
-      updateStatus('✅ Heatmap generated!', 'success');
-    } else {
-      console.error('❌ Heatmap generation failed');
-      updateStatus('⚠️ Heatmap generation failed', 'warning');
-    }
-    
-  } catch (error) {
-    console.error('❌ Error loading heatmap:', error);
-    updateStatus('⚠️ Could not load heatmap: ' + error.message, 'warning');
-  }
-}
-
-// Render heatmap as 2D texture overlay on 3D floor
-function renderHeatmap(heatmapData) {
-  // Remove existing heatmap if any
-  if (heatmapMesh) {
-    scene.remove(heatmapMesh);
-    heatmapMesh = null;
-  }
-  
-  // Remove existing hotspot markers
-  hotspotMarkers.forEach(marker => scene.remove(marker));
-  hotspotMarkers = [];
-  
-  console.log('🗺️ Rendering heatmap...');
-  console.log('   Grid size:', heatmapData.width, 'x', heatmapData.height);
-  console.log('   Hotspots:', heatmapData.hotspots.length);
-  
-  // Create canvas for heatmap texture
-  const canvas = document.createElement('canvas');
-  canvas.width = heatmapData.width;
-  canvas.height = heatmapData.height;
-  const ctx = canvas.getContext('2d');
-  
-  // Draw heatmap pixel by pixel
-  const imageData = ctx.createImageData(canvas.width, canvas.height);
-  
-  for (let row = 0; row < heatmapData.height; row++) {
-    for (let col = 0; col < heatmapData.width; col++) {
-      const riskScore = heatmapData.data[row][col];
-      const color = getHeatmapColor(riskScore);
-      
-      const index = (row * canvas.width + col) * 4;
-      imageData.data[index] = color.r;
-      imageData.data[index + 1] = color.g;
-      imageData.data[index + 2] = color.b;
-      imageData.data[index + 3] = riskScore > 0 ? 180 : 0; // Alpha (transparency)
-    }
-  }
-  
-  ctx.putImageData(imageData, 0, 0);
-  
-  // Create texture from canvas
-  heatmapTexture = new THREE.CanvasTexture(canvas);
-  heatmapTexture.minFilter = THREE.LinearFilter;
-  heatmapTexture.magFilter = THREE.LinearFilter;
-  
-  // Create plane mesh for heatmap
-  const bounds = heatmapData.bounds;
-  const width = bounds.maxX - bounds.minX;
-  const depth = bounds.maxZ - bounds.minZ;
-  
-  const geometry = new THREE.PlaneGeometry(width, depth);
-  const material = new THREE.MeshBasicMaterial({
-    map: heatmapTexture,
-    transparent: true,
-    opacity: 0.7,
-    side: THREE.DoubleSide
-  });
-  
-  heatmapMesh = new THREE.Mesh(geometry, material);
-  
-  // Position heatmap slightly above floor
-  heatmapMesh.position.set(
-    (bounds.minX + bounds.maxX) / 2,
-    0.05,
-    (bounds.minZ + bounds.maxZ) / 2
-  );
-  heatmapMesh.rotation.x = -Math.PI / 2;
-  
-  scene.add(heatmapMesh);
-  
-  // Add hotspot markers (red spheres)
-  heatmapData.hotspots.forEach(hotspot => {
-    const markerGeometry = new THREE.SphereGeometry(0.2, 16, 16);
-    const markerMaterial = new THREE.MeshBasicMaterial({ 
-      color: 0xff0000,
-      transparent: true,
-      opacity: 0.8
-    });
-    const marker = new THREE.Mesh(markerGeometry, markerMaterial);
-    
-    marker.position.set(hotspot.position.x, 0.5, hotspot.position.z);
-    scene.add(marker);
-    hotspotMarkers.push(marker);
-    
-    console.log(`   📍 Hotspot at (${hotspot.position.x.toFixed(1)}, ${hotspot.position.z.toFixed(1)}): Risk ${hotspot.riskScore}`);
-  });
-  
-  console.log('✅ Heatmap rendered successfully');
-}
-
-// Get color based on risk score (0-100)
-function getHeatmapColor(score) {
-  if (score === 0) return { r: 0, g: 0, b: 0 };
-  if (score <= 20) return { r: 34, g: 197, b: 94 };   // Green
-  if (score <= 45) return { r: 234, g: 179, b: 8 };   // Yellow
-  if (score <= 70) return { r: 249, g: 115, b: 22 };  // Orange
-  if (score <= 90) return { r: 239, g: 68, b: 68 };   // Red
-  return { r: 127, g: 29, b: 29 };                    // Dark red
-}
-
-// Toggle heatmap visibility
-function toggleHeatmapVisibility() {
-  if (heatmapMesh) {
-    heatmapVisible = !heatmapVisible;
-    heatmapMesh.visible = heatmapVisible;
-    hotspotMarkers.forEach(marker => {
-      marker.visible = heatmapVisible;
-    });
-    
-    const btn = document.getElementById('toggleHeatmapBtn');
-    btn.textContent = heatmapVisible ? '🗺️ Hide Heatmap' : '🗺️ Show Heatmap';
-    
-    console.log(`🗺️ Heatmap ${heatmapVisible ? 'shown' : 'hidden'}`);
-  } else {
-    updateStatus('⚠️ No heatmap data available', 'warning');
-  }
-}
-
-//  Handle age group change
-async function handleAgeGroupChange() {
-  if (!currentSceneId) {
-    return;
-  }
-  
-  const ageGroupId = document.getElementById('ageGroup').value;
-  console.log(`🔄 Age group changed to: ${ageGroupId}`);
-  
-  // Check if cached
-  if (!cacheManager.hasAgeGroupCached(currentSceneId, ageGroupId)) {
-    console.log(`⚠️ ${ageGroupId} not cached yet`);
-    updateStatus(`⚠️ ${ageGroupId} data not available. Click "Run Simulation" to generate.`, 'warning');
-    return;
-  }
-  
-  // Load from cache
-  const cachedData = cacheManager.getCachedSimulation(currentSceneId, ageGroupId);
-  
-  if (cachedData) {
-    console.log(`✅ Loaded ${ageGroupId} from cache`);
-    currentSimulationId = cachedData.simulationId;
-    simulationData = cachedData;
-    
-    // Update UI
-    displaySimulationResults(cachedData.summary);
-    
-    // Recreate agent meshes
-    createAgentMeshes();
-    
-    // Reload heatmap
-    await loadAndRenderHeatmap(currentSimulationId);
-    
-    updateStatus(`✅ Switched to ${ageGroupId} simulation`, 'success');
-  }
-}
-
-function createAgentMeshes() {
-  // Clear existing agent meshes
-  agentMeshes.forEach(mesh => scene.remove(mesh));
-  agentMeshes = [];
-  
-  if (!simulationData || !simulationData.trajectories) {
-    console.warn('⚠️ No trajectory data to visualize');
+/**
+ * Display collision events table
+ */
+function displayCollisionEventsTable() {
+  if (!state.currentSimulation || !state.currentSimulation.collisionEvents) {
+    showStatus('No collision data available', 'warning');
     return;
   }
 
-  console.log(`📊 Creating agent visualization for ${simulationData.trajectories.length} agents`);
+  const events = state.currentSimulation.collisionEvents;
+  const eventsSection = document.getElementById('eventsSection');
+  const eventsTable = document.getElementById('eventsTable');
 
-  const ageGroupId = simulationData.ageGroupId || 'toddler';
-  
-  // Agent mesh (cylinder representing child)
-  const geometry = new THREE.CylinderGeometry(0.25, 0.25, 0.9, 8);
-  const material = new THREE.MeshPhongMaterial({ 
-    color: 0x00d4ff,
-    transparent: true,
-    opacity: 0.8
+  // Create table HTML
+  let tableHTML = `
+    <table>
+      <thead>
+        <tr>
+          <th>Time</th>
+          <th>Agent</th>
+          <th>Object</th>
+          <th>Velocity</th>
+          <th>Body Part</th>
+          <th>Injury Score</th>
+          <th>Risk Tier</th>
+        </tr>
+      </thead>
+      <tbody>
+  `;
+
+  events.forEach(event => {
+    const injury = event.injury || {};
+    const riskClass = `risk-${(injury.riskTier || 'safe').toLowerCase()}`;
+    
+    tableHTML += `
+      <tr>
+        <td>${event.time?.toFixed(2)}s</td>
+        <td>${event.agentId}</td>
+        <td>${event.objectName || event.objectId}</td>
+        <td>${event.velocity?.toFixed(2)} m/s</td>
+        <td>${injury.bodyPart || 'N/A'}</td>
+        <td>${injury.injuryScore || 0}</td>
+        <td class="${riskClass}">${injury.riskTier || 'safe'}</td>
+      </tr>
+    `;
   });
 
-  simulationData.trajectories.forEach(traj => {
-    const mesh = new THREE.Mesh(geometry, material.clone());
-    
-    // Store trajectory data in mesh
-    mesh.userData.trajectory = traj.positions;
-    mesh.userData.agentId = traj.agentId;
-    
-    // Set initial position (hidden until playback)
-    mesh.visible = false;
-    
-    scene.add(mesh);
-    agentMeshes.push(mesh);
-  });
+  tableHTML += `
+      </tbody>
+    </table>
+  `;
 
-  console.log(`✅ Created ${agentMeshes.length} agent visualization meshes`);
+  eventsTable.innerHTML = tableHTML;
+  eventsSection.style.display = 'block';
 }
 
-function togglePlayback() {
-  if (!simulationData) {
-    updateStatus('⚠️ No simulation data to play', 'warning');
-    return;
-  }
+// ============================================================================
+// UI HELPERS
+// ============================================================================
 
-  isPlayingSimulation = !isPlayingSimulation;
-  
-  const playbackBtn = document.getElementById('playbackBtn');
-  const playbackInfo = document.getElementById('playbackInfo');
-  
-  if (isPlayingSimulation) {
-    playbackBtn.textContent = '⏸️ Pause Simulation';
-    playbackInfo.style.display = 'block';
-    simulationStartTime = Date.now();
-    currentFrame = 0;
-    
-    // Show all agent meshes
-    agentMeshes.forEach(mesh => {
-      mesh.visible = true;
-    });
-  } else {
-    playbackBtn.textContent = '▶️ Play Simulation';
-    simulationStartTime = 0;
-  }
-}
-
-function updateAgentPositions() {
-  if (!simulationData || !isPlayingSimulation) return;
-
-  const fps = simulationData.config.fps || 60;
-  const duration = simulationData.config.duration || 10;
-  const totalFrames = fps * duration;
-
-  // Calculate current frame based on elapsed time
-  const elapsed = (Date.now() - simulationStartTime) / 1000; // seconds
-  currentFrame = Math.floor(elapsed * fps);
-
-  // Loop animation
-  if (currentFrame >= totalFrames) {
-    currentFrame = 0;
-    simulationStartTime = Date.now();
-  }
-
-  // Update each agent mesh position from trajectory
-  agentMeshes.forEach(mesh => {
-    const trajectory = mesh.userData.trajectory;
-    if (trajectory && trajectory[currentFrame]) {
-      const pos = trajectory[currentFrame];
-      mesh.position.set(pos[0], pos[1], pos[2]);
-    }
-  });
-
-  // Update playback UI
-  const currentTime = (currentFrame / fps).toFixed(1);
-  document.getElementById('playbackTime').textContent = currentTime;
-  document.getElementById('activeAgents').textContent = agentMeshes.length;
-}
-
-async function showCollisionEvents() {
-  if (!currentSimulationId) {
-    updateStatus('⚠️ No simulation data available', 'warning');
-    return;
-  }
-
-  try {
-    const response = await fetch(`/api/simulate/${currentSimulationId}/events`);
-    
-    // ✅ FIXED: Use safe JSON parsing
-    const data = await safeJsonParse(response);
-    
-    const eventsSection = document.getElementById('eventsSection');
-    const eventsTable = document.getElementById('eventsTable');
-    
-    eventsSection.style.display = 'block';
-    
-    // Build table HTML
-    let html = '<table><thead><tr>';
-    html += '<th>Time (s)</th><th>Agent</th><th>Object</th><th>Velocity</th>';
-    html += '<th>Injury Score</th><th>Risk Tier</th><th>Body Part</th>';
-    html += '</tr></thead><tbody>';
-    
-    data.events.forEach(event => {
-      const injury = event.injury || {};
-      const riskTier = injury.riskTier || 'N/A';
-      const riskClass = `risk-${riskTier.toLowerCase()}`;
-      
-      html += '<tr>';
-      html += `<td>${event.time.toFixed(2)}</td>`;
-      html += `<td>${event.agentId}</td>`;
-      html += `<td>${event.objectName}</td>`;
-      html += `<td>${event.velocity.toFixed(2)}</td>`;
-      html += `<td>${injury.injuryScore || 0}</td>`;
-      html += `<td class="${riskClass}">${riskTier}</td>`;
-      html += `<td>${injury.bodyPart || 'N/A'}</td>`;
-      html += '</tr>';
-    });
-    
-    html += '</tbody></table>';
-    
-    eventsTable.innerHTML = html;
-    
-  } catch (error) {
-    console.error('❌ Error loading events:', error);
-    updateStatus('❌ Error loading events: ' + error.message, 'error');
-  }
-}
-
-function loadGLB(url, sceneData) {
-  const loader = new GLTFLoader();
-  
-  if (currentModel) {
-    scene.remove(currentModel);
-  }
-
-  console.log('📄 Starting to load GLB from:', url);
-  updateStatus('⏳ Downloading model... 0%', 'info');
-
-  loader.load(
-    url,
-    (gltf) => {
-      console.log('✅ GLB loaded successfully');
-      currentModel = gltf.scene;
-      scene.add(currentModel);
-
-      // Center and frame model
-      const box = new THREE.Box3().setFromObject(currentModel);
-      const center = box.getCenter(new THREE.Vector3());
-      const size = box.getSize(new THREE.Vector3());
-
-      currentModel.position.sub(center);
-
-      // Adjust camera to fit model
-      const maxDim = Math.max(size.x, size.y, size.z);
-      const fov = camera.fov * (Math.PI / 180);
-      let cameraZ = Math.abs(maxDim / 2 / Math.tan(fov / 2));
-      cameraZ *= 1.5;
-
-      camera.position.set(cameraZ, cameraZ, cameraZ);
-      camera.lookAt(0, 0, 0);
-      controls.target.set(0, 0, 0);
-      controls.update();
-
-      // Visualize bounding boxes
-      visualizeBoundingBoxes(sceneData);
-
-      updateStatus('✅ Model loaded successfully!', 'success');
-      
-      // Show simulation controls
-      document.getElementById('simulationControls').style.display = 'block';
-    },
-    (xhr) => {
-      if (xhr.lengthComputable) {
-        const percent = (xhr.loaded / xhr.total * 100).toFixed(0);
-        updateStatus(`⏳ Downloading model... ${percent}%`, 'info');
-      } else {
-        const loadedMB = (xhr.loaded / 1024 / 1024).toFixed(1);
-        updateStatus(`⏳ Downloading... ${loadedMB} MB loaded`, 'info');
-      }
-    },
-    (error) => {
-      console.error('❌ Error loading GLB:', error);
-      updateStatus(`❌ Error loading model: ${error.message}`, 'error');
-    }
-  );
-}
-
-function visualizeBoundingBoxes(sceneData) {
-  if (!sceneData.objects || sceneData.objects.length === 0) {
-    console.warn('⚠️ No objects to visualize');
-    return;
-  }
-
-  sceneData.objects.forEach(obj => {
-    const bbox = obj.boundingBox;
-    
-    // Color based on classification danger score
-    let color = 0x00ff00; // Default green (safe)
-    if (obj.classification) {
-      if (obj.classification.dangerScore > 7) {
-        color = 0xff0000; // Red for high danger
-      } else if (obj.classification.dangerScore > 4) {
-        color = 0xff8800; // Orange for medium danger
-      }
-    }
-    
-    const boxHelper = new THREE.Box3Helper(
-      new THREE.Box3(
-        new THREE.Vector3(bbox.min[0], bbox.min[1], bbox.min[2]),
-        new THREE.Vector3(bbox.max[0], bbox.max[1], bbox.max[2])
-      ),
-      color
-    );
-    scene.add(boxHelper);
-  });
-
-  // Highlight floor with blue box
-  if (sceneData.floor && sceneData.floor.objectId) {
-    const floorObj = sceneData.objects.find(o => o.id === sceneData.floor.objectId);
-    if (floorObj) {
-      const bbox = floorObj.boundingBox;
-      const floorHelper = new THREE.Box3Helper(
-        new THREE.Box3(
-          new THREE.Vector3(bbox.min[0], bbox.min[1], bbox.min[2]),
-          new THREE.Vector3(bbox.max[0], bbox.max[1], bbox.max[2])
-        ),
-        0x0088ff // Blue for floor
-      );
-      scene.add(floorHelper);
-    }
-  }
-}
-
-function updateStatus(message, type = 'info') {
-  const statusDiv = document.getElementById('status');
-  statusDiv.textContent = message;
-  statusDiv.className = type; 
-  console.log(message);
-}
-
-// Loading state management
-function showLoading(text = 'Processing...', progress = 0) {
+function showLoading(text = 'Loading...') {
   const overlay = document.getElementById('loadingOverlay');
   const loadingText = document.getElementById('loadingText');
-  const progressBar = document.getElementById('loadingProgressBar');
   
-  overlay.style.display = 'flex';
   loadingText.textContent = text;
-  progressBar.style.width = `${progress}%`;
-}
-
-function updateLoadingProgress(progress, text) {
-  const loadingText = document.getElementById('loadingText');
-  const progressBar = document.getElementById('loadingProgressBar');
-  
-  if (text) loadingText.textContent = text;
-  progressBar.style.width = `${Math.min(100, progress)}%`;
+  overlay.style.display = 'flex';
+  updateLoadingProgress(0);
 }
 
 function hideLoading() {
@@ -700,70 +830,54 @@ function hideLoading() {
   overlay.style.display = 'none';
 }
 
-// Modified runSimulation with caching
-async function runSimulation() {
-  if (!currentSceneId) {
-    updateStatus('⚠️ Please upload a GLB file first', 'warning');
-    return;
-  }
-
-  const agentCount = parseInt(document.getElementById('agentCount').value);
-  const duration = parseInt(document.getElementById('duration').value);
-  const ageGroupId = document.getElementById('ageGroup').value;
-
-  // Check if we have cache for all ages
-  if (!cacheManager.hasCachedBatch(currentSceneId)) {
-    showLoading('Running simulation for ALL age groups...', 0);
-    
-    // Simulate progress updates
-    const progressInterval = setInterval(() => {
-      const currentProgress = parseInt(document.getElementById('loadingProgressBar').style.width);
-      if (currentProgress < 90) {
-        updateLoadingProgress(currentProgress + 10, `Simulating... ${currentProgress + 10}%`);
-      }
-    }, 1000);
-
-    // Generate cache for all ages at once
-    const success = await cacheManager.generateBatchCache(
-      currentSceneId,
-      agentCount,
-      duration
-    );
-
-    clearInterval(progressInterval);
-    updateLoadingProgress(100, 'Complete!');
-    
-    await new Promise(resolve => setTimeout(resolve, 500));
-    hideLoading();
-
-    if (!success) {
-      updateStatus('❌ Batch simulation failed', 'error');
-      return;
-    }
-
-    updateStatus('✅ All age groups simulated! Cache ready.', 'success');
-  }
-
-  // Load from cache
-  const cachedData = cacheManager.getCachedSimulation(currentSceneId, ageGroupId);
-  
-  if (cachedData) {
-    currentSimulationId = cachedData.simulationId;
-    simulationData = cachedData;
-    
-    console.log('📦 Loaded from cache:', ageGroupId);
-    
-    // Display results
-    displaySimulationResults(cachedData.summary);
-    
-    // Create agent visualizations
-    createAgentMeshes();
-    
-    // Load heatmap
-    await loadAndRenderHeatmap(currentSimulationId);
-    
-    updateStatus(`✅ ${ageGroupId} simulation loaded from cache!`, 'success');
-  } else {
-    updateStatus('❌ Failed to load cached simulation', 'error');
-  }
+function updateLoadingProgress(percent) {
+  const progressBar = document.getElementById('loadingProgressBar');
+  progressBar.style.width = `${percent}%`;
 }
+
+function updateLoadingText(text) {
+  const loadingText = document.getElementById('loadingText');
+  loadingText.textContent = text;
+}
+
+function showStatus(message, type = 'info') {
+  const status = document.getElementById('status');
+  
+  status.textContent = message;
+  status.className = type;
+  status.style.display = 'block';
+
+  // Auto-hide after 5 seconds
+  setTimeout(() => {
+    status.style.display = 'none';
+  }, 5000);
+}
+
+// ============================================================================
+// UTILITY FUNCTIONS
+// ============================================================================
+
+function getAgeGroupConfig(ageGroupId) {
+  const configs = {
+    infant: { height: 0.7, capsuleRadius: 0.25 },
+    toddler: { height: 0.9, capsuleRadius: 0.25 },
+    preschool: { height: 1.1, capsuleRadius: 0.28 },
+    school: { height: 1.3, capsuleRadius: 0.30 },
+    preteen: { height: 1.5, capsuleRadius: 0.32 }
+  };
+
+  return configs[ageGroupId] || configs.toddler;
+}
+
+// ============================================================================
+// INITIALIZATION ON LOAD
+// ============================================================================
+
+document.addEventListener('DOMContentLoaded', () => {
+  console.log('🚀 Viewer initializing...');
+  
+  initThreeJS();
+  setupEventHandlers();
+  
+  console.log('✅ Viewer ready!');
+});
