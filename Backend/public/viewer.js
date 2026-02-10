@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import cacheManager from './cacheManager.js';
+import SurfaceHeatmap3D from './surfaceHeatmap3d.js'; // 🔥 NEW IMPORT
 
 // ============================================================================
 // GLOBAL STATE
@@ -16,7 +17,11 @@ const state = {
   currentSimulation: null,
   loadedModel: null,
   agents: [],
-  heatmapMesh: null,
+  heatmapMesh: null, // ⚠️ DEPRECATED - will be removed
+  hotspotMarkers: [],
+  sceneMetadata: null,
+  heatmap3D: null, // 🔥 NEW: 3D Vertex Color Heatmap
+  heatmapEnabled: false, // 🔥 NEW: Track heatmap state
   playbackState: {
     isPlaying: false,
     currentFrame: 0,
@@ -29,25 +34,19 @@ const state = {
 // INITIALIZATION
 // ============================================================================
 
-/**
- * Initialize Three.js scene
- */
 function initThreeJS() {
   const canvas = document.getElementById('canvas3d');
   const viewer = document.getElementById('viewer');
 
-  // Scene
   state.scene = new THREE.Scene();
   state.scene.background = new THREE.Color(0x0a0a0a);
   state.scene.fog = new THREE.Fog(0x0a0a0a, 20, 50);
 
-  // Camera
   const aspect = viewer.clientWidth / viewer.clientHeight;
   state.camera = new THREE.PerspectiveCamera(60, aspect, 0.1, 1000);
   state.camera.position.set(8, 8, 8);
   state.camera.lookAt(0, 0, 0);
 
-  // Renderer
   state.renderer = new THREE.WebGLRenderer({ 
     canvas, 
     antialias: true,
@@ -58,7 +57,6 @@ function initThreeJS() {
   state.renderer.shadowMap.enabled = true;
   state.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
-  // Lights
   const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
   state.scene.add(ambientLight);
 
@@ -73,22 +71,17 @@ function initThreeJS() {
   dirLight.shadow.mapSize.height = 2048;
   state.scene.add(dirLight);
 
-  // Grid helper
   const gridHelper = new THREE.GridHelper(20, 20, 0x00d4ff, 0x444444);
   state.scene.add(gridHelper);
 
-  // Controls
   state.controls = new OrbitControls(state.camera, canvas);
   state.controls.enableDamping = true;
   state.controls.dampingFactor = 0.05;
-  state.controls.maxPolarAngle = Math.PI / 2.1; // Don't go below floor
+  state.controls.maxPolarAngle = Math.PI / 2.1;
   state.controls.minDistance = 2;
   state.controls.maxDistance = 30;
 
-  // Handle resize
   window.addEventListener('resize', onWindowResize);
-
-  // Start animation loop
   animate();
 
   console.log('✅ Three.js initialized');
@@ -111,10 +104,15 @@ function animate() {
     state.controls.update();
   }
 
-  // Update playback if playing
   if (state.playbackState.isPlaying) {
     updatePlayback();
   }
+  
+  state.hotspotMarkers.forEach(marker => {
+    if (marker.userData.update) {
+      marker.userData.update();
+    }
+  });
   
   state.renderer.render(state.scene, state.camera);
 }
@@ -123,9 +121,6 @@ function animate() {
 // SCENE LOADING
 // ============================================================================
 
-/**
- * Load GLB model into scene
- */
 async function loadGLBModel(sceneId, filePath) {
   showStatus('Loading 3D model...', 'info');
 
@@ -135,7 +130,6 @@ async function loadGLBModel(sceneId, filePath) {
     loader.load(
       filePath,
       (gltf) => {
-        // Remove old model
         if (state.loadedModel) {
           state.scene.remove(state.loadedModel);
           state.loadedModel.traverse((child) => {
@@ -152,7 +146,6 @@ async function loadGLBModel(sceneId, filePath) {
 
         state.loadedModel = gltf.scene;
         
-        // Enable shadows
         state.loadedModel.traverse((child) => {
           if (child.isMesh) {
             child.castShadow = true;
@@ -163,7 +156,6 @@ async function loadGLBModel(sceneId, filePath) {
         state.scene.add(state.loadedModel);
         state.currentSceneId = sceneId;
 
-        // Center camera on model
         const box = new THREE.Box3().setFromObject(state.loadedModel);
         const center = box.getCenter(new THREE.Vector3());
         const size = box.getSize(new THREE.Vector3());
@@ -171,7 +163,7 @@ async function loadGLBModel(sceneId, filePath) {
         const maxDim = Math.max(size.x, size.y, size.z);
         const fov = state.camera.fov * (Math.PI / 180);
         let cameraZ = Math.abs(maxDim / 2 / Math.tan(fov / 2));
-        cameraZ *= 1.5; // Add margin
+        cameraZ *= 1.5;
 
         state.camera.position.set(
           center.x + cameraZ * 0.5,
@@ -180,6 +172,9 @@ async function loadGLBModel(sceneId, filePath) {
         );
         state.camera.lookAt(center);
         state.controls.target.copy(center);
+
+        // 🔥 NEW: Initialize 3D Surface Heatmap after model loads
+        initializeHeatmap3D();
 
         showStatus('3D model loaded successfully', 'success');
         resolve(gltf.scene);
@@ -197,13 +192,93 @@ async function loadGLBModel(sceneId, filePath) {
   });
 }
 
+// 🔥 NEW: Initialize 3D Surface Heatmap
+function initializeHeatmap3D() {
+  console.log('🔥 Initializing 3D Surface Heatmap...');
+  
+  if (!state.scene || !state.sceneMetadata) {
+    console.warn('⚠️  Cannot initialize heatmap: missing scene or metadata');
+    return;
+  }
+
+  try {
+    state.heatmap3D = new SurfaceHeatmap3D(state.scene, state.sceneMetadata);
+    
+    // Optional: Configure heatmap settings
+    state.heatmap3D.setConfig({
+      maxInfluenceDistance: 2.0,
+      falloffSigma: 0.5,
+      colorScheme: 'RISK', // Use 3-tier risk colors
+      minHeatThreshold: 0.05
+    });
+
+    console.log('✅ 3D Surface Heatmap ready');
+  } catch (error) {
+    console.error('❌ Failed to initialize heatmap:', error);
+  }
+}
+
+// 🔥 NEW: Apply heatmap to meshes
+function applyHeatmap3D(collisionEvents) {
+  if (!state.heatmap3D) {
+    console.warn('⚠️  Heatmap not initialized');
+    return;
+  }
+
+  if (!collisionEvents || collisionEvents.length === 0) {
+    console.warn('⚠️  No collision events to visualize');
+    return;
+  }
+
+  console.log(`🔥 Applying 3D heatmap to ${collisionEvents.length} collision events...`);
+  
+  try {
+    state.heatmap3D.applyHeatmapToMeshes(collisionEvents);
+    state.heatmapEnabled = true;
+    
+    // Log stats
+    const stats = state.heatmap3D.getStats();
+    console.log('📊 Heatmap Stats:', stats);
+    
+  } catch (error) {
+    console.error('❌ Failed to apply heatmap:', error);
+  }
+}
+
+// 🔥 NEW: Clear heatmap
+function clearHeatmap3D() {
+  if (!state.heatmap3D) return;
+  
+  console.log('🧹 Clearing 3D heatmap...');
+  state.heatmap3D.clearHeatmap();
+  state.heatmapEnabled = false;
+}
+
+// 🔥 NEW: Toggle heatmap on/off
+function toggleHeatmap3D() {
+  if (!state.heatmap3D) {
+    console.warn('⚠️  Heatmap not initialized');
+    return;
+  }
+
+  if (!state.currentSimulation || !state.currentSimulation.collisionEvents) {
+    showStatus('No simulation data available', 'warning');
+    return;
+  }
+
+  if (state.heatmapEnabled) {
+    clearHeatmap3D();
+    showStatus('Heatmap hidden', 'info');
+  } else {
+    applyHeatmap3D(state.currentSimulation.collisionEvents);
+    showStatus('Heatmap shown', 'success');
+  }
+}
+
 // ============================================================================
-// AGE GROUP SLIDER & DYNAMIC UPDATE
+// AGE GROUP CONTROLS
 // ============================================================================
 
-/**
- * Setup age group change handler - DAY 20 CRITICAL FEATURE
- */
 function setupAgeGroupControls() {
   const ageSelect = document.getElementById('ageGroup');
   
@@ -216,10 +291,8 @@ function setupAgeGroupControls() {
       return;
     }
 
-    // Update state
     state.currentAgeGroup = newAgeGroup;
 
-    // Check if we have cached simulation for this age group
     const cached = cacheManager.getCachedSimulation(
       state.currentSceneId, 
       newAgeGroup
@@ -229,12 +302,16 @@ function setupAgeGroupControls() {
       console.log(`📦 Using cached simulation for ${newAgeGroup}`);
       showStatus(`Switching to ${newAgeGroup} (cached)`, 'info');
       loadSimulationResults(cached);
-      updateHeatmap(cached);
+      updateHeatmap(cached); // Old heatmap
+      
+      // 🔥 NEW: Apply 3D heatmap if enabled
+      if (state.heatmapEnabled) {
+        applyHeatmap3D(cached.collisionEvents);
+      }
     } else {
       console.log(`🔄 No cache found, running new simulation for ${newAgeGroup}`);
       showStatus(`Running simulation for ${newAgeGroup}...`, 'info');
       
-      // Get current simulation parameters
       const agentCount = parseInt(document.getElementById('agentCount').value) || 10;
       const duration = parseInt(document.getElementById('duration').value) || 10;
       
@@ -246,18 +323,14 @@ function setupAgeGroupControls() {
 }
 
 // ============================================================================
-// SIMULATION EXECUTION
+// SIMULATION
 // ============================================================================
 
-/**
- * Run simulation for specific age group
- */
 async function runSimulation(sceneId, ageGroupId, agentCount, duration) {
   showLoading(`Running simulation for ${ageGroupId}...`);
   updateLoadingProgress(10);
 
   try {
-    // Start simulation
     const response = await fetch('/api/simulate/start', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -278,21 +351,26 @@ async function runSimulation(sceneId, ageGroupId, agentCount, duration) {
 
     updateLoadingProgress(30);
 
-    // Poll for completion
     const result = await pollSimulationStatus(simulationId);
     
     updateLoadingProgress(80);
 
-    // Load results
     loadSimulationResults(result);
     
-    // Generate and display heatmap
-    await loadAndDisplayHeatmap(simulationId);
+    updateLoadingProgress(90);
+
+    updateHeatmap(result); // Old heatmap (2D plane)
+    
+    // 🔥 NEW: Auto-apply 3D heatmap after simulation
+    if (result.collisionEvents && result.collisionEvents.length > 0) {
+      console.log('🔥 Auto-applying 3D surface heatmap...');
+      applyHeatmap3D(result.collisionEvents);
+    }
 
     updateLoadingProgress(100);
     hideLoading();
-
-    showStatus('Simulation completed successfully!', 'success');
+    
+    showStatus('Simulation complete!', 'success');
 
   } catch (error) {
     console.error('Simulation error:', error);
@@ -301,329 +379,356 @@ async function runSimulation(sceneId, ageGroupId, agentCount, duration) {
   }
 }
 
-/**
- * Poll simulation status until complete
- */
-async function pollSimulationStatus(simulationId, maxWait = 120000) {
-  const startTime = Date.now();
-  const pollInterval = 1000; // 1 second
+async function pollSimulationStatus(simulationId, maxAttempts = 60) {
+  const pollInterval = 1000;
+  let attempts = 0;
 
-  while (Date.now() - startTime < maxWait) {
-    const response = await fetch(`/api/simulate/${simulationId}/status`);
-    
-    if (!response.ok) {
-      throw new Error('Failed to check simulation status');
+  while (attempts < maxAttempts) {
+    try {
+      const response = await fetch(`/api/simulate/${simulationId}/status`);
+      
+      if (!response.ok) {
+        throw new Error(`Status check failed: ${response.status}`);
+      }
+
+      const data = await response.json();
+
+      if (data.status === 'complete') {
+        console.log('✅ Simulation complete');
+        return data;
+      } else if (data.status === 'error') {
+        throw new Error(data.error || 'Simulation error');
+      }
+
+      const progress = Math.min(30 + (attempts / maxAttempts) * 50, 80);
+      updateLoadingProgress(progress);
+
+      await new Promise(resolve => setTimeout(resolve, pollInterval));
+      attempts++;
+
+    } catch (error) {
+      console.error('Poll error:', error);
+      throw error;
     }
-
-    const data = await response.json();
-
-    if (data.status === 'completed') {
-      return data;
-    } else if (data.status === 'failed') {
-      throw new Error(data.error || 'Simulation failed');
-    }
-
-    // Update progress
-    const elapsed = ((Date.now() - startTime) / 1000).toFixed(0);
-    updateLoadingText(`Simulating... ${elapsed}s`);
-
-    await new Promise(resolve => setTimeout(resolve, pollInterval));
   }
 
   throw new Error('Simulation timeout');
 }
 
-// ============================================================================
-// RESULTS VISUALIZATION
-// ============================================================================
+function loadSimulationResults(simulationData) {
+  state.currentSimulation = simulationData;
 
-/**
- * Load and display simulation results
- */
-function loadSimulationResults(simData) {
-  console.log('📊 Loading simulation results...');
+  const totalCollisions = simulationData.collisionEvents?.length || 0;
+  const summary = simulationData.summary || {};
+
+  document.getElementById('totalCollisions').textContent = totalCollisions;
   
-  state.currentSimulation = simData;
-
-  // Update summary cards
-  updateSummaryCards(simData);
-
-  // Setup trajectory visualization
-  setupTrajectoryVisualization(simData);
-
-  // Show results section
-  document.getElementById('simulationResults').style.display = 'block';
-
-  console.log('✅ Results loaded');
-}
-
-/**
- * Update summary statistics cards
- */
-function updateSummaryCards(simData) {
-  const collisionEvents = simData.collisionEvents || [];
-  
-  // Total collisions
-  document.getElementById('totalCollisions').textContent = collisionEvents.length;
-
-  // Unique agents involved
-  const uniqueAgents = new Set(collisionEvents.map(e => e.agentId));
+  const uniqueAgents = new Set(
+    simulationData.collisionEvents?.map(e => e.agentId) || []
+  );
   document.getElementById('agentsInvolved').textContent = uniqueAgents.size;
 
-  // Unique objects hit
-  const uniqueObjects = new Set(collisionEvents.map(e => e.objectId));
+  const uniqueObjects = new Set(
+    simulationData.collisionEvents?.map(e => e.objectId) || []
+  );
   document.getElementById('objectsHit').textContent = uniqueObjects.size;
+
+  document.getElementById('simulationResults').style.display = 'block';
+
+  // Load agent trajectories for playback
+  loadAgentTrajectories(simulationData.trajectories || []);
+
+  console.log('✅ Simulation results loaded');
 }
 
-/**
- * Setup trajectory visualization with agent paths
- */
-function setupTrajectoryVisualization(simData) {
+function loadAgentTrajectories(trajectories) {
   // Clear old agents
-  state.agents.forEach(agentMesh => {
-    state.scene.remove(agentMesh);
-    if (agentMesh.geometry) agentMesh.geometry.dispose();
-    if (agentMesh.material) agentMesh.material.dispose();
+  state.agents.forEach(agent => {
+    state.scene.remove(agent.mesh);
+    agent.mesh.geometry.dispose();
+    agent.mesh.material.dispose();
   });
   state.agents = [];
 
-  if (!simData.trajectories || simData.trajectories.length === 0) {
-    console.warn('No trajectory data available');
+  if (!trajectories || trajectories.length === 0) {
+    console.warn('No trajectories to load');
     return;
   }
 
-  // Get age group config for agent size
-  const ageGroupId = simData.ageGroupId || 'toddler';
-  const ageGroupConfig = getAgeGroupConfig(ageGroupId);
+  const ageConfig = getAgeGroupConfig(state.currentAgeGroup);
+  
+  trajectories.forEach((traj, index) => {
+    if (!traj.positions || traj.positions.length === 0) return;
 
-  // Create agent meshes
-  simData.trajectories.forEach((trajectory, index) => {
-    // Create capsule geometry for agent
-    const radius = ageGroupConfig.capsuleRadius || 0.25;
-    const height = ageGroupConfig.height || 1.0;
-    
-    const geometry = new THREE.CapsuleGeometry(radius, height - radius * 2, 8, 16);
-    const material = new THREE.MeshPhongMaterial({
+    const geometry = new THREE.CapsuleGeometry(
+      ageConfig.capsuleRadius, 
+      ageConfig.height, 
+      8, 
+      16
+    );
+    const material = new THREE.MeshStandardMaterial({
       color: 0x00d4ff,
-      transparent: true,
-      opacity: 0.7
+      metalness: 0.3,
+      roughness: 0.7
     });
 
-    const agentMesh = new THREE.Mesh(geometry, material);
-    agentMesh.castShadow = true;
-    
-    // Set initial position (will be animated later)
-    if (trajectory.positions && trajectory.positions.length > 0) {
-      const startPos = trajectory.positions[0];
-      agentMesh.position.set(startPos[0], startPos[1], startPos[2]);
-    }
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
 
-    state.scene.add(agentMesh);
-    state.agents.push(agentMesh);
+    const startPos = traj.positions[0];
+    mesh.position.set(startPos[0], startPos[1], startPos[2]);
 
-    // Store trajectory data on mesh
-    agentMesh.userData = {
-      trajectory: trajectory.positions || [],
-      agentId: trajectory.agentId
-    };
+    state.scene.add(mesh);
+
+    state.agents.push({
+      id: traj.agentId,
+      mesh: mesh,
+      trajectory: traj.positions,
+      currentIndex: 0
+    });
   });
 
-  // Setup playback
-  state.playbackState.totalFrames = simData.trajectories[0]?.positions?.length || 0;
+  state.playbackState.totalFrames = Math.max(
+    ...trajectories.map(t => t.positions?.length || 0)
+  );
   state.playbackState.currentFrame = 0;
 
-  console.log(`✅ Created ${state.agents.length} agent visualizations`);
+  console.log(`✅ Loaded ${state.agents.length} agents for playback`);
 }
 
-/**
- * Update playback frame
- */
 function updatePlayback() {
-  if (!state.currentSimulation || state.agents.length === 0) return;
-
   const { currentFrame, totalFrames, speed } = state.playbackState;
 
-  // Update agent positions
-  state.agents.forEach(agentMesh => {
-    const trajectory = agentMesh.userData.trajectory;
-    if (!trajectory || currentFrame >= trajectory.length) return;
+  if (currentFrame >= totalFrames - 1) {
+    state.playbackState.isPlaying = false;
+    state.playbackState.currentFrame = 0;
+    document.getElementById('playbackBtn').textContent = '▶️ Play Simulation';
+    return;
+  }
 
-    const pos = trajectory[currentFrame];
-    agentMesh.position.set(pos[0], pos[1], pos[2]);
+  state.agents.forEach(agent => {
+    if (agent.currentIndex < agent.trajectory.length - 1) {
+      agent.currentIndex += speed;
+      const index = Math.floor(agent.currentIndex);
+      
+      if (index < agent.trajectory.length) {
+        const pos = agent.trajectory[index];
+        agent.mesh.position.set(pos[0], pos[1], pos[2]);
+      }
+    }
   });
 
-  // Update playback info
-  const time = (currentFrame / 60).toFixed(1); // Assuming 60 FPS
-  document.getElementById('playbackTime').textContent = time;
-  document.getElementById('activeAgents').textContent = state.agents.length;
-
-  // Advance frame
   state.playbackState.currentFrame += speed;
 
-  // Loop or stop at end
-  if (state.playbackState.currentFrame >= totalFrames) {
-    state.playbackState.currentFrame = 0;
-    // state.playbackState.isPlaying = false; // Uncomment to stop at end
-  }
+  const time = (currentFrame / 60).toFixed(1);
+  const activeAgents = state.agents.filter(a => 
+    a.currentIndex < a.trajectory.length - 1
+  ).length;
+
+  document.getElementById('playbackTime').textContent = time;
+  document.getElementById('activeAgents').textContent = activeAgents;
 }
 
-// ============================================================================
-// HEATMAP VISUALIZATION - DAY 18-19 CRITICAL
-// ============================================================================
-
-/**
- * Load and display heatmap overlay
- */
-async function loadAndDisplayHeatmap(simulationId) {
-  try {
-    const response = await fetch(`/api/simulate/${simulationId}/heatmap`);
-    
-    if (!response.ok) {
-      throw new Error('Failed to load heatmap');
-    }
-
-    const heatmapData = await response.json();
-    
-    displayHeatmap(heatmapData);
-    displayHotspots(heatmapData.hotspots);
-
-  } catch (error) {
-    console.error('Heatmap error:', error);
-    showStatus('Failed to load heatmap', 'warning');
-  }
-}
-
-/**
- * Update heatmap when age group changes
- */
-function updateHeatmap(simData) {
-  if (!simData || !simData.simulationId) return;
-  
-  loadAndDisplayHeatmap(simData.simulationId);
-}
-
-/**
- * Display heatmap as 3D plane overlay
- */
-function displayHeatmap(heatmapData) {
-  // Remove old heatmap
+// ⚠️ DEPRECATED: Old 2D heatmap (keep for backwards compatibility)
+function updateHeatmap(simulationData) {
   if (state.heatmapMesh) {
     state.scene.remove(state.heatmapMesh);
-    if (state.heatmapMesh.geometry) state.heatmapMesh.geometry.dispose();
-    if (state.heatmapMesh.material) {
-      state.heatmapMesh.material.map?.dispose();
-      state.heatmapMesh.material.dispose();
-    }
+    state.heatmapMesh.geometry.dispose();
+    state.heatmapMesh.material.dispose();
+    state.heatmapMesh = null;
   }
 
-  const { width, height, cellSize, bounds, data } = heatmapData;
+  state.hotspotMarkers.forEach(marker => {
+    state.scene.remove(marker);
+    marker.geometry.dispose();
+    marker.material.dispose();
+  });
+  state.hotspotMarkers = [];
 
-  // Create canvas for heatmap texture
+  if (!simulationData || !simulationData.collisionEvents) {
+    console.warn('No collision data for heatmap');
+    return;
+  }
+
+  const heatmap = generateHeatmapData(simulationData.collisionEvents);
+  
+  if (heatmap) {
+    state.heatmapMesh = heatmap.mesh;
+    state.scene.add(state.heatmapMesh);
+    displayHotspotMarkers(heatmap.hotspots);
+    
+    console.log('✅ 2D Heatmap created (legacy)');
+  }
+}
+
+function generateHeatmapData(collisionEvents) {
+  if (!collisionEvents || collisionEvents.length === 0) {
+    return null;
+  }
+
+  let minX = Infinity, maxX = -Infinity;
+  let minZ = Infinity, maxZ = -Infinity;
+  let floorY = 0;
+
+  collisionEvents.forEach(event => {
+    const pos = event.position;
+    minX = Math.min(minX, pos[0]);
+    maxX = Math.max(maxX, pos[0]);
+    minZ = Math.min(minZ, pos[2]);
+    maxZ = Math.max(maxZ, pos[2]);
+    floorY = Math.min(floorY, pos[1]);
+  });
+
+  const padding = 1.0;
+  minX -= padding; maxX += padding;
+  minZ -= padding; maxZ += padding;
+
+  const width = maxX - minX;
+  const height = maxZ - minZ;
+
+  const resolution = 128;
   const canvas = document.createElement('canvas');
-  canvas.width = width;
-  canvas.height = height;
+  canvas.width = resolution;
+  canvas.height = resolution;
   const ctx = canvas.getContext('2d');
 
-  // Draw heatmap
-  for (let row = 0; row < height; row++) {
-    for (let col = 0; col < width; col++) {
-      const riskScore = data[row][col];
-      const color = getRiskColor(riskScore);
+  const grid = Array(resolution).fill(0).map(() => Array(resolution).fill(0));
+
+  collisionEvents.forEach(event => {
+    const pos = event.position;
+    const injury = event.injury || {};
+    const score = injury.injuryScore || 0;
+
+    const gridX = Math.floor((pos[0] - minX) / width * (resolution - 1));
+    const gridZ = Math.floor((pos[2] - minZ) / height * (resolution - 1));
+
+    if (gridX >= 0 && gridX < resolution && gridZ >= 0 && gridZ < resolution) {
+      grid[gridZ][gridX] += score;
+    }
+  });
+
+  let maxValue = 0;
+  grid.forEach(row => {
+    row.forEach(val => {
+      maxValue = Math.max(maxValue, val);
+    });
+  });
+
+  for (let y = 0; y < resolution; y++) {
+    for (let x = 0; x < resolution; x++) {
+      const value = grid[y][x];
+      const normalized = maxValue > 0 ? value / maxValue : 0;
       
+      const color = getHeatColor(normalized);
       ctx.fillStyle = color;
-      ctx.fillRect(col, height - row - 1, 1, 1); // Flip Y
+      ctx.fillRect(x, y, 1, 1);
     }
   }
 
-  // Create texture
   const texture = new THREE.CanvasTexture(canvas);
-  texture.minFilter = THREE.LinearFilter;
-  texture.magFilter = THREE.LinearFilter;
-
-  // Create plane geometry
-  const planeWidth = bounds.maxX - bounds.minX;
-  const planeHeight = bounds.maxZ - bounds.minZ;
-  
-  const geometry = new THREE.PlaneGeometry(planeWidth, planeHeight);
+  const geometry = new THREE.PlaneGeometry(width, height);
   const material = new THREE.MeshBasicMaterial({
     map: texture,
     transparent: true,
-    opacity: 0.6,
+    opacity: 0.7,
     side: THREE.DoubleSide
   });
 
-  state.heatmapMesh = new THREE.Mesh(geometry, material);
-  
-  // Position at floor level + small offset
-  state.heatmapMesh.rotation.x = -Math.PI / 2; // Face up
-  state.heatmapMesh.position.set(
-    (bounds.minX + bounds.maxX) / 2,
-    0.01, // Slightly above floor
-    (bounds.minZ + bounds.maxZ) / 2
-  );
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.rotation.x = -Math.PI / 2;
+  mesh.position.set(minX + width / 2, floorY + 0.01, minZ + height / 2);
 
-  state.scene.add(state.heatmapMesh);
-  
-  // Initially hidden, toggle with button
-  state.heatmapMesh.visible = false;
+  const hotspots = findHotspots(collisionEvents, 5);
 
-  console.log('✅ Heatmap rendered');
+  return { mesh, hotspots };
 }
 
-/**
- * Get color for risk score (0-100)
- */
-function getRiskColor(score) {
-  if (score < 20) return 'rgba(34, 197, 94, 0.5)';   // Green - Safe
-  if (score < 45) return 'rgba(234, 179, 8, 0.6)';   // Yellow - Watch
-  if (score < 70) return 'rgba(249, 115, 22, 0.7)';  // Orange - Warning
-  if (score < 90) return 'rgba(239, 68, 68, 0.8)';   // Red - Critical
-  return 'rgba(127, 29, 29, 0.9)';                    // Dark Red - Dangerous
+function getHeatColor(value) {
+  if (value === 0) return 'rgba(0, 0, 0, 0)';
+  
+  if (value < 0.2) return `rgba(34, 197, 94, ${0.3 + value * 0.5})`;
+  if (value < 0.4) return `rgba(234, 179, 8, ${0.4 + value * 0.4})`;
+  if (value < 0.7) return `rgba(249, 115, 22, ${0.5 + value * 0.3})`;
+  if (value < 0.9) return `rgba(239, 68, 68, ${0.6 + value * 0.3})`;
+  return `rgba(127, 29, 29, ${0.7 + value * 0.3})`;
 }
 
-/**
- * Display hotspot markers in 3D scene
- */
-function displayHotspots(hotspots) {
-  if (!hotspots || hotspots.length === 0) return;
+function findHotspots(collisionEvents, topN = 5) {
+  const hotspots = {};
 
-  // Create markers for top 5 hotspots
-  const topHotspots = hotspots.slice(0, 5);
+  collisionEvents.forEach(event => {
+    const key = `${event.objectId}`;
+    
+    if (!hotspots[key]) {
+      hotspots[key] = {
+        objectId: event.objectId,
+        objectName: event.objectName,
+        position: [...event.position],
+        count: 0,
+        totalRisk: 0
+      };
+    }
 
-  topHotspots.forEach(hotspot => {
+    hotspots[key].count++;
+    hotspots[key].totalRisk += (event.injury?.injuryScore || 0);
+  });
+
+  const sorted = Object.values(hotspots)
+    .map(h => ({
+      ...h,
+      riskScore: h.totalRisk / h.count
+    }))
+    .sort((a, b) => b.totalRisk - a.totalRisk)
+    .slice(0, topN);
+
+  return sorted;
+}
+
+function displayHotspotMarkers(hotspots) {
+  console.log(`📍 Creating ${hotspots.length} hotspot markers...`);
+
+  hotspots.forEach((hotspot, index) => {
     const geometry = new THREE.SphereGeometry(0.2, 16, 16);
+    const color = hotspot.riskScore > 70 ? 0x7f1d1d :
+                  hotspot.riskScore > 45 ? 0xef4444 :
+                  hotspot.riskScore > 20 ? 0xf97316 :
+                  0xeab308;
+    
     const material = new THREE.MeshBasicMaterial({
-      color: 0xff0000,
+      color,
       transparent: true,
       opacity: 0.8
     });
 
     const marker = new THREE.Mesh(geometry, material);
-    marker.position.set(hotspot.position.x, 0.5, hotspot.position.z);
+    marker.position.set(
+      hotspot.position[0],
+      hotspot.position[1] + 0.5,
+      hotspot.position[2]
+    );
+
+    console.log(`  Marker ${index + 1}: (${marker.position.x.toFixed(2)}, ${marker.position.y.toFixed(2)}, ${marker.position.z.toFixed(2)}) risk=${hotspot.riskScore}`);
 
     state.scene.add(marker);
+    state.hotspotMarkers.push(marker);
 
-    // Add pulsing animation
-    const scale = { value: 1 };
+    const baseScale = 1;
     const pulse = () => {
-      scale.value = 1 + 0.3 * Math.sin(Date.now() * 0.003);
-      marker.scale.setScalar(scale.value);
+      const scale = baseScale + 0.4 * Math.sin(Date.now() * 0.004);
+      marker.scale.setScalar(scale);
     };
     marker.userData.update = pulse;
   });
 
-  console.log(`✅ Displayed ${topHotspots.length} hotspot markers`);
+  console.log(`✅ Displayed ${hotspots.length} hotspot markers`);
 }
 
 // ============================================================================
 // EVENT HANDLERS
 // ============================================================================
 
-/**
- * Setup all UI event handlers
- */
 function setupEventHandlers() {
-  // File upload
   const uploadBtn = document.getElementById('uploadBtn');
   const fileInput = document.getElementById('fileInput');
 
@@ -637,7 +742,6 @@ function setupEventHandlers() {
     await uploadAndProcessGLB(file);
   });
 
-  // Run simulation
   const runSimBtn = document.getElementById('runSimBtn');
   runSimBtn.addEventListener('click', async () => {
     if (!state.currentSceneId) {
@@ -652,7 +756,6 @@ function setupEventHandlers() {
     await runSimulation(state.currentSceneId, ageGroupId, agentCount, duration);
   });
 
-  // Playback control
   const playbackBtn = document.getElementById('playbackBtn');
   playbackBtn.addEventListener('click', () => {
     state.playbackState.isPlaying = !state.playbackState.isPlaying;
@@ -665,36 +768,31 @@ function setupEventHandlers() {
     }
   });
 
-  // Show collision events
   const showEventsBtn = document.getElementById('showEventsBtn');
   showEventsBtn.addEventListener('click', () => {
     displayCollisionEventsTable();
   });
 
-  // Toggle heatmap
   const toggleHeatmapBtn = document.getElementById('toggleHeatmapBtn');
   toggleHeatmapBtn.addEventListener('click', () => {
-    if (state.heatmapMesh) {
-      state.heatmapMesh.visible = !state.heatmapMesh.visible;
-      
-      const heatmapInfo = document.getElementById('heatmapInfo');
-      heatmapInfo.style.display = state.heatmapMesh.visible ? 'block' : 'none';
-      
-      toggleHeatmapBtn.textContent = state.heatmapMesh.visible 
-        ? '🗺️ Hide Heatmap' 
-        : '🗺️ Show Heatmap';
-    }
+    // 🔥 UPDATED: Toggle 3D heatmap instead of old 2D heatmap
+    toggleHeatmap3D();
+    
+    // Update button text
+    toggleHeatmapBtn.textContent = state.heatmapEnabled 
+      ? '🗺️ Hide Heatmap' 
+      : '🗺️ Show Heatmap';
+    
+    // Show/hide heatmap info
+    const heatmapInfo = document.getElementById('heatmapInfo');
+    heatmapInfo.style.display = state.heatmapEnabled ? 'block' : 'none';
   });
 
-  // Age group controls - DAY 20 CRITICAL
   setupAgeGroupControls();
 
   console.log('✅ Event handlers initialized');
 }
 
-/**
- * Upload and process GLB file
- */
 async function uploadAndProcessGLB(file) {
   showLoading('Uploading and processing GLB...');
   updateLoadingProgress(10);
@@ -718,15 +816,14 @@ async function uploadAndProcessGLB(file) {
     
     updateLoadingProgress(60);
 
-    // Load model into Three.js
+    state.sceneMetadata = data.scene;
+
     await loadGLBModel(data.sceneId, data.filePath);
 
     updateLoadingProgress(80);
 
-    // Display scene info
     displaySceneInfo(data.scene);
 
-    // Show simulation controls
     document.getElementById('simulationControls').style.display = 'block';
 
     updateLoadingProgress(100);
@@ -739,9 +836,6 @@ async function uploadAndProcessGLB(file) {
   }
 }
 
-/**
- * Display scene information
- */
 function displaySceneInfo(sceneData) {
   const sceneInfo = document.getElementById('sceneInfo');
   const sceneDataPre = document.getElementById('sceneData');
@@ -756,9 +850,6 @@ function displaySceneInfo(sceneData) {
   sceneInfo.style.display = 'block';
 }
 
-/**
- * Display collision events table
- */
 function displayCollisionEventsTable() {
   if (!state.currentSimulation || !state.currentSimulation.collisionEvents) {
     showStatus('No collision data available', 'warning');
@@ -769,7 +860,6 @@ function displayCollisionEventsTable() {
   const eventsSection = document.getElementById('eventsSection');
   const eventsTable = document.getElementById('eventsTable');
 
-  // Create table HTML
   let tableHTML = `
     <table>
       <thead>
@@ -847,14 +937,13 @@ function showStatus(message, type = 'info') {
   status.className = type;
   status.style.display = 'block';
 
-  // Auto-hide after 5 seconds
   setTimeout(() => {
     status.style.display = 'none';
   }, 5000);
 }
 
 // ============================================================================
-// UTILITY FUNCTIONS
+// UTILITY
 // ============================================================================
 
 function getAgeGroupConfig(ageGroupId) {
@@ -870,7 +959,7 @@ function getAgeGroupConfig(ageGroupId) {
 }
 
 // ============================================================================
-// INITIALIZATION ON LOAD
+// INIT
 // ============================================================================
 
 document.addEventListener('DOMContentLoaded', () => {

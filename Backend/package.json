@@ -1,0 +1,38 @@
+{
+  "name": "child-safety-simulator",
+  "version": "1.0.0",
+  "main": "server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node --expose-gc server.js",
+    "dev": "nodemon --expose-gc --watch server.js --watch controllers --watch routes --watch services",
+    "build": "echo \"Backend build complete\"",
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "test:week3": "node test/runTests.js",
+    "test:e2e": "node test/run_sim_e2e.js",
+    "test:auth": "node test/auth_test.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.20.0",
+    "@dimforge/rapier3d-compat": "^0.19.3",
+    "@gltf-transform/core": "^4.3.0",
+    "@gltf-transform/functions": "^4.3.0",
+    "@google/generative-ai": "^0.24.1",
+    "compression": "^1.8.1",
+    "cors": "^2.8.6",
+    "dotenv": "^17.2.3",
+    "express": "^5.2.1",
+    "multer": "^2.0.2",
+    "helmet": "^6.0.1",
+    "morgan": "^1.10.0",
+    "express-rate-limit": "^6.7.0"
+  },
+  "devDependencies": {
+    "@ljharb/tsconfig": "^0.3.2",
+    "nodemon": "^3.1.11"
+  }
+}

@@ -96,7 +96,7 @@ class GeminiAPIService {
               temperature: 0.5,
               topK: 20,
               topP: 0.9,
-              maxOutputTokens: 2048,
+              maxOutputTokens: 4096,
             }
           });
           

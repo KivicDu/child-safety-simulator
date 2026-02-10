@@ -1,31 +1,24 @@
 {
   "name": "child-safety-simulator",
   "version": "1.0.0",
-  "main": "server.js",
+  "description": "Child Safety Simulator - Integrated Full Stack Application",
   "type": "module",
   "scripts": {
-    "start": "node --expose-gc server.js",
-    "dev": "nodemon --expose-gc --watch server.js",
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "test:week3": "node test/runTests.js"
+    "install-all": "npm install && npm --prefix Backend install && npm --prefix Frontend install",
+    "dev": "concurrently \"npm --prefix Backend run dev\" \"npm --prefix Frontend run dev\"",
+    "dev:backend": "npm --prefix Backend run dev",
+    "dev:frontend": "npm --prefix Frontend run dev",
+    "build": "npm --prefix Frontend run build && npm --prefix Backend run build",
+    "build:frontend": "npm --prefix Frontend run build",
+    "start": "npm --prefix Backend run start",
+    "preview": "npm --prefix Frontend run preview",
+    "lint": "npm --prefix Frontend run lint",
+    "test": "npm --prefix Backend run test:week3"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
   },
   "keywords": [],
   "author": "",
-  "license": "ISC",
-  "description": "",
-  "dependencies": {
-    "@anthropic-ai/sdk": "^0.20.0",
-    "@dimforge/rapier3d-compat": "^0.19.3",
-    "@gltf-transform/core": "^4.3.0",
-    "@gltf-transform/functions": "^4.3.0",
-    "@google/generative-ai": "^0.24.1",
-    "compression": "^1.8.1",
-    "cors": "^2.8.6",
-    "dotenv": "^17.2.3",
-    "express": "^5.2.1",
-    "multer": "^2.0.2"
-  },
-  "devDependencies": {
-    "nodemon": "^3.1.11"
-  }
+  "license": "ISC"
 }

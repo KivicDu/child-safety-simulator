@@ -5,7 +5,6 @@ import physicsEngine from '../services/physicsEngine.js';
 import colliderGenerator from '../utils/colliderGenerator.js';
 import behaviorManager from '../services/behaviorManager.js';
 import injuryCalculator from '../services/injuryCalculator.js';
-import heatmapGenerator from '../services/heatmapGenerator.js';
 import Agent from '../services/agent.js';
 import { getAllAgeGroups } from '../config/ageGroups.js';
 
@@ -15,12 +14,10 @@ const __dirname = path.dirname(__filename);
 const PARSED_DIR = process.env.PARSED_DIR || './parsed';
 const SIMULATION_DIR = process.env.SIMULATION_DIR || './simulations';
 
-// Ensure simulation directory exists
 await fs.mkdir(SIMULATION_DIR, { recursive: true });
 
 /**
  * ✅ ENHANCED: Batch simulate all age groups with progress tracking
- * Route: POST /api/simulate/batch-all-ages
  */
 export const batchSimulateAllAges = async (req, res) => {
   const startTime = Date.now();
@@ -38,17 +35,14 @@ export const batchSimulateAllAges = async (req, res) => {
     console.log(`   Duration: ${duration}s`);
     console.log(`   Age Groups: 5 (all)`);
 
-    // Load scene data
     const parsedPath = path.join(PARSED_DIR, `${sceneId}.json`);
     const sceneData = JSON.parse(await fs.readFile(parsedPath, 'utf8'));
 
-    // Get all age groups
     const ageGroups = getAllAgeGroups();
     const results = {};
 
     console.log(`\n📊 Running ${ageGroups.length} simulations...`);
 
-    // Run simulation for each age group
     for (let i = 0; i < ageGroups.length; i++) {
       const ageGroup = ageGroups[i];
       const ageGroupId = ageGroup.id;
@@ -58,7 +52,6 @@ export const batchSimulateAllAges = async (req, res) => {
       console.log(`\n[${i + 1}/${ageGroups.length}] 🧒 ${ageGroup.name} (${ageGroupId})`);
 
       try {
-        // Run single simulation
         const simulationResult = await runSingleSimulation(
           sceneId,
           sceneData,
@@ -68,7 +61,6 @@ export const batchSimulateAllAges = async (req, res) => {
           duration
         );
 
-        // Save simulation data
         const simulationId = `sim_${sceneId}_${ageGroupId}_${Date.now()}`;
         const simPath = path.join(SIMULATION_DIR, `${simulationId}.json`);
         
@@ -131,16 +123,14 @@ export const batchSimulateAllAges = async (req, res) => {
 };
 
 /**
- * Run single simulation for one age group
+ * 🔥 FIXED: Run single simulation with ACCURATE contact point detection
  */
 async function runSingleSimulation(sceneId, sceneData, ageGroupId, ageGroup, agentCount, duration) {
   console.log(`   🔧 Initializing physics...`);
 
-  // Initialize physics
   await physicsEngine.init();
   const world = physicsEngine.createWorld();
 
-  // Generate colliders
   const colliders = colliderGenerator.generateCollidersFromScene(
     sceneData,
     world,
@@ -149,7 +139,6 @@ async function runSingleSimulation(sceneId, sceneData, ageGroupId, ageGroup, age
 
   console.log(`   🤖 Generating AI behaviors...`);
 
-  // Generate behaviors
   const { behaviors, rareEvents } = await behaviorManager.generateBehaviorsForScene(
     sceneData,
     ageGroupId
@@ -157,37 +146,103 @@ async function runSingleSimulation(sceneId, sceneData, ageGroupId, ageGroup, age
 
   console.log(`   🧒 Spawning ${agentCount} agents...`);
 
-  // Create agents
   const agents = [];
   const floorHeight = sceneData.floor?.height || 0;
 
   for (let i = 0; i < agentCount; i++) {
     const spawnPos = getRandomSpawnPosition(sceneData.boundingBox, floorHeight);
     
-    const rigidBody = physicsEngine.createAgentCollider(
+    const agentBodyObj = physicsEngine.createAgentCollider(
       world,
       spawnPos,
       ageGroup.height,
       ageGroup.capsuleRadius
     );
 
-    const agent = new Agent(i, spawnPos, rigidBody, ageGroupId);
+    const agent = new Agent(i, spawnPos, agentBodyObj.body, ageGroupId);
+    agent.collider = agentBodyObj.collider;
     agents.push(agent);
   }
 
-  // Distribute behaviors
   behaviorManager.distributeBehaviors(agents, behaviors, rareEvents);
 
   console.log(`   ⚡ Running physics simulation...`);
 
-  // Run simulation
+  // ✅ FIX: Create EventQueue for collision detection
+  const eventQueue = new physicsEngine.rapier.EventQueue(true);
+  
+  // ✅ FIX: Create handle maps for fast lookup
+  const handleToCollider = new Map();
+  colliders.forEach(c => {
+    if (c.collider) {
+      handleToCollider.set(c.collider.handle, c);
+    }
+  });
+
+  const handleToAgent = new Map();
+  agents.forEach(a => {
+    if (a.collider) {
+      handleToAgent.set(a.collider.handle, a);
+    }
+  });
+
   const collisionEvents = [];
   const deltaTime = 1 / 60; // 60 FPS
   const totalSteps = duration * 60;
 
   for (let step = 0; step < totalSteps; step++) {
-    // Update physics
-    physicsEngine.step(world, deltaTime);
+    // ✅ Step physics with event queue
+    physicsEngine.step(world, deltaTime, eventQueue);
+
+    // 🔥 FIX: Drain REAL collision events with ACCURATE contact points
+    eventQueue.drainCollisionEvents((handle1, handle2, started) => {
+      if (!started) return; // Only process collision start
+
+      const agent1 = handleToAgent.get(handle1);
+      const agent2 = handleToAgent.get(handle2);
+      const collider1 = handleToCollider.get(handle1);
+      const collider2 = handleToCollider.get(handle2);
+
+      // One must be agent, one must be collider
+      const agent = agent1 || agent2;
+      const collider = collider1 || collider2;
+
+      if (!agent || !collider) return;
+      if (collider.type === 'floor') return; // Skip floor collisions for heatmap
+
+      // 🔥 CRITICAL FIX: Get ACTUAL contact point from Rapier manifold
+      const contactPointData = physicsEngine.getContactPoint(
+        world,
+        agent.collider,
+        collider.collider
+      );
+
+      if (!contactPointData) {
+        console.warn(`⚠️  No contact manifold for agent ${agent.id} <-> ${collider.id}`);
+        return;
+      }
+
+      const { position: contactPoint, normal: contactNormal } = contactPointData;
+
+      // ✅ Validate contact point
+      if (!validateContactPoint(contactPoint, sceneData.boundingBox)) {
+        console.warn(`⚠️  Invalid contact point:`, contactPoint);
+        return;
+      }
+
+      const agentVel = agent.getVelocity();
+
+      collisionEvents.push({
+        time: step * deltaTime,
+        agentId: agent.id,
+        objectId: collider.id,
+        objectName: collider.name || collider.id,
+        position: contactPoint,         // ✅ ACCURATE surface contact point!
+        normal: contactNormal,          // ✅ Surface normal for decal alignment
+        velocity: agent.velocity,
+        impactSpeed: Math.sqrt(agentVel[0]**2 + agentVel[1]**2 + agentVel[2]**2)
+      });
+    });
 
     // Update agents
     agents.forEach(agent => {
@@ -198,10 +253,6 @@ async function runSingleSimulation(sceneId, sceneData, ageGroupId, ageGroup, age
         sceneData.boundingBox
       );
     });
-
-    // Detect collisions
-    const stepCollisions = detectCollisions(agents, colliders, step * deltaTime);
-    collisionEvents.push(...stepCollisions);
 
     // Progress log every 60 steps (1 second)
     if (step % 60 === 0 && step > 0) {
@@ -226,13 +277,12 @@ async function runSingleSimulation(sceneId, sceneData, ageGroupId, ageGroup, age
     objectsMap
   );
 
-  // Generate summary
   const summary = injuryCalculator.getInjurySummary(injuryAssessments);
 
   // Collect trajectories
   const trajectories = agents.map(agent => ({
     agentId: agent.id,
-    positions: agent.getSampledTrajectory(30), // Max 30 points
+    positions: agent.getSampledTrajectory(30),
     finalState: agent.getStatus()
   }));
 
@@ -242,7 +292,7 @@ async function runSingleSimulation(sceneId, sceneData, ageGroupId, ageGroup, age
   agents.forEach(agent => agent.cleanup());
 
   return {
-    simulationId: null, // Will be set by caller
+    simulationId: null,
     sceneId,
     ageGroupId,
     config: { agentCount, duration, ageGroup: ageGroup.name },
@@ -254,54 +304,35 @@ async function runSingleSimulation(sceneId, sceneData, ageGroupId, ageGroup, age
 }
 
 /**
- * Detect collisions for current frame
+ * 🔥 NEW: Validate contact point coordinates
  */
-function detectCollisions(agents, colliders, currentTime) {
-  const events = [];
+function validateContactPoint(point, sceneBounds) {
+  if (!point || !Array.isArray(point) || point.length !== 3) {
+    return false;
+  }
 
-  agents.forEach(agent => {
-    const agentPos = agent.getPosition();
-    const agentVel = agent.getVelocity();
+  // Check for NaN or Infinity
+  if (point.some(v => !Number.isFinite(v))) {
+    return false;
+  }
 
-    // Only check if agent is moving
-    if (agentVel < 0.1) return;
+  // Check within scene bounds (with 10% margin for edge cases)
+  const margin = 1.0;
+  const [x, y, z] = point;
+  
+  if (x < sceneBounds.min[0] - margin || x > sceneBounds.max[0] + margin) return false;
+  if (y < sceneBounds.min[1] - margin || y > sceneBounds.max[1] + margin) return false;
+  if (z < sceneBounds.min[2] - margin || z > sceneBounds.max[2] + margin) return false;
 
-    colliders.forEach(collider => {
-      if (collider.type === 'floor') return; // Skip floor
-
-      const bbox = collider.boundingBox;
-      if (!bbox) return;
-
-      // Simple AABB collision check
-      const inX = agentPos[0] >= bbox.min[0] && agentPos[0] <= bbox.max[0];
-      const inY = agentPos[1] >= bbox.min[1] && agentPos[1] <= bbox.max[1];
-      const inZ = agentPos[2] >= bbox.min[2] && agentPos[2] <= bbox.max[2];
-
-      if (inX && inY && inZ) {
-        events.push({
-          time: currentTime,
-          agentId: agent.id,
-          objectId: collider.id,
-          objectName: collider.name || collider.id,
-          position: [...agentPos],
-          velocity: agentVel
-        });
-      }
-    });
-  });
-
-  return events;
+  return true;
 }
 
-/**
- * Get random spawn position within scene bounds
- */
 function getRandomSpawnPosition(bbox, floorHeight) {
   if (!bbox) {
     return [0, floorHeight + 0.5, 0];
   }
 
-  const margin = 1.0; // Stay away from walls
+  const margin = 1.0;
 
   return [
     bbox.min[0] + margin + Math.random() * (bbox.max[0] - bbox.min[0] - 2 * margin),

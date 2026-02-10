@@ -196,34 +196,59 @@ class GLBParser {
 
   detectFloor(objects, sceneBbox) {
     let floorCandidate = null;
-    let lowestY = Infinity;
+    let bestScore = -Infinity;
+
+    console.log(`🔍 Searching for floor among ${objects.length} objects...`);
 
     for (const obj of objects) {
       const bbox = obj.boundingBox;
       const yMin = bbox.min[1];
+      const yMax = bbox.max[1];
+      const height = yMax - yMin;
       const width = bbox.max[0] - bbox.min[0];
-      const height = bbox.max[1] - bbox.min[1];
       const depth = bbox.max[2] - bbox.min[2];
       const area = width * depth;
 
-      if (height < 0.5 && area > 1.0 && yMin < lowestY) {
-        lowestY = yMin;
-        floorCandidate = {
-          objectId: obj.id,
-          objectName: obj.name,
-          height: yMin,
-          area: area
-        };
+      // 🏛️ Tiêu chí tìm sàn:
+      // 1. Phải mỏng (height < 0.5)
+      // 2. Phải lớn (area > 1.0)
+      // 3. Phải ở vị trí thấp nhất (yMin nhỏ nhất)
+      // 4. Ưu tiên object có area lớn nhất nếu cùng yMin
+      
+      if (height < 0.5 && area > 1.0) {
+        // Score: yMin thấp nhất (âm lớn = thấp) + area lớn nhất
+        const score = -yMin * 100 + area;
+        
+        if (score > bestScore) {
+          bestScore = score;
+          floorCandidate = {
+            objectId: obj.id,
+            objectName: obj.name,
+            height: yMin, // Sử dụng yMin (đáy của sàn)
+            topHeight: yMax,
+            area: area,
+            width: width,
+            depth: depth
+          };
+          
+          console.log(`  📦 Candidate: ${obj.name} (area: ${area.toFixed(2)}, height: ${height.toFixed(3)}, yMin: ${yMin.toFixed(2)}, score: ${score.toFixed(2)})`)
+        }
       }
     }
 
     if (!floorCandidate) {
+      console.warn('⚠️ No suitable floor found! Using scene bounding box minimum');
       floorCandidate = {
         objectId: null,
         objectName: 'auto-detected',
         height: sceneBbox.min[1],
-        area: 0
+        topHeight: sceneBbox.min[1] + 0.1,
+        area: (sceneBbox.max[0] - sceneBbox.min[0]) * (sceneBbox.max[2] - sceneBbox.min[2]),
+        width: sceneBbox.max[0] - sceneBbox.min[0],
+        depth: sceneBbox.max[2] - sceneBbox.min[2]
       };
+    } else {
+      console.log(`✅ Floor selected: ${floorCandidate.objectName} (height: ${floorCandidate.height.toFixed(2)})`);
     }
 
     return floorCandidate;

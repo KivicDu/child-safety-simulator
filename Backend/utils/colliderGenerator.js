@@ -34,7 +34,8 @@ class ColliderGenerator {
       colliders.push({
         id: 'floor',
         type: 'floor',
-        body: floorCollider
+        body: floorCollider.body,
+        collider: floorCollider.collider
       });
 
       console.log(`✅ Floor collider created at height ${sceneData.floor.height}`);
@@ -42,7 +43,7 @@ class ColliderGenerator {
       console.warn('⚠️ No valid floor data found, skipping floor collider');
     }
 
-    // Create box colliders for all objects (skip invalid bbox)
+    // 🔥 FIX: Create SOLID colliders (NOT sensors) for collision detection
     let skipped = 0;
 
     objects.forEach((obj, index) => {
@@ -60,17 +61,20 @@ class ColliderGenerator {
       }
 
       try {
-        const rigidBody = physicsEngine.createBoxCollider(
+        // 🔥 CRITICAL FIX: Remove isSensor flag to enable real collisions
+        const rb = physicsEngine.createBoxCollider(
           world,
           obj.boundingBox,
-          true
+          true,  // isStatic = true
+          false  // isSensor = false (CHANGED FROM true)
         );
 
         colliders.push({
           id: obj.id || `obj_${index}`,
           name: obj.name || `Object ${index}`,
           type: 'object',
-          body: rigidBody,
+          body: rb.body,
+          collider: rb.collider,
           boundingBox: obj.boundingBox
         });
 
