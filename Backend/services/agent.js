@@ -1,3 +1,5 @@
+import { getAgeGroup } from '../config/ageGroups.js';
+
 class Agent {
   constructor(id, startPosition, rigidBody, ageGroupId) {
     this.id = id;
@@ -25,6 +27,7 @@ class Agent {
     this.targetPosition = null;
     this.velocity = [0, 0, 0];
     this.previousPosition = [...startPosition];
+    this.spawnY = startPosition[1]; // 🔥 Remember spawn height for floor clamping
     
     // Stats
     this.totalDistance = 0;
@@ -86,7 +89,7 @@ class Agent {
   updateBehavior(deltaTime, colliders, bounds) {
     // Handle rare event first
     if (this.participatingInRareEvent && this.rareEventChain) {
-      this.executeRareEventStep(deltaTime, colliders);
+      this.executeRareEventStep(deltaTime, colliders, bounds);
       return;
     }
     
@@ -104,9 +107,20 @@ class Agent {
         // Execute current action
         this.executeAction(this.currentBehavior, deltaTime, colliders, bounds);
       }
+    } else if (this.state === 'MOVING' && this.targetPosition) {
+      // Continue moving towards existing target (random walk fallback)
+      this.moveTowardsTarget(deltaTime);
+      // If we reached the target, pick a new one next frame
+      if (!this.targetPosition) {
+        this.state = 'IDLE';
+      }
     } else {
       // Pick next behavior from queue
       this.pickNextBehavior(deltaTime, bounds);
+      // If pickNextBehavior set a target (random walk), start moving immediately
+      if (this.state === 'MOVING' && this.targetPosition) {
+        this.moveTowardsTarget(deltaTime);
+      }
     }
   }
 
@@ -130,7 +144,12 @@ class Agent {
         this.behaviorTimer = 0;
       }
     } else {
-      // Fallback to random walk
+      // 🔥 FIX #10: Reset behavior queue so agents loop behaviors instead of going idle forever
+      this.behaviorQueue.forEach(b => {
+        b.completed = false;
+        if (b.sequence) b.sequence.forEach(a => { a.completed = false; });
+      });
+      // Set random walk for a brief period before restarting
       this.state = 'MOVING';
       this.setRandomTarget(bounds);
     }
@@ -144,8 +163,14 @@ class Agent {
     switch (actionType) {
       case 'walk_to':
         this.state = 'MOVING';
-        if (action.targetObjectId) {
-          const targetObj = colliders.find(c => c.id === action.targetObjectId);
+        if (action.targetObjectId || action.target) {
+          // Try to find target object by id or by matching name/type
+          const targetId = action.targetObjectId || action.target;
+          const targetObj = colliders.find(c => 
+            c.id === targetId || 
+            (c.name && c.name.toLowerCase().includes(targetId.toLowerCase())) ||
+            (c.type && c.type.toLowerCase().includes(targetId.toLowerCase()))
+          );
           if (targetObj && targetObj.boundingBox) {
             const bbox = targetObj.boundingBox;
             this.targetPosition = [
@@ -153,6 +178,9 @@ class Agent {
               bbox.min[1],
               (bbox.min[2] + bbox.max[2]) / 2
             ];
+          } else if (!this.targetPosition) {
+            // Couldn't find target, walk to random position
+            this.setRandomTarget(bounds);
           }
         }
         this.moveTowardsTarget(deltaTime);
@@ -173,20 +201,118 @@ class Agent {
         }
         this.moveTowardsTarget(deltaTime * 0.3); // Slower
         break;
+
+      // 🔥 FIX #4: Added missing action type handlers
+      case 'run':
+        this.state = 'MOVING';
+        if (!this.targetPosition) {
+          this.setRandomTarget(bounds);
+        }
+        this.moveTowardsTarget(deltaTime * 1.8); // Faster
+        break;
+
+      case 'grab':
+      case 'grab_mouth':
+        this.state = 'INTERACTING';
+        // Agent grabs object — physics handles collision
+        break;
         
       case 'reach_up':
       case 'pull':
+      case 'pull_to_stand':
       case 'climb_on':
         this.state = 'INTERACTING';
-        // Physics simulation handles this
+        // Simulate reaching/climbing — move upward slightly
+        if (this.body) {
+          const pos = this.body.translation();
+          this.body.setNextKinematicTranslation({
+            x: pos.x, y: pos.y + 0.3 * deltaTime, z: pos.z
+          });
+        }
+        break;
+
+      case 'jump':
+        this.state = 'INTERACTING';
+        if (this.body) {
+          const jumpH = action.height || 0.5;
+          const pos = this.body.translation();
+          this.body.setNextKinematicTranslation({
+            x: pos.x, y: pos.y + jumpH * deltaTime * 3, z: pos.z
+          });
+        }
+        break;
+
+      case 'land':
+      case 'fall_forward':
+      case 'trip':
+      case 'lose_balance':
+        this.state = 'INTERACTING';
+        // Simulate a fall — move sideways + downward
+        if (this.body) {
+          const angle = Math.random() * Math.PI * 2;
+          const pos = this.body.translation();
+          const fallSpeed = 2.0 * deltaTime;
+          this.body.setNextKinematicTranslation({
+            x: pos.x + Math.cos(angle) * fallSpeed,
+            y: Math.max(this.spawnY - 0.3, pos.y - fallSpeed),
+            z: pos.z + Math.sin(angle) * fallSpeed
+          });
+        }
+        break;
+
+      case 'pause':
+      case 'look_around':
+      case 'stand_up':
+        this.state = 'IDLE';
+        // Agent pauses — no movement, just wait for duration
+        break;
+
+      case 'move_chair':
+      case 'open':
+      case 'open_drawer':
+      case 'swing_open':
+      case 'swing_close':
+        this.state = 'INTERACTING';
+        // Simulate interacting with an object
+        if (!this.targetPosition) {
+          this.setRandomTarget(bounds);
+        }
+        this.moveTowardsTarget(deltaTime * 0.5); // Slow approach
+        break;
+
+      case 'climb_in':
+      case 'stay_hidden':
+      case 'repeat':
+        this.state = 'INTERACTING';
+        // Stationary interaction
+        break;
+
+      case 'grab_tool':
+      case 'use_incorrectly':
+        this.state = 'INTERACTING';
+        break;
+
+      case 'collision':
+        this.state = 'INTERACTING';
+        // Collision action — move towards nearest furniture
+        if (!this.targetPosition) {
+          this.setRandomTarget(bounds);
+        }
+        this.moveTowardsTarget(deltaTime * 2.0); // Fast approach to trigger collision
         break;
         
       default:
-        this.state = 'IDLE';
+        // Unknown action — default to moving randomly instead of going IDLE
+        this.state = 'MOVING';
+        if (!this.targetPosition) {
+          this.setRandomTarget(bounds);
+        }
+        this.moveTowardsTarget(deltaTime);
     }
   }
 
-  executeRareEventStep(deltaTime, colliders) {
+  // 🔥 FIX #11: Actually execute rare event actions instead of just counting time
+  executeRareEventStep(deltaTime, colliders, bounds) {
     if (!this.rareEventChain || !this.rareEventChain.chain) return;
     
     const currentStep = this.rareEventChain.chain[this.rareEventStep];
@@ -196,6 +322,12 @@ class Agent {
     }
     
     this.state = 'RARE_EVENT';
+    
+    // Execute the actual action from the rare event chain
+    if (currentStep.action) {
+      this.executeAction(currentStep, deltaTime, colliders, bounds);
+    }
+    
     this.behaviorTimer += deltaTime;
     
     if (this.behaviorTimer >= (currentStep.duration || 2.0)) {
@@ -226,12 +358,17 @@ class Agent {
     const ageGroup = this.getAgeGroupData();
     const speed = ageGroup.speed || 1.0;
     
-    // Calculate movement
+    // Calculate movement delta
     const moveX = (dx / distance) * speed * deltaTime;
     const moveZ = (dz / distance) * speed * deltaTime;
     
-    // Apply velocity to rigid body
-    this.body.setLinvel({ x: moveX * 60, y: 0, z: moveZ * 60 }, true);
+    // 🔥 FIX: Use setNextKinematicTranslation for kinematic body
+    const pos = this.body.translation();
+    this.body.setNextKinematicTranslation({
+      x: pos.x + moveX,
+      y: this.spawnY, // Stay on floor plane
+      z: pos.z + moveZ
+    });
   }
 
   setRandomTarget(bounds) {
@@ -288,15 +425,14 @@ class Agent {
     };
   }
 
+  // 🔥 FIX #7: Use centralized ageGroups config instead of duplicate data
   getAgeGroupData() {
-    const ageGroups = {
-      infant: { speed: 0.3 },
-      toddler: { speed: 0.8 },
-      preschool: { speed: 1.2 },
-      school: { speed: 1.5 },
-      preteen: { speed: 2.0 }
-    };
-    return ageGroups[this.ageGroupId] || ageGroups.toddler;
+    const ageGroup = getAgeGroup(this.ageGroupId);
+    if (ageGroup) {
+      return { speed: ageGroup.speed };
+    }
+    // Fallback if config not found
+    return { speed: 0.8 };
   }
 
   /**

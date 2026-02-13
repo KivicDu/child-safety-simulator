@@ -52,7 +52,8 @@ class PhysicsEngine {
     // Create collider
     let colliderDesc = this.rapier.ColliderDesc.cuboid(
       size[0], size[1], size[2]
-    ).setFriction(0.6).setRestitution(0.0);
+    ).setFriction(0.6).setRestitution(0.0)
+     .setActiveEvents(this.rapier.ActiveEvents.COLLISION_EVENTS);
     if (isSensor) {
       colliderDesc = colliderDesc.setSensor(true);
     }
@@ -71,22 +72,24 @@ class PhysicsEngine {
       size, 0.1, size // Large thin box
     )
       .setFriction(0.9)
-      .setRestitution(0.0);
+      .setRestitution(0.0)
+      .setActiveEvents(this.rapier.ActiveEvents.COLLISION_EVENTS);
     const collider = world.createCollider(colliderDesc, rigidBody);
 
     return { body: rigidBody, collider };
   }
 
-  // Create agent capsule collider with sleep disabled
+  // Create agent capsule collider — kinematic so it doesn't fall due to gravity
   createAgentCollider(world, position, height = 1.0, radius = 0.3) {
     const minY = (height / 2) + 0.05;
-    const posY = (typeof position[1] === 'number' && position[1] > minY) ? position[1] : minY;
+    // Trust caller's position[1] if it's a number, otherwise use safe fallback
+    const posY = (typeof position[1] === 'number') ? position[1] : minY;
 
-    const rigidBodyDesc = this.rapier.RigidBodyDesc.dynamic()
-      .setTranslation(position[0], posY, position[2])
-      .lockRotations()
-      .setCanSleep(false)
-      .setLinearDamping(0.0);
+    // 🔥 FIX: Use kinematicPositionBased instead of dynamic
+    // Dynamic bodies + gravity + 312 solid colliders = agents fall through floor
+    // Kinematic bodies are moved programmatically and still generate collision events
+    const rigidBodyDesc = this.rapier.RigidBodyDesc.kinematicPositionBased()
+      .setTranslation(position[0], posY, position[2]);
     
     const rigidBody = world.createRigidBody(rigidBodyDesc);
 
@@ -95,11 +98,12 @@ class PhysicsEngine {
       radius
     )
       .setFriction(0.0)
-      .setRestitution(0.0);
+      .setRestitution(0.0)
+      .setActiveEvents(this.rapier.ActiveEvents.COLLISION_EVENTS)
+      // 🔥 FIX: Kinematic bodies need explicit collision type for fixed bodies
+      .setActiveCollisionTypes(this.rapier.ActiveCollisionTypes.KINEMATIC_FIXED | this.rapier.ActiveCollisionTypes.DEFAULT);
 
     const collider = world.createCollider(colliderDesc, rigidBody);
-
-    rigidBody.wakeUp();
 
     return { body: rigidBody, collider };
   }
@@ -141,43 +145,78 @@ class PhysicsEngine {
   }
 
   /**
-   * 🔥 ENHANCED: Get accurate contact point and normal from Rapier collision manifold
+   * 🔥 ENHANCED: Get contact point with geometric fallback
    * 
-   * @param {World} world - Rapier physics world
-   * @param {Collider} collider1 - First collider (agent)
-   * @param {Collider} collider2 - Second collider (object)
-   * @returns {Object|null} { position: [x,y,z], normal: [nx,ny,nz], depth: float }
+   * Rapier's contactPair manifold may be empty at the same step
+   * the collision event fires. When that happens, we compute
+   * a geometric approximation from collider positions.
    */
   getContactPoint(world, collider1, collider2) {
     let contactData = null;
     let maxDepth = -Infinity;
 
-    // Iterate through contact pairs
-    world.contactPair(collider1, collider2, (manifold) => {
-      // Rapier may return multiple contact manifolds
-      const numContacts = manifold.numContacts();
-      
-      if (numContacts === 0) return;
+    // Try Rapier manifold first
+    try {
+      world.contactPair(collider1, collider2, (manifold) => {
+        const numContacts = manifold.numContacts();
+        
+        if (numContacts === 0) return;
 
-      // Find deepest contact point (most penetrating)
-      for (let i = 0; i < numContacts; i++) {
-        const point = manifold.contactPoint(i);
-        const normal = manifold.contactNormal(i);
-        const depth = manifold.contactDist(i);
+        for (let i = 0; i < numContacts; i++) {
+          const point = manifold.contactPoint(i);
+          const normal = manifold.contactNormal(i);
+          const depth = manifold.contactDist(i);
 
-        // Use deepest contact (most significant)
-        if (depth > maxDepth) {
-          maxDepth = depth;
+          if (depth > maxDepth) {
+            maxDepth = depth;
+            
+            contactData = {
+              position: [point.x, point.y, point.z],
+              normal: [normal.x, normal.y, normal.z],
+              depth: depth,
+              contactCount: numContacts,
+              source: 'manifold'
+            };
+          }
+        }
+      });
+    } catch (e) {
+      // contactPair may fail if colliders are invalid
+    }
+
+    // 🔥 GEOMETRIC FALLBACK: if manifold is empty, compute from collider positions
+    if (!contactData) {
+      try {
+        const parent1 = collider1.parent();
+        const parent2 = collider2.parent();
+        
+        if (parent1 && parent2) {
+          const t1 = parent1.translation();
+          const t2 = parent2.translation();
+          
+          // Contact point = midpoint between collider centers
+          const midX = (t1.x + t2.x) / 2;
+          const midY = (t1.y + t2.y) / 2;
+          const midZ = (t1.z + t2.z) / 2;
+          
+          // Normal = direction from collider2 to collider1
+          const dx = t1.x - t2.x;
+          const dy = t1.y - t2.y;
+          const dz = t1.z - t2.z;
+          const len = Math.sqrt(dx * dx + dy * dy + dz * dz) || 1;
           
           contactData = {
-            position: [point.x, point.y, point.z],
-            normal: [normal.x, normal.y, normal.z],
-            depth: depth,
-            contactCount: numContacts
+            position: [midX, midY, midZ],
+            normal: [dx / len, dy / len, dz / len],
+            depth: 0,
+            contactCount: 1,
+            source: 'geometric'
           };
         }
+      } catch (e) {
+        // Fallback also failed
       }
-    });
+    }
 
     return contactData;
   }

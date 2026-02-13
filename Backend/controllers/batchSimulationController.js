@@ -150,7 +150,7 @@ async function runSingleSimulation(sceneId, sceneData, ageGroupId, ageGroup, age
   const floorHeight = sceneData.floor?.height || 0;
 
   for (let i = 0; i < agentCount; i++) {
-    const spawnPos = getRandomSpawnPosition(sceneData.boundingBox, floorHeight);
+    const spawnPos = getRandomSpawnPosition(sceneData.boundingBox, floorHeight, ageGroup);
     
     const agentBodyObj = physicsEngine.createAgentCollider(
       world,
@@ -237,10 +237,10 @@ async function runSingleSimulation(sceneId, sceneData, ageGroupId, ageGroup, age
         agentId: agent.id,
         objectId: collider.id,
         objectName: collider.name || collider.id,
-        position: contactPoint,         // ✅ ACCURATE surface contact point!
-        normal: contactNormal,          // ✅ Surface normal for decal alignment
-        velocity: agent.velocity,
-        impactSpeed: Math.sqrt(agentVel[0]**2 + agentVel[1]**2 + agentVel[2]**2)
+        position: contactPoint,
+        normal: contactNormal,
+        velocity: agentVel,            // 🔥 FIX #2: scalar, not array
+        impactSpeed: agentVel           // 🔥 FIX #2: consistent scalar
       });
     });
 
@@ -288,8 +288,45 @@ async function runSingleSimulation(sceneId, sceneData, ageGroupId, ageGroup, age
 
   console.log(`   ✅ Simulation data compiled`);
 
-  // Cleanup
-  agents.forEach(agent => agent.cleanup());
+  // 🔥 FIX #5: Proper physics cleanup (was missing world cleanup entirely)
+  try {
+    // Remove agent colliders first
+    agents.forEach(agent => {
+      try {
+        if (agent.collider && world.getCollider(agent.collider.handle)) {
+          world.removeCollider(agent.collider, true);
+        }
+      } catch (e) { /* already removed */ }
+      agent.cleanup();
+    });
+
+    // Remove scene colliders
+    colliders.forEach(collider => {
+      try {
+        if (collider.collider && world.getCollider(collider.collider.handle)) {
+          world.removeCollider(collider.collider, true);
+        }
+      } catch (e) { /* already removed */ }
+    });
+
+    // Collect body handles first, then remove (avoid mutation during iteration)
+    const bodyHandles = [];
+    world.forEachRigidBody((body) => {
+      bodyHandles.push(body.handle);
+    });
+    bodyHandles.forEach(handle => {
+      try {
+        const body = world.getRigidBody(handle);
+        if (body) world.removeRigidBody(body);
+      } catch (e) { /* already removed */ }
+    });
+
+    // Free the physics world
+    world.free();
+    console.log(`   🧹 Physics world cleaned up`);
+  } catch (cleanupErr) {
+    console.warn(`   ⚠️ Cleanup warning: ${cleanupErr.message}`);
+  }
 
   return {
     simulationId: null,
@@ -316,8 +353,8 @@ function validateContactPoint(point, sceneBounds) {
     return false;
   }
 
-  // Check within scene bounds (with 10% margin for edge cases)
-  const margin = 1.0;
+  // Check within scene bounds (with reasonable margin)
+  const margin = 5.0;
   const [x, y, z] = point;
   
   if (x < sceneBounds.min[0] - margin || x > sceneBounds.max[0] + margin) return false;
@@ -327,16 +364,18 @@ function validateContactPoint(point, sceneBounds) {
   return true;
 }
 
-function getRandomSpawnPosition(bbox, floorHeight) {
+function getRandomSpawnPosition(bbox, floorHeight, ageGroup = null) {
+  const heightOffset = ageGroup ? (ageGroup.height / 2 + 0.05) : 0.5;
+
   if (!bbox) {
-    return [0, floorHeight + 0.5, 0];
+    return [0, floorHeight + heightOffset, 0];
   }
 
   const margin = 1.0;
 
   return [
     bbox.min[0] + margin + Math.random() * (bbox.max[0] - bbox.min[0] - 2 * margin),
-    floorHeight + 0.5,
+    floorHeight + heightOffset,
     bbox.min[2] + margin + Math.random() * (bbox.max[2] - bbox.min[2] - 2 * margin)
   ];
 }

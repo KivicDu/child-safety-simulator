@@ -52,9 +52,11 @@ export const startSimulation = async (req, res) => {
         const ageGroup = getAgeGroup(ageGroupId);
         const agents = [];
         const floorHeight = sceneData.floor?.height || 0;
+        console.log(`[SIM START] Scene: ${sceneId}, Floor Height: ${floorHeight.toFixed(4)}`);
+        console.log(`[SIM START] BBox Min: ${JSON.stringify(sceneData.boundingBox.min)}, Max: ${JSON.stringify(sceneData.boundingBox.max)}`);
 
         for (let i = 0; i < agentCount; i++) {
-          const spawnPos = getRandomSpawnPosition(sceneData.boundingBox, floorHeight);
+          const spawnPos = getRandomSpawnPosition(sceneData.boundingBox, floorHeight, ageGroup);
           const agentBodyObj = physicsEngine.createAgentCollider(
             world,
             spawnPos,
@@ -66,6 +68,13 @@ export const startSimulation = async (req, res) => {
           agents.push(agent);
         }
 
+        // 🔥 FIX #1: Generate and distribute behaviors (was completely missing!)
+        const { behaviors, rareEvents } = await behaviorManager.generateBehaviorsForScene(
+          sceneData,
+          ageGroupId
+        );
+        behaviorManager.distributeBehaviors(agents, behaviors, rareEvents);
+
         const eventQueue = new physicsEngine.rapier.EventQueue(true);
         const handleToCollider = new Map();
         colliders.forEach(c => { if (c.collider) handleToCollider.set(c.collider.handle, c); });
@@ -75,13 +84,25 @@ export const startSimulation = async (req, res) => {
         const collisionEvents = [];
         let contactCandidates = 0;
         let validContacts = 0;
+        let dbg_noMatch = 0, dbg_isFloor = 0, dbg_noContact = 0, dbg_outOfBounds = 0;
+        const traceLog = [];
         const deltaTime = 1 / 60;
         const totalSteps = duration * 60;
 
         for (let step = 0; step < totalSteps; step++) {
+          // 🔥 FIX: Update agents FIRST so velocity is current-frame
+          agents.forEach(agent => agent.update(deltaTime, colliders, agents, sceneData.boundingBox));
+
           physicsEngine.step(world, deltaTime, eventQueue);
 
+          // 🔥 FIX: Skip first 30 steps (0.5s warmup) to avoid spawn-overlap false collisions
+          if (step < 30) {
+            eventQueue.drainCollisionEvents(() => {}); // drain but discard
+            continue;
+          }
+
           eventQueue.drainCollisionEvents((handle1, handle2, started) => {
+            try {
             if (!started) return;
             contactCandidates++;
             const agent1 = handleToAgent.get(handle1);
@@ -90,17 +111,43 @@ export const startSimulation = async (req, res) => {
             const collider2 = handleToCollider.get(handle2);
             const agent = agent1 || agent2;
             const collider = collider1 || collider2;
-            if (!agent || !collider) return;
-            if (collider.type === 'floor') return;
 
+            if (!agent || !collider) { dbg_noMatch++; traceLog.push(`NO_MATCH h1=${handle1} h2=${handle2} a=${!!agent} c=${!!collider}`); return; }
+            if (collider.type === 'floor') { dbg_isFloor++; return; }
+
+            traceLog.push(`PRE_CONTACT h1=${handle1} h2=${handle2} agent=${agent.id} obj=${collider.id} type=${collider.type}`);
             const contactPointData = physicsEngine.getContactPoint(world, agent.collider, collider.collider);
-            if (!contactPointData) return;
+            if (!contactPointData) { dbg_noContact++; traceLog.push(`NO_CONTACT h1=${handle1} h2=${handle2}`); return; }
             const { position: contactPoint, normal: contactNormal } = contactPointData;
-            // temporary: relax validation margin to ensure we don't filter valid contacts
-            if (!validateContactPoint(contactPoint, sceneData.boundingBox)) return;
+            if (!validateContactPoint(contactPoint, sceneData.boundingBox)) { dbg_outOfBounds++; traceLog.push(`OOB pt=${JSON.stringify(contactPoint)}`); return; }
 
-            const agentVel = agent.getVelocity();
+            // 🔥 FIX: Use agent's computed velocity (kinematic bodies don't have linvel)
+            let agentVelMagnitude = agent.getVelocity();
+
+            // 🔥 FIX: Apply collision angle factor — head-on = full speed, glancing = reduced
+            if (contactNormal && agentVelMagnitude > 0) {
+              // Compute dot product of velocity direction and contact normal
+              const velMag = agentVelMagnitude;
+              const vx = agent.velocity[0], vy = agent.velocity[1], vz = agent.velocity[2];
+              const speed = Math.sqrt(vx*vx + vy*vy + vz*vz) || 1;
+              const dot = Math.abs((vx/speed) * contactNormal[0] + (vy/speed) * contactNormal[1] + (vz/speed) * contactNormal[2]);
+              // dot=1 → head-on, dot=0 → glancing. Scale between 0.3 and 1.0
+              const angleFactor = 0.3 + 0.7 * dot;
+              agentVelMagnitude *= angleFactor;
+            }
+
+            // 🔥 FIX: Also scale by agent state — interactions can be rougher
+            const stateMultiplier = agent.state === 'INTERACTING' ? (1.2 + Math.random() * 1.3) : 1.0;
+            agentVelMagnitude *= stateMultiplier;
+
+            // 🔥 FIX: Filter out very low-velocity contacts (static overlaps)
+            if (agentVelMagnitude < 0.05) {
+              traceLog.push(`LOW_VEL agent=${agent.id} vel=${agentVelMagnitude.toFixed(4)}`);
+              return;
+            }
+
             validContacts++;
+            traceLog.push(`VALID agent=${agent.id} obj=${collider.id} vel=${agentVelMagnitude.toFixed(3)}`);
             collisionEvents.push({
               time: step * deltaTime,
               agentId: agent.id,
@@ -108,18 +155,35 @@ export const startSimulation = async (req, res) => {
               objectName: collider.name || collider.id,
               position: contactPoint,
               normal: contactNormal,
-              velocity: agent.velocity,
-              impactSpeed: agentVel
+              velocity: agentVelMagnitude,
+              impactSpeed: agentVelMagnitude
             });
+            } catch (err) {
+              traceLog.push(`ERROR h1=${handle1} h2=${handle2}: ${err.message}`);
+            }
           });
 
-          agents.forEach(agent => agent.update(deltaTime, colliders, agents, sceneData.boundingBox));
+          // Log warning if agents are far from everything
+          if (step % 120 === 0 && step > 0) { // Every 2 seconds
+             if (contactCandidates === 0) {
+                 const pos0 = agents[0] ? agents[0].getPosition() : 'N/A';
+                 console.warn(`[SIM STEP ${step}] ⚠️ 0 Candidates. Agent 0 Pos: ${JSON.stringify(pos0)}`);
+             }
+          }
 
-          // Update progress periodically
-          if (step % 30 === 0) {
-            const progress = Math.round((step / totalSteps) * 100);
+          // Update progress and agent positions periodically
+          if (step % 10 === 0) {
             const entry = activeSimulations.get(simulationId) || {};
-            entry.progress = progress;
+            // Update progress every 30 steps
+            if (step % 30 === 0) {
+              entry.progress = Math.round((step / totalSteps) * 100);
+            }
+            // Always update agent positions for live visualization
+            entry.agentPositions = agents.map(a => {
+              const pos = a.getPosition();
+              return { agentId: a.id, position: Array.isArray(pos) ? pos : [pos.x || 0, pos.y || 0, pos.z || 0] };
+            });
+            entry.simTime = (step * deltaTime).toFixed(2);
             activeSimulations.set(simulationId, entry);
           }
         }
@@ -140,6 +204,14 @@ export const startSimulation = async (req, res) => {
           trajectories,
           collisionEvents: injuryAssessments,
           summary,
+          debugStats: {
+            contactCandidates,
+            validContacts,
+            floorHeight,
+            sceneBBox: sceneData.boundingBox,
+            filterBreakdown: { noMatch: dbg_noMatch, isFloor: dbg_isFloor, noContact: dbg_noContact, outOfBounds: dbg_outOfBounds },
+            traceLog: traceLog.slice(0, 50) // First 50 trace entries
+          },
           timestamp: new Date().toISOString()
         };
 
@@ -182,7 +254,9 @@ export const getSimulationStatus = async (req, res) => {
         status: entry.status || 'running',
         progress: typeof entry.progress === 'number' ? entry.progress : 0,
         startedAt: entry.startedAt || null,
-        error: entry.error || null
+        error: entry.error || null,
+        agentPositions: entry.agentPositions || null,
+        simTime: entry.simTime || null
       });
     }
 
@@ -245,16 +319,99 @@ export const getSimulationHeatmap = async (req, res) => {
     
     const data = await fs.readFile(simPath, 'utf8');
     const simulationData = JSON.parse(data);
+    const events = simulationData.collisionEvents || [];
 
-    const heatmapData = (simulationData.collisionEvents || []).map(event => ({
-      position: event.position,
-      injuryScore: event.injury?.injuryScore || 0,
-      riskTier: event.injury?.riskTier || 'safe'
-    }));
+    // Load parsed scene for bounding boxes
+    let sceneObjects = {};
+    try {
+      const parsedPath = path.join(PARSED_DIR, `${simulationData.sceneId}.json`);
+      const sceneRaw = await fs.readFile(parsedPath, 'utf8');
+      const sceneData = JSON.parse(sceneRaw);
+      (sceneData.objects || []).forEach(obj => { sceneObjects[obj.id] = obj; });
+    } catch (_) { /* scene file may not exist */ }
+
+    // ── Aggregate events per object ──
+    const objectMap = new Map();
+    events.forEach(evt => {
+      const id = evt.objectId;
+      if (!id) return;
+      if (!objectMap.has(id)) {
+        objectMap.set(id, {
+          objectId: id,
+          objectName: evt.objectName || id,
+          hits: [],
+          positions: []
+        });
+      }
+      const entry = objectMap.get(id);
+      entry.hits.push(evt.injury || {});
+      if (evt.position) entry.positions.push(evt.position);
+    });
+
+    // ── Build per-object heatmap ──
+    const objectHeatmap = [];
+    for (const [objId, entry] of objectMap) {
+      const scores = entry.hits.map(h => h.injuryScore || 0);
+      const gForces = entry.hits.map(h => h.gForce || 0);
+      const maxScore = Math.max(...scores, 0);
+      const avgScore = scores.length > 0 ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length) : 0;
+      const maxGForce = Math.max(...gForces, 0);
+      const avgGForce = gForces.length > 0 ? Math.round(gForces.reduce((a, b) => a + b, 0) / gForces.length * 10) / 10 : 0;
+
+      // Worst g-force tier
+      const worstGForceTier = maxGForce >= 50 ? 'Serious Injury' : maxGForce >= 20 ? 'Soft Injury' : 'Observe';
+
+      // Body parts hit
+      const bodyParts = {};
+      entry.hits.forEach(h => { if (h.bodyPart) bodyParts[h.bodyPart] = (bodyParts[h.bodyPart] || 0) + 1; });
+      const primaryBodyPart = Object.entries(bodyParts).sort((a, b) => b[1] - a[1])[0]?.[0] || 'unknown';
+
+      // Color: intensity maps 0-100 score → green→yellow→orange→red
+      const intensity = Math.min(1.0, maxScore / 80);
+      const heatColor = scoreToRGB(maxScore);
+
+      // Bounding box from scene
+      const sceneObj = sceneObjects[objId];
+      const boundingBox = sceneObj?.boundingBox || null;
+
+      // Safety recommendations
+      const recommendations = injuryCalculator.generateSafetyRecommendations(
+        entry.objectName, worstGForceTier, primaryBodyPart, maxScore
+      );
+
+      objectHeatmap.push({
+        objectId: objId,
+        objectName: entry.objectName,
+        boundingBox,
+        totalHits: entry.hits.length,
+        collisionPositions: entry.positions,
+        maxInjuryScore: maxScore,
+        avgInjuryScore: avgScore,
+        maxGForce,
+        avgGForce,
+        worstGForceTier,
+        primaryBodyPart,
+        heatColor,
+        intensity,
+        recommendations
+      });
+    }
+
+    // Sort by danger (most dangerous first)
+    objectHeatmap.sort((a, b) => b.maxInjuryScore - a.maxInjuryScore);
 
     res.json({
       success: true,
-      heatmap: heatmapData
+      objectHeatmap,
+      // Also keep raw point heatmap for fallback
+      pointHeatmap: events.map(evt => ({
+        position: evt.position,
+        injuryScore: evt.injury?.injuryScore || 0,
+        gForce: evt.injury?.gForce || 0,
+        riskTier: evt.injury?.riskTier || 'safe',
+        gForceTier: evt.injury?.gForceTier || 'Observe',
+        objectName: evt.objectName
+      }))
     });
 
   } catch (error) {
@@ -265,7 +422,23 @@ export const getSimulationHeatmap = async (req, res) => {
   }
 };
 
-// 🔥 FIX 7: Validate contact point coordinates
+// Score → RGB color (green→yellow→orange→red)
+function scoreToRGB(score) {
+  const t = Math.min(1, Math.max(0, score / 100));
+  let r, g, b;
+  if (t < 0.25) {        // green → yellow-green
+    r = t * 4; g = 1; b = 0;
+  } else if (t < 0.5) {  // yellow-green → yellow
+    r = 1; g = 1; b = 0;
+  } else if (t < 0.75) { // yellow → orange
+    r = 1; g = 1 - (t - 0.5) * 2; b = 0;
+  } else {               // orange → red
+    r = 1; g = Math.max(0, 1 - (t - 0.5) * 2); b = 0;
+  }
+  return [Math.round(r * 255) / 255, Math.round(g * 255) / 255, Math.round(b * 255) / 255];
+}
+
+// 🔥 FIX #13: Unified margin for contact point validation
 function validateContactPoint(point, sceneBounds) {
   if (!point || !Array.isArray(point) || point.length !== 3) {
     return false;
@@ -276,9 +449,8 @@ function validateContactPoint(point, sceneBounds) {
     return false;
   }
 
-  // Check within scene bounds (with margin)
-  // NOTE: increased margin to avoid filtering contacts due to coordinate variance during debugging
-  const margin = 20.0;
+  // Check within scene bounds (with reasonable margin)
+  const margin = 5.0;
   const [x, y, z] = point;
   
   if (x < sceneBounds.min[0] - margin || x > sceneBounds.max[0] + margin) return false;
@@ -288,20 +460,24 @@ function validateContactPoint(point, sceneBounds) {
   return true;
 }
 
-function getRandomSpawnPosition(bbox, floorHeight) {
+// 🔥 FIX #12: Use age-specific height offset for spawn
+function getRandomSpawnPosition(bbox, floorHeight, ageGroup = null) {
+  const heightOffset = ageGroup ? (ageGroup.height / 2 + 0.05) : 0.5;
+
   if (!bbox) {
-    return [0, floorHeight + 0.5, 0];
+    return [0, floorHeight + heightOffset, 0];
   }
 
   const margin = 1.0;
 
   return [
     bbox.min[0] + margin + Math.random() * (bbox.max[0] - bbox.min[0] - 2 * margin),
-    floorHeight + 0.5,
+    floorHeight + heightOffset,
     bbox.min[2] + margin + Math.random() * (bbox.max[2] - bbox.min[2] - 2 * margin)
   ];
 }
 
+// 🔥 FIX #6: Collect bodies first, then remove (avoid mutation during iteration)
 async function cleanupSimulation(world, agents, colliders) {
   console.log('🧹 Starting physics cleanup...');
   
@@ -310,27 +486,41 @@ async function cleanupSimulation(world, agents, colliders) {
     const rigidBodyCount = world.bodies.len();
     console.log(`  📦 Found ${rigidBodyCount} rigid bodies to clean up`);
 
-    // Remove agents
+    // Remove agent colliders
     agents.forEach(agent => {
-      if (agent.collider && world.getCollider(agent.collider.handle)) {
-        world.removeCollider(agent.collider, true);
-      }
+      try {
+        if (agent.collider && world.getCollider(agent.collider.handle)) {
+          world.removeCollider(agent.collider, true);
+        }
+      } catch (e) { /* collider already removed */ }
       agent.cleanup();
     });
-    console.log(`  ✅ Removed ${agents.length} colliders`);
+    console.log(`  ✅ Removed ${agents.length} agent colliders`);
 
     // Remove scene colliders
     colliders.forEach(collider => {
-      if (collider.collider && world.getCollider(collider.collider.handle)) {
-        world.removeCollider(collider.collider, true);
-      }
+      try {
+        if (collider.collider && world.getCollider(collider.collider.handle)) {
+          world.removeCollider(collider.collider, true);
+        }
+      } catch (e) { /* collider already removed */ }
     });
 
-    // Remove all remaining rigid bodies
-    let removedBodies = 0;
+    // 🔥 FIX: Collect body handles first, THEN remove (avoid mutation during iteration)
+    const bodyHandles = [];
     world.forEachRigidBody((body) => {
-      world.removeRigidBody(body);
-      removedBodies++;
+      bodyHandles.push(body.handle);
+    });
+    
+    let removedBodies = 0;
+    bodyHandles.forEach(handle => {
+      try {
+        const body = world.getRigidBody(handle);
+        if (body) {
+          world.removeRigidBody(body);
+          removedBodies++;
+        }
+      } catch (e) { /* body already removed */ }
     });
     console.log(`  ✅ Removed ${removedBodies} rigid bodies`);
 

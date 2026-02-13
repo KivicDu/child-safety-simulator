@@ -45,6 +45,16 @@ class ObjectClassifier {
       if (n.includes('table') || n.includes('desk')) subcategory = 'table';
       else if (n.includes('chair')) { subcategory = 'chair'; dangerScore = 4; properties = {...properties, canClimb: true}; }
       else if (n.includes('shelf') || n.includes('bookcase')) subcategory = 'shelf';
+      else if (n.includes('bed') || n.includes('mattress')) { subcategory = 'bed'; properties = {...properties, canClimb: true}; }
+      else if (n.includes('couch') || n.includes('sofa')) { subcategory = 'couch'; properties = {...properties, canClimb: true}; }
+      else if (n.includes('cabinet') || n.includes('cupboard')) { subcategory = 'cabinet'; properties = {...properties, canPull: true}; }
+      else if (n.includes('drawer')) { subcategory = 'drawer'; properties = {...properties, canPull: true}; }
+      else if (n.includes('window')) { subcategory = 'window'; dangerScore = 7; }
+      else if (n.includes('door')) { subcategory = 'door'; properties = {...properties, canPull: true}; }
+      else if (n.includes('counter')) { subcategory = 'counter'; dangerScore = 5; properties = {...properties, canClimb: true}; }
+      else if (n.includes('appliance') || n.includes('stove') || n.includes('oven') || n.includes('microwave')) { subcategory = 'appliance'; dangerScore = 8; }
+      else if (n.includes('toy')) { category = 'small_object'; subcategory = 'toy'; }
+      else if (n.includes('cord') || n.includes('cable') || n.includes('wire')) { category = 'small_object'; subcategory = 'electrical_cord'; dangerScore = 7; }
     }
 
     return { category, subcategory, dangerScore, properties, dimensions: dims, position, confidence: 0.7 };

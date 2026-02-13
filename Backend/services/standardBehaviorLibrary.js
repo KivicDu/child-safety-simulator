@@ -358,9 +358,9 @@ class StandardBehaviorLibrary {
             fallRisk: 0.25
           },
           sequence: [
-            { action: 'move_chair', duration: 2.0, target: 'counter' },
-            { action: 'climb_chair', duration: 1.5 },
-            { action: 'climb_counter', duration: 2.0 },
+            { action: 'walk_to', duration: 2.0, target: 'counter' },
+            { action: 'climb_on', duration: 1.5 },
+            { action: 'climb_on', duration: 2.0 },
             { action: 'reach_up', duration: 1.0, height: 0.8 }
           ]
         },
@@ -378,10 +378,10 @@ class StandardBehaviorLibrary {
             impactForce: 'high'
           },
           sequence: [
-            { action: 'climb_on', duration: 2.0, target: 'furniture' },
-            { action: 'stand_up', duration: 1.0 },
-            { action: 'jump', duration: 0.5, height: 0.6 },
-            { action: 'land', duration: 0.3, control: 0.6 }
+            { action: 'walk_to', duration: 2.0, target: 'furniture' },
+            { action: 'climb_on', duration: 1.0 },
+            { action: 'walk_random', duration: 0.5 },
+            { action: 'walk_to', duration: 0.3, target: 'furniture' }
           ]
         },
         
@@ -399,16 +399,16 @@ class StandardBehaviorLibrary {
           },
           sequence: [
             { action: 'walk_to', duration: 1.0, target: 'hiding_spot' },
-            { action: 'open', duration: 1.0 },
-            { action: 'climb_in', duration: 2.0 },
-            { action: 'stay_hidden', duration: 120.0 }
+            { action: 'reach_up', duration: 1.0 },
+            { action: 'climb_on', duration: 2.0 },
+            { action: 'walk_random', duration: 5.0 }
           ]
         },
         
         {
           behaviorId: 'preschool_run_obstacle',
           description: 'Run at high speed around furniture',
-          targetTypes: ['open_space', 'hallway'],
+          targetTypes: ['open_space', 'hallway', 'floor'],
           probability: 0.70,
           movementPattern: 'run_fast',
           priority: 6,
@@ -418,8 +418,8 @@ class StandardBehaviorLibrary {
             sharpCornerDanger: true
           },
           sequence: [
-            { action: 'run', duration: 8.0, speed: 1.8 },
-            { action: 'collision', probability: 0.35, target: 'furniture_edge' }
+            { action: 'walk_random', duration: 8.0 },
+            { action: 'walk_to', duration: 2.0, target: 'furniture' }
           ]
         },
         
@@ -435,9 +435,9 @@ class StandardBehaviorLibrary {
             lacerationRisk: 0.40
           },
           sequence: [
-            { action: 'open_drawer', duration: 1.5 },
-            { action: 'grab_tool', duration: 0.5 },
-            { action: 'use_incorrectly', duration: 5.0, injury_probability: 0.4 }
+            { action: 'walk_to', duration: 1.5, target: 'drawer' },
+            { action: 'pull', duration: 0.5 },
+            { action: 'reach_up', duration: 5.0 }
           ]
         }
       ],
@@ -450,9 +450,305 @@ class StandardBehaviorLibrary {
           probability: 0.001,
           severity: 10,
           chain: [
-            { action: 'climb_to_window', duration: 3.0 },
-            { action: 'lean_out', duration: 1.0 },
-            { action: 'fall_out', duration: 0.5, risk: 'fatal' }
+            { action: 'climb_on', target: 'window', duration: 3.0 },
+            { action: 'reach_up', duration: 1.0 },
+            { action: 'walk_to', duration: 0.5, risk: 'fatal' }
+          ]
+        }
+      ]
+    };
+  }
+
+  /**
+   * ========================================================================
+   * SCHOOL-AGE BEHAVIORS (6-10 years)
+   * ========================================================================
+   * Research findings:
+   * - Good motor control, highly active
+   * - Risk-taking behavior for social status
+   * - Competitive play and dares
+   * - Can use tools and appliances
+   * - Beginning to understand consequences but impulsive
+   */
+  getSchoolBehaviors() {
+    return {
+      ageGroup: 'school',
+      ageRange: '6-10 years',
+      characteristics: {
+        mobility: 'running_jumping',
+        reachHeight: 1.0,
+        explorationMode: 'active-play',
+        riskAwareness: 0.5
+      },
+      
+      behaviors: [
+        {
+          behaviorId: 'school_climb_high',
+          description: 'Climb tall shelves or bookshelves',
+          targetTypes: ['shelf', 'bookcase', 'cabinet'],
+          probability: 0.55,
+          movementPattern: 'run_then_climb',
+          priority: 8,
+          parameters: {
+            maxClimbHeight: 2.0,
+            climbSpeed: 0.5,
+            fallRisk: 0.20
+          },
+          sequence: [
+            { action: 'walk_to', duration: 1.5, target: 'furniture' },
+            { action: 'climb_on', duration: 3.0, height: 1.5 },
+            { action: 'reach_up', duration: 1.5, height: 1.0 }
+          ]
+        },
+        
+        {
+          behaviorId: 'school_run_chase',
+          description: 'Run at full speed chasing/being chased',
+          targetTypes: ['floor', 'open_space', 'hallway'],
+          probability: 0.75,
+          movementPattern: 'run_fast',
+          priority: 6,
+          parameters: {
+            speedMultiplier: 2.0,
+            directionChangeInterval: 1.0,
+            collisionRisk: 0.30
+          },
+          sequence: [
+            { action: 'walk_random', duration: 6.0 },
+            { action: 'walk_to', duration: 2.0, target: 'furniture' },
+            { action: 'walk_random', duration: 4.0 }
+          ]
+        },
+        
+        {
+          behaviorId: 'school_jump_furniture',
+          description: 'Jump between furniture pieces',
+          targetTypes: ['bed', 'couch', 'chair', 'table'],
+          probability: 0.50,
+          movementPattern: 'climb_jump_repeat',
+          priority: 7,
+          parameters: {
+            jumpDistance: 1.0,
+            fallRisk: 0.25,
+            impactForce: 'high'
+          },
+          sequence: [
+            { action: 'walk_to', duration: 1.0, target: 'furniture' },
+            { action: 'climb_on', duration: 1.5 },
+            { action: 'walk_to', duration: 0.5, target: 'furniture' },
+            { action: 'climb_on', duration: 1.0 }
+          ]
+        },
+        
+        {
+          behaviorId: 'school_use_appliance',
+          description: 'Attempt to use kitchen appliances unsupervised',
+          targetTypes: ['counter', 'appliance', 'kitchen_drawer'],
+          probability: 0.40,
+          movementPattern: 'walk_direct',
+          priority: 9,
+          parameters: {
+            burnRisk: 0.15,
+            cutRisk: 0.20
+          },
+          sequence: [
+            { action: 'walk_to', duration: 1.5, target: 'appliance' },
+            { action: 'reach_up', duration: 1.0 },
+            { action: 'pull', duration: 3.0 }
+          ]
+        },
+        
+        {
+          behaviorId: 'school_roughhouse',
+          description: 'Rough physical play near furniture',
+          targetTypes: ['floor', 'open_space'],
+          probability: 0.60,
+          movementPattern: 'run_zigzag',
+          priority: 5,
+          parameters: {
+            speedMultiplier: 1.5,
+            pushForce: 30,
+            fallRisk: 0.20
+          },
+          sequence: [
+            { action: 'walk_random', duration: 4.0 },
+            { action: 'walk_to', duration: 1.0, target: 'furniture' },
+            { action: 'walk_random', duration: 3.0 }
+          ]
+        }
+      ],
+      
+      rareEvents: [
+        {
+          eventId: 'school_bookshelf_avalanche',
+          description: 'Climbing bookshelf causes it to tip',
+          triggerConditions: ['tall_furniture', 'unstable_base'],
+          probability: 0.003,
+          severity: 9,
+          chain: [
+            { action: 'climb_on', target: 'bookshelf', duration: 3.0 },
+            { action: 'pull', duration: 0.5, risk: 'crush' },
+            { action: 'walk_to', duration: 0.5 }
+          ]
+        },
+        {
+          eventId: 'school_sports_collision',
+          description: 'Running into sharp furniture edge at high speed',
+          triggerConditions: ['sharp_edge', 'running'],
+          probability: 0.005,
+          severity: 7,
+          chain: [
+            { action: 'walk_random', duration: 5.0 },
+            { action: 'walk_to', duration: 0.3, target: 'furniture' }
+          ]
+        }
+      ]
+    };
+  }
+
+  /**
+   * ========================================================================
+   * PRETEEN BEHAVIORS (10-14 years)
+   * ========================================================================
+   * Research findings:
+   * - Full motor control, high strength
+   * - Risk-taking for peer approval
+   * - Can access all areas and items
+   * - Overconfident in physical abilities
+   * - Sports-related injury patterns
+   */
+  getPreteenBehaviors() {
+    return {
+      ageGroup: 'preteen',
+      ageRange: '10-14 years',
+      characteristics: {
+        mobility: 'full_athletic',
+        reachHeight: 1.2,
+        explorationMode: 'thrill-seeking',
+        riskAwareness: 0.6
+      },
+      
+      behaviors: [
+        {
+          behaviorId: 'preteen_extreme_climb',
+          description: 'Climb to highest accessible points',
+          targetTypes: ['shelf', 'bookcase', 'cabinet', 'counter'],
+          probability: 0.45,
+          movementPattern: 'athletic_climb',
+          priority: 7,
+          parameters: {
+            maxClimbHeight: 3.0,
+            climbSpeed: 0.8,
+            fallRisk: 0.15
+          },
+          sequence: [
+            { action: 'walk_to', duration: 1.0, target: 'furniture' },
+            { action: 'climb_on', duration: 2.0, height: 2.0 },
+            { action: 'reach_up', duration: 1.0, height: 1.2 }
+          ]
+        },
+        
+        {
+          behaviorId: 'preteen_sprint',
+          description: 'Sprint at maximum speed through spaces',
+          targetTypes: ['floor', 'open_space', 'hallway'],
+          probability: 0.70,
+          movementPattern: 'sprint',
+          priority: 5,
+          parameters: {
+            speedMultiplier: 2.5,
+            collisionRisk: 0.20
+          },
+          sequence: [
+            { action: 'walk_random', duration: 8.0 },
+            { action: 'walk_to', duration: 1.5, target: 'furniture' },
+            { action: 'walk_random', duration: 5.0 }
+          ]
+        },
+        
+        {
+          behaviorId: 'preteen_parkour_attempt',
+          description: 'Jump over or between furniture (parkour-style)',
+          targetTypes: ['table', 'chair', 'couch', 'bed'],
+          probability: 0.40,
+          movementPattern: 'jump_vault',
+          priority: 8,
+          parameters: {
+            jumpHeight: 1.0,
+            vaultSpeed: 1.5,
+            fallRisk: 0.20,
+            impactForce: 'very_high'
+          },
+          sequence: [
+            { action: 'walk_to', duration: 1.0, target: 'furniture' },
+            { action: 'climb_on', duration: 0.5 },
+            { action: 'walk_to', duration: 0.3, target: 'furniture' },
+            { action: 'climb_on', duration: 0.5 }
+          ]
+        },
+        
+        {
+          behaviorId: 'preteen_pull_heavy',
+          description: 'Move or rearrange heavy furniture',
+          targetTypes: ['drawer', 'cabinet', 'shelf', 'table'],
+          probability: 0.35,
+          movementPattern: 'walk_direct',
+          priority: 6,
+          parameters: {
+            pullForce: 100,
+            tippingRisk: 0.10,
+            strainRisk: 0.15
+          },
+          sequence: [
+            { action: 'walk_to', duration: 1.0, target: 'furniture' },
+            { action: 'pull', duration: 4.0, force: 100 },
+            { action: 'walk_random', duration: 2.0 }
+          ]
+        },
+        
+        {
+          behaviorId: 'preteen_explore_all',
+          description: 'Systematically explore every area',
+          targetTypes: ['floor', 'door', 'drawer', 'cabinet'],
+          probability: 0.55,
+          movementPattern: 'walk_systematic',
+          priority: 4,
+          parameters: {
+            explorationRate: 1.0,
+            openEverything: true
+          },
+          sequence: [
+            { action: 'walk_to', duration: 2.0, target: 'furniture' },
+            { action: 'pull', duration: 1.0 },
+            { action: 'reach_up', duration: 1.0 },
+            { action: 'walk_random', duration: 3.0 }
+          ]
+        }
+      ],
+      
+      rareEvents: [
+        {
+          eventId: 'preteen_furniture_surf',
+          description: 'Standing on wheeled furniture or unstable surface',
+          triggerConditions: ['wheeled_chair', 'unstable_surface'],
+          probability: 0.004,
+          severity: 8,
+          chain: [
+            { action: 'climb_on', target: 'furniture', duration: 1.0 },
+            { action: 'walk_random', duration: 2.0 },
+            { action: 'walk_to', duration: 0.5 }
+          ]
+        },
+        {
+          eventId: 'preteen_high_fall',
+          description: 'Fall from significant height after climbing',
+          triggerConditions: ['tall_furniture', 'climbing'],
+          probability: 0.002,
+          severity: 9,
+          chain: [
+            { action: 'climb_on', target: 'furniture', duration: 2.0 },
+            { action: 'reach_up', duration: 1.0 },
+            { action: 'walk_to', duration: 0.5 }
           ]
         }
       ]
@@ -552,6 +848,10 @@ class StandardBehaviorLibrary {
         return this.getToddlerBehaviors();
       case 'preschool':
         return this.getPreschoolBehaviors();
+      case 'school':
+        return this.getSchoolBehaviors();
+      case 'preteen':
+        return this.getPreteenBehaviors();
       default:
         return this.getToddlerBehaviors(); // Default to toddler
     }
@@ -572,7 +872,7 @@ class StandardBehaviorLibrary {
         changeDirectionInterval: 3.0
       },
       sequence: [
-        { action: canWalk ? 'walk' : 'crawl', duration: 10.0, target: 'random' }
+        { action: canWalk ? 'walk_random' : 'crawl', duration: 10.0, target: 'random' }
       ]
     };
   }
@@ -581,7 +881,9 @@ class StandardBehaviorLibrary {
     return {
       infant: this.getInfantBehaviors(),
       toddler: this.getToddlerBehaviors(),
-      preschool: this.getPreschoolBehaviors()
+      preschool: this.getPreschoolBehaviors(),
+      school: this.getSchoolBehaviors(),
+      preteen: this.getPreteenBehaviors()
     };
   }
 
@@ -611,7 +913,9 @@ class StandardBehaviorLibrary {
     return {
       infant: this.getInfantBehaviors(),
       toddler: this.getToddlerBehaviors(),
-      preschool: this.getPreschoolBehaviors()
+      preschool: this.getPreschoolBehaviors(),
+      school: this.getSchoolBehaviors(),
+      preteen: this.getPreteenBehaviors()
     };
   }
 }

@@ -23,10 +23,11 @@ const storage = multer.diskStorage({
 const upload = multer({
   storage: storage,
   fileFilter: (req, file, cb) => {
-    if (path.extname(file.originalname).toLowerCase() === '.glb') {
+    const ext = path.extname(file.originalname).toLowerCase();
+    if (ext === '.glb' || ext === '.gltf') {
       cb(null, true);
     } else {
-      cb(new Error('Only GLB files are allowed!'));
+      cb(new Error('Only GLB/GLTF files are allowed!'));
     }
   },
   limits: { 

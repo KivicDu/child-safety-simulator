@@ -2,6 +2,99 @@ import fs from 'fs/promises';
 import path from 'path';
 import { NodeIO } from '@gltf-transform/core';
 
+/* ── MATH HELPERS ───────────────────────────────────────────── */
+const MathUtils = {
+  multiplyMatrices: (a, b) => {
+    const ae = a; const be = b; const te = new Array(16);
+
+    const a11 = ae[ 0 ], a12 = ae[ 4 ], a13 = ae[ 8 ], a14 = ae[ 12 ];
+    const a21 = ae[ 1 ], a22 = ae[ 5 ], a23 = ae[ 9 ], a24 = ae[ 13 ];
+    const a31 = ae[ 2 ], a32 = ae[ 6 ], a33 = ae[ 10 ], a34 = ae[ 14 ];
+    const a41 = ae[ 3 ], a42 = ae[ 7 ], a43 = ae[ 11 ], a44 = ae[ 15 ];
+
+    const b11 = be[ 0 ], b12 = be[ 4 ], b13 = be[ 8 ], b14 = be[ 12 ];
+    const b21 = be[ 1 ], b22 = be[ 5 ], b23 = be[ 9 ], b24 = be[ 13 ];
+    const b31 = be[ 2 ], b32 = be[ 6 ], b33 = be[ 10 ], b34 = be[ 14 ];
+    const b41 = be[ 3 ], b42 = be[ 7 ], b43 = be[ 11 ], b44 = be[ 15 ];
+
+    te[ 0 ] = a11 * b11 + a12 * b21 + a13 * b31 + a14 * b41;
+    te[ 4 ] = a11 * b12 + a12 * b22 + a13 * b32 + a14 * b42;
+    te[ 8 ] = a11 * b13 + a12 * b23 + a13 * b33 + a14 * b43;
+    te[ 12 ] = a11 * b14 + a12 * b24 + a13 * b34 + a14 * b44;
+
+    te[ 1 ] = a21 * b11 + a22 * b21 + a23 * b31 + a24 * b41;
+    te[ 5 ] = a21 * b12 + a22 * b22 + a23 * b32 + a24 * b42;
+    te[ 9 ] = a21 * b13 + a22 * b23 + a23 * b33 + a24 * b43;
+    te[ 13 ] = a21 * b14 + a22 * b24 + a23 * b34 + a24 * b44;
+
+    te[ 2 ] = a31 * b11 + a32 * b21 + a33 * b31 + a34 * b41;
+    te[ 6 ] = a31 * b12 + a32 * b22 + a33 * b32 + a34 * b42;
+    te[ 10 ] = a31 * b13 + a32 * b23 + a33 * b33 + a34 * b43;
+    te[ 14 ] = a31 * b14 + a32 * b24 + a33 * b34 + a34 * b44;
+
+    te[ 3 ] = a41 * b11 + a42 * b21 + a43 * b31 + a44 * b41;
+    te[ 7 ] = a41 * b12 + a42 * b22 + a43 * b32 + a44 * b42;
+    te[ 11 ] = a41 * b13 + a42 * b23 + a43 * b33 + a44 * b43;
+    te[ 15 ] = a41 * b14 + a42 * b24 + a43 * b34 + a44 * b44;
+
+    return te;
+  },
+
+  composeMatrix: (position, quaternion, scale) => {
+    const te = new Array(16);
+    const x = quaternion[0], y = quaternion[1], z = quaternion[2], w = quaternion[3];
+    const x2 = x + x, y2 = y + y, z2 = z + z;
+    const xx = x * x2, xy = x * y2, xz = x * z2;
+    const yy = y * y2, yz = y * z2, zz = z * z2;
+    const wx = w * x2, wy = w * y2, wz = w * z2;
+
+    const sx = scale[0], sy = scale[1], sz = scale[2];
+
+    te[ 0 ] = ( 1 - ( yy + zz ) ) * sx;
+    te[ 1 ] = ( xy + wz ) * sx;
+    te[ 2 ] = ( xz - wy ) * sx;
+    te[ 3 ] = 0;
+
+    te[ 4 ] = ( xy - wz ) * sy;
+    te[ 5 ] = ( 1 - ( xx + zz ) ) * sy;
+    te[ 6 ] = ( yz + wx ) * sy;
+    te[ 7 ] = 0;
+
+    te[ 8 ] = ( xz + wy ) * sz;
+    te[ 9 ] = ( yz - wx ) * sz;
+    te[ 10 ] = ( 1 - ( xx + yy ) ) * sz;
+    te[ 11 ] = 0;
+
+    te[ 12 ] = position[0];
+    te[ 13 ] = position[1];
+    te[ 14 ] = position[2];
+    te[ 15 ] = 1;
+
+    return te;
+  },
+
+  identityMatrix: () => {
+    return [
+      1, 0, 0, 0,
+      0, 1, 0, 0,
+      0, 0, 1, 0,
+      0, 0, 0, 1
+    ];
+  },
+
+  applyMatrixToPoint: (matrix, point) => {
+    const x = point[0], y = point[1], z = point[2];
+    const e = matrix;
+    const w = 1 / ( e[ 3 ] * x + e[ 7 ] * y + e[ 11 ] * z + e[ 15 ] );
+
+    return [
+      ( e[ 0 ] * x + e[ 4 ] * y + e[ 8 ] * z + e[ 12 ] ) * w,
+      ( e[ 1 ] * x + e[ 5 ] * y + e[ 9 ] * z + e[ 13 ] ) * w,
+      ( e[ 2 ] * x + e[ 6 ] * y + e[ 10 ] * z + e[ 14 ] ) * w
+    ];
+  }
+};
+
 class GLBParser {
   
   async parse(glbPath) {
@@ -32,25 +125,35 @@ class GLBParser {
       let globalMin = [Infinity, Infinity, Infinity];
       let globalMax = [-Infinity, -Infinity, -Infinity];
 
-      // ✅ TRAVERSE ĐỆ QUY TÌM TẤT CẢ MESH
-      const traverseNode = (node, parentTransform = null) => {
+      // ✅ TRAVERSE RECURSIVELY WITH MATRIX MATH checks
+      const traverseNode = (node, parentMatrix = MathUtils.identityMatrix()) => {
         const mesh = node.getMesh();
         
+        // 1. Get local transform matrix
+        const t = node.getTranslation();
+        const r = node.getRotation(); // quaternion [x,y,z,w]
+        const s = node.getScale();
+        const localMatrix = MathUtils.composeMatrix(t, r, s);
+        
+        // 2. Combine with parent matrix -> World Matrix
+        const worldMatrix = MathUtils.multiplyMatrices(parentMatrix, localMatrix);
+        
         if (mesh) {
-          const bbox = this.calculateBoundingBox(mesh);
-          const transform = this.getNodeTransform(node);
+          // 3. Get local AABB
+          const localBbox = this.calculateBoundingBox(mesh);
           
-          // Combine with parent transform if exists
-          const worldTransform = parentTransform 
-            ? this.combineTransforms(parentTransform, transform)
-            : transform;
-          
-          const worldBbox = this.transformBoundingBox(bbox, worldTransform);
+          // 4. Transform AABB to World Space (using 8 corners)
+          const worldBbox = this.transformBoundingBox(localBbox, worldMatrix);
           
           objects.push({
             id: `obj_${objects.length}`,
             name: node.getName() || `Object_${objects.length}`,
-            transform: worldTransform,
+            // Decompose position from world matrix for simple reference
+            transform: {
+              position: [worldMatrix[12], worldMatrix[13], worldMatrix[14]],
+              // Rotation/Scale extraction is complex, storing matrix might be better 
+              // but for now let's keep it simple
+            },
             boundingBox: worldBbox,
             primitiveCount: mesh.listPrimitives().length
           });
@@ -71,11 +174,7 @@ class GLBParser {
         // Traverse children
         const children = node.listChildren();
         for (const child of children) {
-          const currentTransform = this.getNodeTransform(node);
-          const combinedTransform = parentTransform 
-            ? this.combineTransforms(parentTransform, currentTransform)
-            : currentTransform;
-          traverseNode(child, combinedTransform);
+          traverseNode(child, worldMatrix);
         }
       };
 
@@ -123,23 +222,6 @@ class GLBParser {
     }
   }
 
-  // Thêm hàm combine transforms
-  combineTransforms(parent, child) {
-    return {
-      position: [
-        parent.position[0] + child.position[0],
-        parent.position[1] + child.position[1],
-        parent.position[2] + child.position[2]
-      ],
-      rotation: child.rotation, // Simplified - should multiply quaternions
-      scale: [
-        parent.scale[0] * child.scale[0],
-        parent.scale[1] * child.scale[1],
-        parent.scale[2] * child.scale[2]
-      ]
-    };
-  }
-
   calculateBoundingBox(mesh) {
     let min = [Infinity, Infinity, Infinity];
     let max = [-Infinity, -Infinity, -Infinity];
@@ -163,35 +245,44 @@ class GLBParser {
       }
     }
 
+    // Default to unit box if no geometry found (rare)
+    if (min[0] === Infinity) return { min: [-0.5,-0.5,-0.5], max: [0.5,0.5,0.5] };
+
     return { min, max };
   }
 
-  getNodeTransform(node) {
-    const translation = node.getTranslation();
-    const rotation = node.getRotation();
-    const scale = node.getScale();
-
-    return {
-      position: Array.from(translation),
-      rotation: Array.from(rotation),
-      scale: Array.from(scale)
-    };
-  }
-
-  transformBoundingBox(bbox, transform) {
-    const min = [
-      bbox.min[0] * transform.scale[0] + transform.position[0],
-      bbox.min[1] * transform.scale[1] + transform.position[1],
-      bbox.min[2] * transform.scale[2] + transform.position[2]
-    ];
-    
-    const max = [
-      bbox.max[0] * transform.scale[0] + transform.position[0],
-      bbox.max[1] * transform.scale[1] + transform.position[1],
-      bbox.max[2] * transform.scale[2] + transform.position[2]
+  transformBoundingBox(bbox, matrix) {
+    // 1. Create 8 corners
+    const { min, max } = bbox;
+    const corners = [
+      [min[0], min[1], min[2]],
+      [min[0], min[1], max[2]],
+      [min[0], max[1], min[2]],
+      [min[0], max[1], max[2]],
+      [max[0], min[1], min[2]],
+      [max[0], min[1], max[2]],
+      [max[0], max[1], min[2]],
+      [max[0], max[1], max[2]]
     ];
 
-    return { min, max };
+    // 2. Transform corners
+    const transformedCorners = corners.map(p => MathUtils.applyMatrixToPoint(matrix, p));
+
+    // 3. Find new min/max
+    let newMin = [Infinity, Infinity, Infinity];
+    let newMax = [-Infinity, -Infinity, -Infinity];
+
+    transformedCorners.forEach(p => {
+      newMin[0] = Math.min(newMin[0], p[0]);
+      newMin[1] = Math.min(newMin[1], p[1]);
+      newMin[2] = Math.min(newMin[2], p[2]);
+      
+      newMax[0] = Math.max(newMax[0], p[0]);
+      newMax[1] = Math.max(newMax[1], p[1]);
+      newMax[2] = Math.max(newMax[2], p[2]);
+    });
+
+    return { min: newMin, max: newMax };
   }
 
   detectFloor(objects, sceneBbox) {
@@ -209,22 +300,32 @@ class GLBParser {
       const depth = bbox.max[2] - bbox.min[2];
       const area = width * depth;
 
-      // 🏛️ Tiêu chí tìm sàn:
-      // 1. Phải mỏng (height < 0.5)
-      // 2. Phải lớn (area > 1.0)
-      // 3. Phải ở vị trí thấp nhất (yMin nhỏ nhất)
-      // 4. Ưu tiên object có area lớn nhất nếu cùng yMin
+      // 🏛️ Improved Logic:
+      // 1. Must be large (area > 2.0 to ignore small rugs/items)
+      // 2. Height constraint relaxed (allow up to 2.0m thick floors, or even more if very low)
+      // 3. Score heavily favors LOWEST yMin.
       
-      if (height < 0.5 && area > 1.0) {
-        // Score: yMin thấp nhất (âm lớn = thấp) + area lớn nhất
-        const score = -yMin * 100 + area;
-        
+      const isFlat = height < 0.5;
+      const isLarge = area > 2.0;
+
+      // Check if it's a potential floor component
+      if (isLarge) {
+        // Score calculation:
+        // - Favor lowest yMin (primary factor)
+        // - Favor larger area (secondary)
+        // - Favor flatness (tie-breaker)
+        let score = -yMin * 1000 + area;
+        if (isFlat) score += 500; // Bonus for being a proper thin floor tile
+
+        // Penalty for excessive height (unless it's the absolute base of the scene)
+        if (height > 1.0) score -= height * 10;
+
         if (score > bestScore) {
           bestScore = score;
           floorCandidate = {
             objectId: obj.id,
             objectName: obj.name,
-            height: yMin, // Sử dụng yMin (đáy của sàn)
+            height: yMin, // Always use the bottom-most coordinate
             topHeight: yMax,
             area: area,
             width: width,
