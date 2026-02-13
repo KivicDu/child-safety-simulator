@@ -16,7 +16,7 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 
-// Security headers – relax CSP so Three.js GLTFLoader can use blob:/data: URIs
+// Security: Relax CSP to allow Three.js GLTFLoader to process blob:/data: URIs for 3D models
 app.use(
   helmet({
     contentSecurityPolicy: false,
@@ -27,7 +27,7 @@ app.use(
 // Logging
 app.use(morgan(process.env.NODE_ENV === "production" ? "combined" : "dev"));
 
-// CORS - allow local dev origins and configured frontends
+// CORS: Allow specific origins (dev localhost and production domains) for frontend-backend communication
 const allowedOrigins = (
   process.env.ALLOWED_ORIGINS || "http://localhost:5173,http://localhost:3000"
 )
@@ -45,7 +45,7 @@ app.use(
   }),
 );
 
-// Rate limiter (basic)
+// Rate Limiting: Prevent abuse by limiting repeated requests (default 200 per 15min)
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: parseInt(process.env.RATE_LIMIT_MAX || "200", 10),
@@ -68,7 +68,7 @@ app.get("/api/health", (req, res) => {
   res.json({ status: "ok", timestamp: new Date().toISOString() });
 });
 
-// Serve frontend build (production) or fallback to backend public
+// Deployment: Serve React frontend static files in production, fallback error handling otherwise
 const frontendDist = path.join(__dirname, "../Frontend/dist");
 const backendPublic = path.join(__dirname, "public");
 

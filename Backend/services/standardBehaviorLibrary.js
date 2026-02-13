@@ -1,14 +1,8 @@
 /**
- * ============================================================================
- * STANDARD BEHAVIOR LIBRARY
- * Research-based behavior templates for child safety simulation
- * ============================================================================
+ * Standard Behavior Library
  * 
- * Data sources:
- * - CDC Child Development Research (2023)
- * - CPSC Injury Pattern Studies
- * - Developmental Psychology Literature
- * - Pediatric Emergency Medicine Data
+ * Provides research-based behavior templates for different age groups (Infant to Preteen).
+ * Behavior definitions derived from CDC developmental milestones and injury statistics.
  * 
  * @version 1.0.0
  */
@@ -35,14 +29,8 @@ class StandardBehaviorLibrary {
   }
 
   /**
-   * ========================================================================
-   * INFANT BEHAVIORS (0-12 months)
-   * ========================================================================
-   * Research findings:
-   * - Limited mobility (crawling primary mode)
-   * - High curiosity for colorful/shiny objects
-   * - Mouth exploration (choking hazard focus)
-   * - Cannot climb or reach high objects
+   * Returns behaviors for Infants (0-12m).
+   * Focused on limited mobility (crawling), mouth-first exploration, and high choking risks.
    */
   getInfantBehaviors() {
     return {
@@ -151,15 +139,8 @@ class StandardBehaviorLibrary {
   }
 
   /**
-   * ========================================================================
-   * TODDLER BEHAVIORS (1-3 years)
-   * ========================================================================
-   * Research findings:
-   * - Newly walking (unstable gait)
-   * - Maximum curiosity phase
-   * - Can climb low furniture
-   * - Limited understanding of danger
-   * - Impulsive behavior
+   * Returns behaviors for Toddlers (1-3y).
+   * Characterized by unstable walking, high impulsivity, and climbing capability.
    */
   getToddlerBehaviors() {
     return {
@@ -322,15 +303,8 @@ class StandardBehaviorLibrary {
   }
 
   /**
-   * ========================================================================
-   * PRESCHOOL BEHAVIORS (3-5 years)
-   * ========================================================================
-   * Research findings:
-   * - Better motor control but overconfident
-   * - Imaginative play scenarios
-   * - Can open complex latches
-   * - Understands "no" but tests boundaries
-   * - Climbs higher surfaces
+   * Returns behaviors for Preschoolers (3-5y).
+   * Focused on imaginative play, testing boundaries, and improved climbing/motor skills.
    */
   getPreschoolBehaviors() {
     return {
@@ -460,15 +434,8 @@ class StandardBehaviorLibrary {
   }
 
   /**
-   * ========================================================================
-   * SCHOOL-AGE BEHAVIORS (6-10 years)
-   * ========================================================================
-   * Research findings:
-   * - Good motor control, highly active
-   * - Risk-taking behavior for social status
-   * - Competitive play and dares
-   * - Can use tools and appliances
-   * - Beginning to understand consequences but impulsive
+   * Returns behaviors for School-age children (6-10y).
+   * Characterized by high activity, competitive play, and risk-taking for social status.
    */
   getSchoolBehaviors() {
     return {
@@ -607,15 +574,8 @@ class StandardBehaviorLibrary {
   }
 
   /**
-   * ========================================================================
-   * PRETEEN BEHAVIORS (10-14 years)
-   * ========================================================================
-   * Research findings:
-   * - Full motor control, high strength
-   * - Risk-taking for peer approval
-   * - Can access all areas and items
-   * - Overconfident in physical abilities
-   * - Sports-related injury patterns
+   * Returns behaviors for Preteens (10-14y).
+   * Focused on thrill-seeking, full athletic ability, and high-impact sports scenarios.
    */
   getPreteenBehaviors() {
     return {
