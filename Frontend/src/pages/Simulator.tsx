@@ -321,7 +321,7 @@ const Simulator = () => {
 
   return (
     <div className="min-h-screen bg-pink-50 text-gray-700 font-sans selection:bg-pink-200 selection:text-pink-900">
-      {/* HEADER */}
+      {/* --- Global Navigation --- */}
       <nav className="fixed top-0 left-0 right-0 z-50 p-6 flex justify-between items-center bg-white/80 backdrop-blur">
         <div className="flex items-center gap-2">
           <div className="w-10 h-10 bg-gradient-to-br from-pink-400 to-rose-500 rounded-xl flex items-center justify-center text-white text-xl shadow-lg">
@@ -359,7 +359,7 @@ const Simulator = () => {
         </div>
       </nav>
 
-      {/* HERO SECTION */}
+      {/* --- Hero Section --- */}
       <section className="h-screen flex items-center justify-center px-6 pt-20">
         <div className="glass-panel p-14 text-center max-w-4xl backdrop-blur-xl bg-white/60">
           <h1 className="text-6xl font-black bg-gradient-to-r from-pink-500 to-purple-500 bg-clip-text text-transparent mb-6">
@@ -387,7 +387,7 @@ const Simulator = () => {
         </div>
       </section>
 
-      {/* MAIN AREA */}
+      {/* --- Main Simulator Interface --- */}
       <section id="simulator" className="min-h-screen py-20 px-8 bg-white/40 backdrop-blur-md">
         <div className="max-w-7xl mx-auto">
           <h2 className="text-4xl font-black text-slate-700 mb-10">Simulator Controls</h2>
@@ -470,7 +470,7 @@ const Simulator = () => {
             </div>
           </div>
 
-          {/* Progress Bar */}
+          {/* --- Progress Indicator --- */}
           {running && simResult && (
             <div className="mb-8 p-6 bg-white/60 rounded-2xl shadow-lg backdrop-blur">
               <div className="flex justify-between items-center mb-2">
@@ -486,7 +486,7 @@ const Simulator = () => {
             </div>
           )}
 
-          {/* 3D Canvas Area */}
+          {/* --- 3D Visualization --- */}
           <div className="h-[500px] rounded-3xl border-4 border-gray-800 relative overflow-hidden shadow-2xl mb-8">
             <Canvas3D
               modelPath={modelPath}
@@ -499,7 +499,7 @@ const Simulator = () => {
             />
           </div>
 
-          {/* Results Section */}
+          {/* --- Simulation Results --- */}
           {simResult && (
             <div className="space-y-6">
               {/* Summary Stats */}
@@ -752,7 +752,7 @@ const Simulator = () => {
         </div>
       </section>
 
-      {/* FOOTER */}
+      {/* --- Footer --- */}
       <footer className="bg-white/60 backdrop-blur-md border-t border-pink-100 py-12 mt-20">
         <div className="max-w-7xl mx-auto px-8 text-center">
           <p className="font-black text-slate-600">HUTECH University - AI Innovation Contest 2026</p>

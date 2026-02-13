@@ -68,7 +68,7 @@ export const startSimulation = async (req, res) => {
           agents.push(agent);
         }
 
-        // 🔥 FIX #1: Generate and distribute behaviors (was completely missing!)
+        // Initialize and distribute agent behaviors based on scene data
         const { behaviors, rareEvents } = await behaviorManager.generateBehaviorsForScene(
           sceneData,
           ageGroupId
@@ -90,12 +90,12 @@ export const startSimulation = async (req, res) => {
         const totalSteps = duration * 60;
 
         for (let step = 0; step < totalSteps; step++) {
-          // 🔥 FIX: Update agents FIRST so velocity is current-frame
+          // Update agent velocity and state before physics step
           agents.forEach(agent => agent.update(deltaTime, colliders, agents, sceneData.boundingBox));
 
           physicsEngine.step(world, deltaTime, eventQueue);
 
-          // 🔥 FIX: Skip first 30 steps (0.5s warmup) to avoid spawn-overlap false collisions
+          // Warmup phase: allow physics to stabilize before recording interactions
           if (step < 30) {
             eventQueue.drainCollisionEvents(() => {}); // drain but discard
             continue;
@@ -121,10 +121,10 @@ export const startSimulation = async (req, res) => {
             const { position: contactPoint, normal: contactNormal } = contactPointData;
             if (!validateContactPoint(contactPoint, sceneData.boundingBox)) { dbg_outOfBounds++; traceLog.push(`OOB pt=${JSON.stringify(contactPoint)}`); return; }
 
-            // 🔥 FIX: Use agent's computed velocity (kinematic bodies don't have linvel)
+            // Calculate impact velocity magnitude
             let agentVelMagnitude = agent.getVelocity();
 
-            // 🔥 FIX: Apply collision angle factor — head-on = full speed, glancing = reduced
+            // Apply impact angle attenuation (glancing blows reduce force)
             if (contactNormal && agentVelMagnitude > 0) {
               // Compute dot product of velocity direction and contact normal
               const velMag = agentVelMagnitude;
@@ -136,11 +136,11 @@ export const startSimulation = async (req, res) => {
               agentVelMagnitude *= angleFactor;
             }
 
-            // 🔥 FIX: Also scale by agent state — interactions can be rougher
+            // Adjust for agent interaction state (e.g., higher force during active play)
             const stateMultiplier = agent.state === 'INTERACTING' ? (1.2 + Math.random() * 1.3) : 1.0;
             agentVelMagnitude *= stateMultiplier;
 
-            // 🔥 FIX: Filter out very low-velocity contacts (static overlaps)
+            // Filter insignificant contacts
             if (agentVelMagnitude < 0.05) {
               traceLog.push(`LOW_VEL agent=${agent.id} vel=${agentVelMagnitude.toFixed(4)}`);
               return;
@@ -438,7 +438,7 @@ function scoreToRGB(score) {
   return [Math.round(r * 255) / 255, Math.round(g * 255) / 255, Math.round(b * 255) / 255];
 }
 
-// 🔥 FIX #13: Unified margin for contact point validation
+// Validate contact point coordinates against scene bounds
 function validateContactPoint(point, sceneBounds) {
   if (!point || !Array.isArray(point) || point.length !== 3) {
     return false;
@@ -460,7 +460,7 @@ function validateContactPoint(point, sceneBounds) {
   return true;
 }
 
-// 🔥 FIX #12: Use age-specific height offset for spawn
+// Calculate spawn position with age-specific height offset
 function getRandomSpawnPosition(bbox, floorHeight, ageGroup = null) {
   const heightOffset = ageGroup ? (ageGroup.height / 2 + 0.05) : 0.5;
 
@@ -477,7 +477,7 @@ function getRandomSpawnPosition(bbox, floorHeight, ageGroup = null) {
   ];
 }
 
-// 🔥 FIX #6: Collect bodies first, then remove (avoid mutation during iteration)
+// Cleanup physics entities and resources
 async function cleanupSimulation(world, agents, colliders) {
   console.log('🧹 Starting physics cleanup...');
   
@@ -506,7 +506,7 @@ async function cleanupSimulation(world, agents, colliders) {
       } catch (e) { /* collider already removed */ }
     });
 
-    // 🔥 FIX: Collect body handles first, THEN remove (avoid mutation during iteration)
+    // Collect body handles before removal to avoid mutation issues during iteration
     const bodyHandles = [];
     world.forEachRigidBody((body) => {
       bodyHandles.push(body.handle);

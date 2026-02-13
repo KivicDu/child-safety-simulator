@@ -1,15 +1,8 @@
 /**
- * ============================================================================
- * AGE GROUP CONFIGURATION
- * Research-based parameters from NIH, NHTSA, CDC, CPSC studies
- * ============================================================================
- *
- * Velocity data sources:
- * - NIH PMC8891035 (infant crawling velocity)
- * - CDC Developmental Milestones (walking onset ages)
- * - ReseachGate gait analysis (walking/running speeds by age)
- * - NHTSA FMVSS 208 (HIC thresholds, scaled pediatric)
- * - IRCOBI scaled pediatric HIC data
+ * Age Group Configuration
+ * 
+ * Defines physical attributes, movement capabilities, and injury thresholds for different age groups.
+ * Data derived from NIH, NHTSA, CDC, and IRCOBI pediatric studies.
  */
 
 const ageGroups = {

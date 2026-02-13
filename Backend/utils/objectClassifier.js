@@ -1,3 +1,9 @@
+/**
+ * Object Classifier Utility
+ * 
+ * rules-based system to categorize 3D objects based on dimensions, 
+ * position, and metadata to assess safety risks.
+ */
 class ObjectClassifier {
   constructor() {
     this.FLOOR_MAX_HEIGHT = 0.5; this.FLOOR_MIN_AREA = 1.0;
