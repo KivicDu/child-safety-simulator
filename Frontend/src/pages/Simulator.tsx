@@ -3,11 +3,49 @@ import { useNavigate } from 'react-router-dom';
 import Canvas3D from '../components/Canvas3D';
 
 interface CollisionEvent {
-  timestamp: number;
-  objects: string[];
-  position: { x: number; y: number; z: number };
-  severity: string;
-  type: string;
+  time: number;
+  agentId: number;
+  objectId: string;
+  objectName: string;
+  position: number[];
+  normal?: number[];
+  velocity: number;
+  impactSpeed: number;
+  injury?: {
+    injuryScore: number;
+    riskTier: string;
+    riskColor: string;
+    bodyPart: string;
+    gForce?: number;
+    gForceTier?: string;
+    gForceColor?: string;
+    gForceAction?: string;
+    gForceIcon?: string;
+    components?: any;
+    metadata?: any;
+  };
+}
+
+interface HeatmapObject {
+  objectId: string;
+  objectName: string;
+  boundingBox?: { min: number[]; max: number[] };
+  totalHits: number;
+  collisionPositions: number[][];
+  maxInjuryScore: number;
+  avgInjuryScore: number;
+  maxGForce: number;
+  avgGForce: number;
+  worstGForceTier: string;
+  primaryBodyPart: string;
+  heatColor: number[];
+  intensity: number;
+  recommendations: {
+    product: string;
+    reason: string;
+    searchUrl: string;
+    priority: string;
+  }[];
 }
 
 interface SimulationResult {
@@ -27,6 +65,8 @@ const Simulator = () => {
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
   const [fileName, setFileName] = useState<string>('');
   const [modelPath, setModelPath] = useState<string>('');
+  const [sceneData, setSceneData] = useState<any>(null);
+  const [simulationPlayback, setSimulationPlayback] = useState<any>(null);
   const [ageGroup, setAgeGroup] = useState<string>('Toddler (1-3y)');
   const [agentCount, setAgentCount] = useState<number>(10);
   const [duration, setDuration] = useState<number>(10);
@@ -34,6 +74,9 @@ const Simulator = () => {
   const [simResult, setSimResult] = useState<SimulationResult | null>(null);
   const [error, setError] = useState<string>('');
   const [pollInterval, setPollInterval] = useState<ReturnType<typeof setInterval> | null>(null);
+  const [heatmapData, setHeatmapData] = useState<HeatmapObject[] | null>(null);
+  const [showHeatmap, setShowHeatmap] = useState<boolean>(false);
+  const [liveAgentPositions, setLiveAgentPositions] = useState<{agentId: number; position: number[]}[] | null>(null);
   const token = localStorage.getItem('token');
 
   // Load user on mount
@@ -92,8 +135,9 @@ const Simulator = () => {
       }
 
       const data = await response.json();
-      const sceneId = data.sceneId;  // Changed from filePath to sceneId
-      setModelPath(data.filePath);  // But keep filePath for 3D preview
+      const sceneId = data.sceneId;
+      setModelPath(data.filePath);   // For 3D preview
+      setSceneData(data.scene || null);  // For bounding box visualization
       return sceneId;
     } catch (err) {
       setError('Failed to upload file: ' + (err instanceof Error ? err.message : 'Unknown error'));
@@ -147,7 +191,7 @@ const Simulator = () => {
       }
 
       const data = await response.json();
-      const simId = data.simulationId;
+      const simId = data.simulationId || data.id;
 
       // Start polling
       pollSimulation(simId);
@@ -181,7 +225,9 @@ const Simulator = () => {
 
         let events: CollisionEvent[] = [];
         if (eventsResponse.ok) {
-          events = await eventsResponse.json();
+          const eventsData = await eventsResponse.json();
+          // Backend returns { success, events: [...] } — extract the array
+          events = Array.isArray(eventsData) ? eventsData : (eventsData.events || []);
         }
 
         setSimResult({
@@ -193,11 +239,46 @@ const Simulator = () => {
           timestamp: Date.now(),
         });
 
+        // Update live agent positions during simulation
+        if (status.agentPositions) {
+          setLiveAgentPositions(status.agentPositions);
+        }
+
         // Stop polling when complete
         if (status.status === 'complete' || status.progress >= 100) {
           clearInterval(newPollInterval);
           setRunning(false);
           setPollInterval(null);
+          setLiveAgentPositions(null); // Clear live agents — simulation done
+
+          // Fetch full simulation data for agent playback
+          try {
+            const simResponse = await fetch(`/api/simulate/${simId}/status`, {
+              headers: { 'Authorization': `Bearer ${token}` },
+            });
+            if (simResponse.ok) {
+              const simData = await simResponse.json();
+              setSimulationPlayback(simData);
+            }
+          } catch (e) {
+            console.warn('Could not load playback data', e);
+          }
+
+          // Fetch heatmap data
+          try {
+            const heatmapResponse = await fetch(`/api/simulate/${simId}/heatmap`, {
+              headers: { 'Authorization': `Bearer ${token}` },
+            });
+            if (heatmapResponse.ok) {
+              const heatData = await heatmapResponse.json();
+              if (heatData.success && heatData.objectHeatmap) {
+                setHeatmapData(heatData.objectHeatmap);
+                setShowHeatmap(true); // Auto-show heatmap when data arrives
+              }
+            }
+          } catch (e) {
+            console.warn('Could not load heatmap data', e);
+          }
         }
       } catch (err) {
         console.error('Poll error:', err);
@@ -213,19 +294,20 @@ const Simulator = () => {
     if (!simResult) return;
 
     try {
-      const headers = ['Timestamp', 'Objects', 'Position', 'Severity', 'Type'];
+      const headers = ['Time (s)', 'Agent', 'Object', 'Position', 'Impact Speed', 'Body Part', 'Injury Score', 'Risk'];
       const rows = simResult.events.map((evt) => [
-        new Date(evt.timestamp).toLocaleString(),
-        evt.objects.join(', '),
-        `(${evt.position.x.toFixed(2)}, ${evt.position.y.toFixed(2)}, ${evt.position.z.toFixed(2)})`,
-        evt.severity,
-        evt.type,
+        (evt.time ?? 0).toFixed(2),
+        `Agent ${evt.agentId}`,
+        evt.objectName || evt.objectId || 'Unknown',
+        evt.position ? `(${evt.position[0]?.toFixed(2)}, ${evt.position[1]?.toFixed(2)}, ${evt.position[2]?.toFixed(2)})` : '(0,0,0)',
+        (evt.impactSpeed ?? 0).toFixed(2),
+        evt.injury?.bodyPart || 'unknown',
+        evt.injury?.injuryScore ?? 0,
+        evt.injury?.riskTier || 'safe',
       ]);
 
-      // Create CSV string
       const csv = [headers, ...rows].map((row: any) => row.map((cell: any) => `"${cell}"`).join(',')).join('\n');
 
-      // Download
       const blob = new Blob([csv], { type: 'text/csv' });
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -405,8 +487,16 @@ const Simulator = () => {
           )}
 
           {/* 3D Canvas Area */}
-          <div className="h-[400px] bg-white/60 rounded-3xl border-4 border-white relative overflow-hidden shadow-inner mb-8">
-            <Canvas3D modelPath={modelPath} fileName={fileName} />
+          <div className="h-[500px] rounded-3xl border-4 border-gray-800 relative overflow-hidden shadow-2xl mb-8">
+            <Canvas3D
+              modelPath={modelPath}
+              fileName={fileName}
+              sceneData={sceneData}
+              simulationPlayback={simulationPlayback}
+              heatmapData={heatmapData}
+              showHeatmap={showHeatmap}
+              liveAgentPositions={liveAgentPositions}
+            />
           </div>
 
           {/* Results Section */}
@@ -449,31 +539,56 @@ const Simulator = () => {
                       <thead>
                         <tr className="border-b-2 border-pink-200">
                           <th className="text-left py-2 px-4 font-black text-gray-700">Time</th>
-                          <th className="text-left py-2 px-4 font-black text-gray-700">Objects</th>
+                          <th className="text-left py-2 px-4 font-black text-gray-700">Agent → Object</th>
                           <th className="text-left py-2 px-4 font-black text-gray-700">Position</th>
-                          <th className="text-left py-2 px-4 font-black text-gray-700">Severity</th>
-                          <th className="text-left py-2 px-4 font-black text-gray-700">Type</th>
+                          <th className="text-left py-2 px-4 font-black text-gray-700">Impact</th>
+                          <th className="text-left py-2 px-4 font-black text-gray-700">Risk</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {simResult.events.slice(0, 20).map((evt, idx) => (
+                        {simResult.events.slice(0, 20).map((evt, idx) => {
+                          const riskTierRaw = evt.injury?.riskTier || 'safe';
+                          const riskTier = riskTierRaw.toLowerCase();
+                          const gForceTier = evt.injury?.gForceTier || 'Observe';
+                          const riskColor = riskTier === 'critical'
+                            ? 'bg-red-200 text-red-800 border border-red-300'
+                            : riskTier === 'dangerous'
+                            ? 'bg-orange-200 text-orange-800 border border-orange-300'
+                            : riskTier === 'warning'
+                            ? 'bg-yellow-200 text-yellow-800 border border-yellow-300'
+                            : riskTier === 'watch'
+                            ? 'bg-amber-100 text-amber-700 border border-amber-200'
+                            : 'bg-green-200 text-green-700 border border-green-300';
+                          const gForceIcon = gForceTier === 'Serious Injury' ? '🚨' : gForceTier === 'Soft Injury' ? '⚠️' : '👀';
+                          const gForceColor = gForceTier === 'Serious Injury'
+                            ? 'text-red-600'
+                            : gForceTier === 'Soft Injury'
+                            ? 'text-orange-600'
+                            : 'text-green-600';
+                          return (
                           <tr key={idx} className="border-b border-pink-100 hover:bg-pink-50">
-                            <td className="py-3 px-4">{new Date(evt.timestamp).toLocaleTimeString()}</td>
-                            <td className="py-3 px-4 font-bold">{evt.objects.join(' + ')}</td>
+                            <td className="py-3 px-4">{(evt.time ?? 0).toFixed(2)}s</td>
+                            <td className="py-3 px-4 font-bold">Agent {evt.agentId} → {evt.objectName || evt.objectId}</td>
                             <td className="py-3 px-4 text-xs font-mono">
-                              ({evt.position.x.toFixed(1)}, {evt.position.y.toFixed(1)}, {evt.position.z.toFixed(1)})
+                              ({evt.position?.[0]?.toFixed(1)}, {evt.position?.[1]?.toFixed(1)}, {evt.position?.[2]?.toFixed(1)})
                             </td>
                             <td className="py-3 px-4">
-                              <span className={'px-3 py-1 rounded-full text-xs font-bold ' +
-                                (evt.severity === 'HIGH' ? 'bg-red-200 text-red-700' :
-                                 evt.severity === 'MEDIUM' ? 'bg-yellow-200 text-yellow-700' :
-                                 'bg-green-200 text-green-700')}>
-                                {evt.severity}
+                              <span className="font-bold">{evt.injury?.injuryScore ?? 0}</span>
+                              <span className="text-xs text-gray-400 ml-1">({evt.injury?.bodyPart})</span>
+                              {evt.injury?.gForce != null && (
+                                <span className={`text-xs font-bold ml-2 ${gForceColor}`}>
+                                  {gForceIcon} {evt.injury.gForce.toFixed(1)}g
+                                </span>
+                              )}
+                            </td>
+                            <td className="py-3 px-4">
+                              <span className={`px-3 py-1 rounded-full text-xs font-bold ${riskColor}`}>
+                                {riskTierRaw}
                               </span>
                             </td>
-                            <td className="py-3 px-4">{evt.type}</td>
                           </tr>
-                        ))}
+                          );
+                        })}
                       </tbody>
                     </table>
                   </div>
@@ -492,6 +607,146 @@ const Simulator = () => {
                   <p className="text-gray-500 mt-2">The environment appears safe for this age group</p>
                 </div>
               )}
+            </div>
+          )}
+
+          {/* Heatmap Controls & Legend */}
+          {simResult && simResult.status === 'complete' && heatmapData && heatmapData.length > 0 && (
+            <div className="glass-panel p-8">
+              <div className="flex items-center justify-between mb-6">
+                <h3 className="text-2xl font-black text-slate-700">🗺️ 3D Danger Heatmap</h3>
+                <button
+                  onClick={() => setShowHeatmap(!showHeatmap)}
+                  className={`px-6 py-3 rounded-2xl font-black text-sm transition-all shadow-lg ${
+                    showHeatmap
+                      ? 'bg-gradient-to-r from-red-400 to-orange-500 text-white'
+                      : 'bg-gray-200 text-gray-600 hover:bg-gray-300'
+                  }`}
+                >
+                  {showHeatmap ? '🔥 Heatmap ON' : '⭕ Heatmap OFF'}
+                </button>
+              </div>
+
+              {/* Color Legend */}
+              <div className="flex items-center gap-6 mb-6 bg-white/60 rounded-xl p-4">
+                <span className="text-sm font-bold text-gray-500">Danger Scale:</span>
+                <div className="flex items-center gap-1">
+                  <div className="w-8 h-4 rounded bg-green-400"></div>
+                  <span className="text-xs font-bold text-gray-500">Safe</span>
+                </div>
+                <div className="flex items-center gap-1">
+                  <div className="w-8 h-4 rounded bg-yellow-400"></div>
+                  <span className="text-xs font-bold text-gray-500">Watch</span>
+                </div>
+                <div className="flex items-center gap-1">
+                  <div className="w-8 h-4 rounded bg-orange-400"></div>
+                  <span className="text-xs font-bold text-gray-500">Warning</span>
+                </div>
+                <div className="flex items-center gap-1">
+                  <div className="w-8 h-4 rounded bg-red-500"></div>
+                  <span className="text-xs font-bold text-gray-500">Critical</span>
+                </div>
+              </div>
+
+              {/* G-Force Thresholds Legend */}
+              <div className="flex items-center gap-6 bg-white/60 rounded-xl p-4">
+                <span className="text-sm font-bold text-gray-500">G-Force Tiers:</span>
+                <div className="flex items-center gap-1">
+                  <span className="text-lg">👀</span>
+                  <span className="text-xs font-bold text-green-600">&lt;20g Observe</span>
+                </div>
+                <div className="flex items-center gap-1">
+                  <span className="text-lg">⚠️</span>
+                  <span className="text-xs font-bold text-orange-600">20-50g Soft Injury</span>
+                </div>
+                <div className="flex items-center gap-1">
+                  <span className="text-lg">🚨</span>
+                  <span className="text-xs font-bold text-red-600">&ge;50g Serious</span>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Safety Recommendations Panel */}
+          {simResult && simResult.status === 'complete' && heatmapData && heatmapData.some(h => h.recommendations.length > 0) && (
+            <div className="glass-panel p-8">
+              <h3 className="text-2xl font-black text-slate-700 mb-6">🛡️ Safety Recommendations</h3>
+              <div className="space-y-6">
+                {heatmapData
+                  .filter(obj => obj.recommendations.length > 0)
+                  .map((obj, idx) => {
+                    const tierStyle = obj.worstGForceTier === 'Serious Injury'
+                      ? 'border-red-300 bg-red-50/80'
+                      : obj.worstGForceTier === 'Soft Injury'
+                      ? 'border-orange-300 bg-orange-50/80'
+                      : 'border-green-300 bg-green-50/80';
+                    const tierIcon = obj.worstGForceTier === 'Serious Injury' ? '🚨' : obj.worstGForceTier === 'Soft Injury' ? '⚠️' : '👀';
+                    const tierTextColor = obj.worstGForceTier === 'Serious Injury' ? 'text-red-700' : obj.worstGForceTier === 'Soft Injury' ? 'text-orange-700' : 'text-green-700';
+
+                    return (
+                    <div key={idx} className={`rounded-2xl border-2 p-6 ${tierStyle}`}>
+                      {/* Object Header */}
+                      <div className="flex items-center justify-between mb-4">
+                        <div>
+                          <h4 className="text-lg font-black text-gray-800">
+                            {tierIcon} {obj.objectName}
+                          </h4>
+                          <p className="text-sm text-gray-500 mt-1">
+                            {obj.totalHits} collision{obj.totalHits !== 1 ? 's' : ''} • 
+                            Max G-Force: <span className={`font-bold ${tierTextColor}`}>{obj.maxGForce.toFixed(1)}g</span> •
+                            Body: <span className="font-bold">{obj.primaryBodyPart}</span>
+                          </p>
+                        </div>
+                        <div className="text-right">
+                          <div className={`text-2xl font-black ${tierTextColor}`}>{obj.maxInjuryScore}</div>
+                          <div className={`text-xs font-bold ${tierTextColor}`}>{obj.worstGForceTier}</div>
+                        </div>
+                      </div>
+
+                      {/* Action Required */}
+                      <div className={`text-sm font-bold ${tierTextColor} mb-4 bg-white/60 rounded-xl p-3`}>
+                        {obj.worstGForceTier === 'Serious Injury' 
+                          ? '🚨 MUST change environment — high risk of significant injury'
+                          : obj.worstGForceTier === 'Soft Injury'
+                          ? '⚠️ Preventive measures needed — padding or relocation recommended'
+                          : '👀 Monitor only — no injury expected'}
+                      </div>
+
+                      {/* Product Recommendations */}
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        {obj.recommendations.map((rec, rIdx) => (
+                          <a
+                            key={rIdx}
+                            href={rec.searchUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="flex items-start gap-3 bg-white/80 rounded-xl p-4 border border-gray-200 hover:shadow-lg hover:border-blue-300 transition-all group cursor-pointer"
+                          >
+                            <div className="flex-1">
+                              <div className="flex items-center gap-2">
+                                <span className="font-black text-sm text-gray-800 group-hover:text-blue-600 transition-colors">
+                                  {rec.product}
+                                </span>
+                                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                                  rec.priority === 'high'
+                                    ? 'bg-red-100 text-red-600'
+                                    : 'bg-blue-100 text-blue-600'
+                                }`}>
+                                  {rec.priority === 'high' ? 'HIGH' : 'RECOMMENDED'}
+                                </span>
+                              </div>
+                              <p className="text-xs text-gray-500 mt-1">{rec.reason}</p>
+                            </div>
+                            <div className="text-blue-400 group-hover:text-blue-600 text-lg mt-1 transition-colors">
+                              🛍️
+                            </div>
+                          </a>
+                        ))}
+                      </div>
+                    </div>
+                    );
+                  })}
+              </div>
             </div>
           )}
         </div>
