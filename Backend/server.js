@@ -48,12 +48,12 @@ app.use(
 // Rate Limiting: Prevent abuse by limiting repeated requests (default 200 per 15min)
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: parseInt(process.env.RATE_LIMIT_MAX || "200", 10),
+  max: parseInt(process.env.RATE_LIMIT_MAX || "2000", 10),
 });
 
 // Body parsing
-app.use(express.json({ limit: "20mb" }));
-app.use(express.urlencoded({ extended: true, limit: "20mb" }));
+app.use(express.json({ limit: "200mb" }));
+app.use(express.urlencoded({ extended: true, limit: "200mb" }));
 
 // Serve uploaded files
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
@@ -93,6 +93,24 @@ app.use((err, req, res, next) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log(`🚀 Server running on http://localhost:${PORT}`);
+});
+server.setTimeout(5 * 60 * 1000); // 5 minutes timeout
+
+// Debugging: Log exit signals
+process.on('exit', (code) => {
+  console.log(`🛑 Process exiting with code: ${code}`);
+});
+process.on('SIGINT', () => {
+  console.log('🛑 Received SIGINT. Shutting down...');
+  process.exit(0);
+});
+process.on('SIGTERM', () => {
+  console.log('🛑 Received SIGTERM. Shutting down...');
+  process.exit(0);
+});
+process.on('uncaughtException', (err) => {
+  console.error('💥 Uncaught Exception:', err);
+  process.exit(1);
 });

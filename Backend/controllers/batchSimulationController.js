@@ -17,7 +17,7 @@ const SIMULATION_DIR = process.env.SIMULATION_DIR || './simulations';
 await fs.mkdir(SIMULATION_DIR, { recursive: true });
 
 /**
- * ✅ ENHANCED: Batch simulate all age groups with progress tracking
+ * Batch simulate all age groups with progress tracking
  */
 export const batchSimulateAllAges = async (req, res) => {
   const startTime = Date.now();
@@ -123,7 +123,7 @@ export const batchSimulateAllAges = async (req, res) => {
 };
 
 /**
- * 🔥 FIXED: Run single simulation with ACCURATE contact point detection
+ * Run single simulation with ACCURATE contact point detection
  */
 async function runSingleSimulation(sceneId, sceneData, ageGroupId, ageGroup, agentCount, duration) {
   console.log(`   🔧 Initializing physics...`);
@@ -168,10 +168,8 @@ async function runSingleSimulation(sceneId, sceneData, ageGroupId, ageGroup, age
 
   console.log(`   ⚡ Running physics simulation...`);
 
-  // ✅ FIX: Create EventQueue for collision detection
   const eventQueue = new physicsEngine.rapier.EventQueue(true);
   
-  // ✅ FIX: Create handle maps for fast lookup
   const handleToCollider = new Map();
   colliders.forEach(c => {
     if (c.collider) {
@@ -191,12 +189,12 @@ async function runSingleSimulation(sceneId, sceneData, ageGroupId, ageGroup, age
   const totalSteps = duration * 60;
 
   for (let step = 0; step < totalSteps; step++) {
-    // ✅ Step physics with event queue
+    // Step physics with event queue
     physicsEngine.step(world, deltaTime, eventQueue);
 
-    // 🔥 FIX: Drain REAL collision events with ACCURATE contact points
+    // Drain REAL collision events with ACCURATE contact points
     eventQueue.drainCollisionEvents((handle1, handle2, started) => {
-      if (!started) return; // Only process collision start
+      if (!started) return; 
 
       const agent1 = handleToAgent.get(handle1);
       const agent2 = handleToAgent.get(handle2);
@@ -210,7 +208,6 @@ async function runSingleSimulation(sceneId, sceneData, ageGroupId, ageGroup, age
       if (!agent || !collider) return;
       if (collider.type === 'floor') return; // Skip floor collisions for heatmap
 
-      // 🔥 CRITICAL FIX: Get ACTUAL contact point from Rapier manifold
       const contactPointData = physicsEngine.getContactPoint(
         world,
         agent.collider,
@@ -224,7 +221,7 @@ async function runSingleSimulation(sceneId, sceneData, ageGroupId, ageGroup, age
 
       const { position: contactPoint, normal: contactNormal } = contactPointData;
 
-      // ✅ Validate contact point
+      // Validate contact point
       if (!validateContactPoint(contactPoint, sceneData.boundingBox)) {
         console.warn(`⚠️  Invalid contact point:`, contactPoint);
         return;
@@ -239,8 +236,8 @@ async function runSingleSimulation(sceneId, sceneData, ageGroupId, ageGroup, age
         objectName: collider.name || collider.id,
         position: contactPoint,
         normal: contactNormal,
-        velocity: agentVel,            // 🔥 FIX #2: scalar, not array
-        impactSpeed: agentVel           // 🔥 FIX #2: consistent scalar
+        velocity: agentVel,           
+        impactSpeed: agentVel           
       });
     });
 
@@ -282,13 +279,13 @@ async function runSingleSimulation(sceneId, sceneData, ageGroupId, ageGroup, age
   // Collect trajectories
   const trajectories = agents.map(agent => ({
     agentId: agent.id,
-    positions: agent.getSampledTrajectory(30),
+    positions: agent.getSampledTrajectory(600),
     finalState: agent.getStatus()
   }));
 
   console.log(`   ✅ Simulation data compiled`);
 
-  // 🔥 FIX #5: Proper physics cleanup (was missing world cleanup entirely)
+  // Proper physics cleanup (was missing world cleanup entirely)
   try {
     // Remove agent colliders first
     agents.forEach(agent => {
@@ -341,7 +338,7 @@ async function runSingleSimulation(sceneId, sceneData, ageGroupId, ageGroup, age
 }
 
 /**
- * 🔥 NEW: Validate contact point coordinates
+ *  Validate contact point coordinates
  */
 function validateContactPoint(point, sceneBounds) {
   if (!point || !Array.isArray(point) || point.length !== 3) {

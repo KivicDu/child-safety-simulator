@@ -197,7 +197,8 @@ class HybridBehaviorEngine {
     const selectedBehaviors = this.selectContextualBehaviors(
       ageData.behaviors,
       availableObjects,
-      sceneData
+      sceneData,
+      ageGroupId
     );
 
     // Select rare events
@@ -220,7 +221,7 @@ class HybridBehaviorEngine {
   /**
    * Select behaviors relevant to current scene
    */
-  selectContextualBehaviors(behaviors, availableObjects, sceneData) {
+  selectContextualBehaviors(behaviors, availableObjects, sceneData, ageGroupId) {
     const selected = [];
     const minBehaviors = 3;
     const maxBehaviors = 8;
@@ -234,7 +235,7 @@ class HybridBehaviorEngine {
 
     if (eligible.length === 0) {
       console.warn('⚠️  No eligible behaviors found, using default wander');
-      return [StandardBehaviorLibrary.getDefaultWanderBehavior(sceneData.ageGroup)];
+      return [StandardBehaviorLibrary.getDefaultWanderBehavior(ageGroupId)];
     }
 
     // Weighted random selection

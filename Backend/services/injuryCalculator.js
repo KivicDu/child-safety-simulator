@@ -91,7 +91,9 @@ class InjuryCalculator {
     const velocity = collisionEvent.velocity || 0;
     const position = collisionEvent.position || [0, 0, 0];
     const mass = ageGroup.mass;
-    const bodyPart = this.determineBodyPart(position[1], ageGroup.height);
+    
+    // 🔥 NEW: Use precise body part from multipart collider if available
+    const bodyPart = collisionEvent.bodyPart || this.determineBodyPart(position[1], ageGroup.height);
 
     // Determine collision duration from object material
     const surfaceType = objectProperties.surfaceType || objectProperties.materialType || 'unknown';

@@ -79,33 +79,53 @@ class PhysicsEngine {
     return { body: rigidBody, collider };
   }
 
-  // Create agent capsule collider — kinematic so it doesn't fall due to gravity
-  createAgentCollider(world, position, height = 1.0, radius = 0.3) {
+  // Create agent with multiple body parts (Head, Torso, Legs) for precise injury tracking
+  createAgentMultipartCollider(world, position, height = 1.0, radius = 0.25) {
     const minY = (height / 2) + 0.05;
-    // Trust caller's position[1] if it's a number, otherwise use safe fallback
     const posY = (typeof position[1] === 'number') ? position[1] : minY;
 
-    // 🔥 FIX: Use kinematicPositionBased instead of dynamic
-    // Dynamic bodies + gravity + 312 solid colliders = agents fall through floor
-    // Kinematic bodies are moved programmatically and still generate collision events
+    // 1. Single Kinematic RigidBody (Controls overall movement)
     const rigidBodyDesc = this.rapier.RigidBodyDesc.kinematicPositionBased()
       .setTranslation(position[0], posY, position[2]);
-    
     const rigidBody = world.createRigidBody(rigidBodyDesc);
 
-    const colliderDesc = this.rapier.ColliderDesc.capsule(
-      height / 2,
-      radius
-    )
-      .setFriction(0.0)
-      .setRestitution(0.0)
+    const parts = {};
+    const halfH = height / 2;
+    
+    // 2. HEAD Collider (Sphere at top)
+    // Radius ~ 0.12m, Offset ~ Top of agent
+    const headRadius = 0.12;
+    const headOffset = halfH - headRadius;
+    const headDesc = this.rapier.ColliderDesc.ball(headRadius)
+      .setTranslation(0, headOffset, 0)
+      .setFriction(0.3)
+      .setRestitution(0.2)
       .setActiveEvents(this.rapier.ActiveEvents.COLLISION_EVENTS)
-      // 🔥 FIX: Kinematic bodies need explicit collision type for fixed bodies
       .setActiveCollisionTypes(this.rapier.ActiveCollisionTypes.KINEMATIC_FIXED | this.rapier.ActiveCollisionTypes.DEFAULT);
+    parts.head = world.createCollider(headDesc, rigidBody);
 
-    const collider = world.createCollider(colliderDesc, rigidBody);
+    // 3. TORSO Collider (Cylinder/Capsule in middle)
+    // Height ~ 40% of total, Offset ~ Just below head
+    const torsoHeight = height * 0.4;
+    const torsoOffset = headOffset - headRadius - (torsoHeight / 2);
+    const torsoDesc = this.rapier.ColliderDesc.capsule(torsoHeight / 2, radius * 0.9)
+      .setTranslation(0, torsoOffset, 0)
+      .setActiveEvents(this.rapier.ActiveEvents.COLLISION_EVENTS)
+      .setActiveCollisionTypes(this.rapier.ActiveCollisionTypes.KINEMATIC_FIXED | this.rapier.ActiveCollisionTypes.DEFAULT);
+    parts.torso = world.createCollider(torsoDesc, rigidBody);
 
-    return { body: rigidBody, collider };
+    // 4. LEGS Collider (Capsule at bottom)
+    // Remaining height
+    const legsHeight = height * 0.4;
+    const legsOffset = -halfH + (legsHeight / 2);
+    const legsDesc = this.rapier.ColliderDesc.capsule(legsHeight / 2, radius * 0.8)
+      .setTranslation(0, legsOffset, 0)
+      .setFriction(0.1) // Lower friction for sliding
+      .setActiveEvents(this.rapier.ActiveEvents.COLLISION_EVENTS)
+      .setActiveCollisionTypes(this.rapier.ActiveCollisionTypes.KINEMATIC_FIXED | this.rapier.ActiveCollisionTypes.DEFAULT);
+    parts.legs = world.createCollider(legsDesc, rigidBody);
+
+    return { body: rigidBody, colliders: parts };
   }
 
   // Step with EventQueue support and proper timestep

@@ -70,6 +70,7 @@ class ColliderGenerator {
         );
 
         colliders.push({
+          ...obj, // 🔥 FIX: Propagate ALL object properties (classification, material, etc.)
           id: obj.id || `obj_${index}`,
           name: obj.name || `Object ${index}`,
           type: 'object',

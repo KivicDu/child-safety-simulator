@@ -18,6 +18,24 @@ await fs.mkdir(SIMULATION_DIR, { recursive: true });
 
 const activeSimulations = new Map();
 
+// 🧹 Periodic cleanup of old simulation data (running every hour)
+setInterval(() => {
+  const ONE_HOUR = 60 * 60 * 1000;
+  const now = Date.now();
+  
+  for (const [id, sim] of activeSimulations.entries()) {
+    const startTime = new Date(sim.startedAt).getTime();
+    const finishTime = sim.finishedAt ? new Date(sim.finishedAt).getTime() : 0;
+    
+    // Remove if completed > 1 hour ago OR running > 2 hours (stuck?)
+    if ((sim.status === 'complete' && now - finishTime > ONE_HOUR) ||
+        (now - startTime > 2 * ONE_HOUR)) {
+      activeSimulations.delete(id);
+      console.log(`🗑️ Cleared stale simulation cache: ${id}`);
+    }
+  }
+}, 60 * 60 * 1000);
+
 export const startSimulation = async (req, res) => {
   try {
     const { sceneId, agentCount = 10, duration = 10, ageGroupId = 'toddler' } = req.body;
@@ -55,17 +73,29 @@ export const startSimulation = async (req, res) => {
         console.log(`[SIM START] Scene: ${sceneId}, Floor Height: ${floorHeight.toFixed(4)}`);
         console.log(`[SIM START] BBox Min: ${JSON.stringify(sceneData.boundingBox.min)}, Max: ${JSON.stringify(sceneData.boundingBox.max)}`);
 
+        // Map collision handles to specific body parts
+        const handleToBodyPart = new Map();
+
         for (let i = 0; i < agentCount; i++) {
           const spawnPos = getRandomSpawnPosition(sceneData.boundingBox, floorHeight, ageGroup);
-          const agentBodyObj = physicsEngine.createAgentCollider(
+          
+          // 🔥 USE MULTIPART COLLIDER
+          const agentBodyObj = physicsEngine.createAgentMultipartCollider(
             world,
             spawnPos,
             ageGroup.height,
             ageGroup.capsuleRadius
           );
+          
+          // Agent stores the main body
           const agent = new Agent(i, spawnPos, agentBodyObj.body, ageGroupId);
-          agent.collider = agentBodyObj.collider;
+          agent.colliders = agentBodyObj.colliders; // Store all parts
           agents.push(agent);
+
+          // Map handles -> body parts
+          if (agentBodyObj.colliders.head) handleToBodyPart.set(agentBodyObj.colliders.head.handle, 'head');
+          if (agentBodyObj.colliders.torso) handleToBodyPart.set(agentBodyObj.colliders.torso.handle, 'torso');
+          if (agentBodyObj.colliders.legs) handleToBodyPart.set(agentBodyObj.colliders.legs.handle, 'legs');
         }
 
         // Initialize and distribute agent behaviors based on scene data
@@ -78,8 +108,16 @@ export const startSimulation = async (req, res) => {
         const eventQueue = new physicsEngine.rapier.EventQueue(true);
         const handleToCollider = new Map();
         colliders.forEach(c => { if (c.collider) handleToCollider.set(c.collider.handle, c); });
+        
+        // Map any of the agent's collider handles to the agent instance
         const handleToAgent = new Map();
-        agents.forEach(a => { if (a.collider) handleToAgent.set(a.collider.handle, a); });
+        agents.forEach(a => {
+          if (a.colliders) {
+            Object.values(a.colliders).forEach(c => handleToAgent.set(c.handle, a));
+          } else if (a.collider) {
+             handleToAgent.set(a.collider.handle, a); // Fallback
+          }
+        });
 
         const collisionEvents = [];
         let contactCandidates = 0;
@@ -115,10 +153,24 @@ export const startSimulation = async (req, res) => {
             if (!agent || !collider) { dbg_noMatch++; traceLog.push(`NO_MATCH h1=${handle1} h2=${handle2} a=${!!agent} c=${!!collider}`); return; }
             if (collider.type === 'floor') { dbg_isFloor++; return; }
 
-            traceLog.push(`PRE_CONTACT h1=${handle1} h2=${handle2} agent=${agent.id} obj=${collider.id} type=${collider.type}`);
-            const contactPointData = physicsEngine.getContactPoint(world, agent.collider, collider.collider);
+            // Identify which part of the agent was hit
+            const agentHandle = (agent === agent1) ? handle1 : handle2;
+            const hitBodyPart = handleToBodyPart.get(agentHandle) || 'unknown';
+
+            // Get the specific collider for contact point check
+            const agentCollider = (agent === agent1) ? 
+              (agent.colliders.head.handle === handle1 ? agent.colliders.head : 
+               agent.colliders.torso.handle === handle1 ? agent.colliders.torso : agent.colliders.legs) 
+              : 
+              (agent.colliders.head.handle === handle2 ? agent.colliders.head : 
+               agent.colliders.torso.handle === handle2 ? agent.colliders.torso : agent.colliders.legs);
+
+            traceLog.push(`PRE_CONTACT h1=${handle1} h2=${handle2} agent=${agent.id} obj=${collider.id} part=${hitBodyPart}`);
+            
+            const contactPointData = physicsEngine.getContactPoint(world, agentCollider, collider.collider);
             if (!contactPointData) { dbg_noContact++; traceLog.push(`NO_CONTACT h1=${handle1} h2=${handle2}`); return; }
             const { position: contactPoint, normal: contactNormal } = contactPointData;
+            
             if (!validateContactPoint(contactPoint, sceneData.boundingBox)) { dbg_outOfBounds++; traceLog.push(`OOB pt=${JSON.stringify(contactPoint)}`); return; }
 
             // Calculate impact velocity magnitude
@@ -156,7 +208,8 @@ export const startSimulation = async (req, res) => {
               position: contactPoint,
               normal: contactNormal,
               velocity: agentVelMagnitude,
-              impactSpeed: agentVelMagnitude
+              impactSpeed: agentVelMagnitude,
+              bodyPart: hitBodyPart // 🔥 Pass specific body part (head/torso/legs)
             });
             } catch (err) {
               traceLog.push(`ERROR h1=${handle1} h2=${handle2}: ${err.message}`);
@@ -181,7 +234,14 @@ export const startSimulation = async (req, res) => {
             // Always update agent positions for live visualization
             entry.agentPositions = agents.map(a => {
               const pos = a.getPosition();
-              return { agentId: a.id, position: Array.isArray(pos) ? pos : [pos.x || 0, pos.y || 0, pos.z || 0] };
+              // Ensure position is always a valid array [x, y, z]
+              let posArray = [0, 0, 0];
+              if (Array.isArray(pos) && pos.length >= 3) {
+                posArray = [pos[0], pos[1], pos[2]];
+              } else if (pos && typeof pos === 'object') {
+                posArray = [pos.x || 0, pos.y || 0, pos.z || 0];
+              }
+              return { agentId: a.id, position: posArray };
             });
             entry.simTime = (step * deltaTime).toFixed(2);
             activeSimulations.set(simulationId, entry);
@@ -194,7 +254,14 @@ export const startSimulation = async (req, res) => {
         const injuryAssessments = injuryCalculator.calculateBatchInjuries(collisionEvents, ageGroupId, objectsMap);
         const summary = injuryCalculator.getInjurySummary(injuryAssessments);
 
-        const trajectories = agents.map(agent => ({ agentId: agent.id, positions: agent.getSampledTrajectory(30), finalState: agent.getStatus() }));
+        const trajectories = agents.map(agent => {
+        const sampledTraj = agent.getSampledTrajectory(600);
+        return {
+          agentId: agent.id,
+          positions: Array.isArray(sampledTraj) ? sampledTraj : [],
+          finalState: agent.getStatus()
+        };
+      });
 
         const simulationData = {
           simulationId,
@@ -272,6 +339,9 @@ export const getSimulationStatus = async (req, res) => {
       startedAt: simulationData.timestamp || null,
       resultSummary: simulationData.summary || {},
       simulationId,
+      // Include trajectories and config for playback
+      trajectories: Array.isArray(simulationData.trajectories) ? simulationData.trajectories : [],
+      config: simulationData.config || { fps: 60, duration: 10 },
       dataPath: simPath
     });
 
@@ -367,8 +437,8 @@ export const getSimulationHeatmap = async (req, res) => {
       const primaryBodyPart = Object.entries(bodyParts).sort((a, b) => b[1] - a[1])[0]?.[0] || 'unknown';
 
       // Color: intensity maps 0-100 score → green→yellow→orange→red
-      const intensity = Math.min(1.0, maxScore / 80);
-      const heatColor = scoreToRGB(maxScore);
+      const intensity = Math.max(0, Math.min(1.0, maxScore / 80)); // Ensure 0-1 range
+      const heatColor = scoreToRGB(maxScore) || [0, 1, 0]; // Fallback to green if undefined
 
       // Bounding box from scene
       const sceneObj = sceneObjects[objId];
@@ -384,16 +454,16 @@ export const getSimulationHeatmap = async (req, res) => {
         objectName: entry.objectName,
         boundingBox,
         totalHits: entry.hits.length,
-        collisionPositions: entry.positions,
+        collisionPositions: Array.isArray(entry.positions) ? entry.positions : [],
         maxInjuryScore: maxScore,
         avgInjuryScore: avgScore,
         maxGForce,
         avgGForce,
         worstGForceTier,
         primaryBodyPart,
-        heatColor,
-        intensity,
-        recommendations
+        heatColor: Array.isArray(heatColor) ? heatColor : [0, 1, 0],
+        intensity: typeof intensity === 'number' ? intensity : 0,
+        recommendations: Array.isArray(recommendations) ? recommendations : []
       });
     }
 
@@ -424,18 +494,25 @@ export const getSimulationHeatmap = async (req, res) => {
 
 // Score → RGB color (green→yellow→orange→red)
 function scoreToRGB(score) {
-  const t = Math.min(1, Math.max(0, score / 100));
-  let r, g, b;
-  if (t < 0.25) {        // green → yellow-green
-    r = t * 4; g = 1; b = 0;
-  } else if (t < 0.5) {  // yellow-green → yellow
-    r = 1; g = 1; b = 0;
-  } else if (t < 0.75) { // yellow → orange
-    r = 1; g = 1 - (t - 0.5) * 2; b = 0;
-  } else {               // orange → red
-    r = 1; g = Math.max(0, 1 - (t - 0.5) * 2); b = 0;
+  try {
+    if (typeof score !== 'number' || isNaN(score)) score = 0;
+    const t = Math.min(1, Math.max(0, score / 100));
+    let r, g, b;
+    if (t < 0.25) {        // green → yellow-green
+      r = t * 4; g = 1; b = 0;
+    } else if (t < 0.5) {  // yellow-green → yellow
+      r = 1; g = 1; b = 0;
+    } else if (t < 0.75) { // yellow → orange
+      r = 1; g = 1 - (t - 0.5) * 2; b = 0;
+    } else {               // orange → red
+      r = 1; g = Math.max(0, 1 - (t - 0.5) * 2); b = 0;
+    }
+    const result = [Math.round(r * 255) / 255, Math.round(g * 255) / 255, Math.round(b * 255) / 255];
+    return Array.isArray(result) && result.length === 3 ? result : [0, 1, 0]; // Fallback
+  } catch (e) {
+    console.warn('[Backend] scoreToRGB error:', e);
+    return [0, 1, 0]; // Green fallback
   }
-  return [Math.round(r * 255) / 255, Math.round(g * 255) / 255, Math.round(b * 255) / 255];
 }
 
 // Validate contact point coordinates against scene bounds
@@ -486,11 +563,21 @@ async function cleanupSimulation(world, agents, colliders) {
     const rigidBodyCount = world.bodies.len();
     console.log(`  📦 Found ${rigidBodyCount} rigid bodies to clean up`);
 
-    // Remove agent colliders
+    // Remove agent colliders (including multipart)
     agents.forEach(agent => {
       try {
+        // Remove main collider if exists
         if (agent.collider && world.getCollider(agent.collider.handle)) {
           world.removeCollider(agent.collider, true);
+        }
+        
+        // Remove multipart colliders
+        if (agent.colliders) {
+          Object.values(agent.colliders).forEach(c => {
+            if (c && world.getCollider(c.handle)) {
+              world.removeCollider(c, true);
+            }
+          });
         }
       } catch (e) { /* collider already removed */ }
       agent.cleanup();

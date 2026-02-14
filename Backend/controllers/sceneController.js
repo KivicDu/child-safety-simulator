@@ -33,14 +33,16 @@ export const uploadModel = async (req, res) => {
       sceneData.floor
     );
 
+    /*
     await geminiAPI.init();
     const aiEnhanced = await geminiAPI.enhanceClassification(
       sceneData.objects,
       classifiedObjects
     );
+    */
     
-    // Update scene with classified objects
-    sceneData.classifiedObjects = aiEnhanced;
+    // Update scene with classified objects (SKIP AI for now to fix timeout)
+    sceneData.classifiedObjects = classifiedObjects;
 
     // Save parsed data
     const parsedPath = path.join(PARSED_DIR, `${sceneId}.json`);

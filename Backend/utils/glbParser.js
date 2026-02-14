@@ -1,3 +1,4 @@
+
 import fs from 'fs/promises';
 import path from 'path';
 import { NodeIO } from '@gltf-transform/core';
@@ -100,6 +101,8 @@ class GLBParser {
   async parse(glbPath) {
     try {
       console.log(`🔍 Starting parse for: ${glbPath}`);
+      const memUsage = process.memoryUsage();
+      console.log(`💾 Memory: RSS=${(memUsage.rss/1024/1024).toFixed(2)}MB, Heap=${(memUsage.heapUsed/1024/1024).toFixed(2)}MB`);
       
       const io = new NodeIO();
       const document = await io.read(glbPath);
@@ -144,6 +147,27 @@ class GLBParser {
           
           // 4. Transform AABB to World Space (using 8 corners)
           const worldBbox = this.transformBoundingBox(localBbox, worldMatrix);
+
+          // 🔥 RESTORED WITH FIX: Extract material properties from first primitive
+          // (User's revert removed this, but implementation plan requires it)
+          const primitives = mesh.listPrimitives();
+          let materialData = null;
+          
+          if (primitives.length > 0) {
+            const material = primitives[0].getMaterial();
+            if (material) {
+              const baseColor = material.getBaseColorFactor(); // [r, g, b, a]
+              const metallic = material.getMetallicFactor();
+              const roughness = material.getRoughnessFactor();
+              materialData = {
+                name: material.getName(),
+                baseColor: baseColor, // [r,g,b,a]
+                metallic: metallic,
+                roughness: roughness,
+                emissive: material.getEmissiveFactor && material.getEmissiveFactor() // [r,g,b]
+              };
+            }
+          }
           
           objects.push({
             id: `obj_${objects.length}`,
@@ -151,11 +175,11 @@ class GLBParser {
             // Decompose position from world matrix for simple reference
             transform: {
               position: [worldMatrix[12], worldMatrix[13], worldMatrix[14]],
-              // Rotation/Scale extraction is complex, storing matrix might be better 
-              // but for now let's keep it simple
             },
             boundingBox: worldBbox,
-            primitiveCount: mesh.listPrimitives().length
+            primitiveCount: primitives.length,
+            // 🔥 Attached extracted material data
+            material: materialData
           });
 
           // Update global bounds
@@ -230,7 +254,10 @@ class GLBParser {
     
     for (const primitive of primitives) {
       const position = primitive.getAttribute('POSITION');
-      if (!position) continue;
+      if (!position) {
+        console.warn('⚠️ Primitive missing POSITION attribute, skipping bbox calc for this primitive');
+        continue;
+      }
 
       const array = position.getArray();
       
