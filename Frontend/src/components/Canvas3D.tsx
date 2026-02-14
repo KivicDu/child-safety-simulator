@@ -162,14 +162,21 @@ const Canvas3D: React.FC<Canvas3DProps> = ({
       const ctx = internals.current;
       if (!ctx) return;
       ctx.frameId = requestAnimationFrame(animate);
-      ctx.controls.update();
+      try {
+        ctx.controls.update();
 
-      // Agent playback
-      if (ctx.isPlaying && simulationPlayback?.trajectories) {
-        updateAgentPositions(ctx);
+        // Agent playback
+        if (ctx.isPlaying && simulationPlayback?.trajectories) {
+          updateAgentPositions(ctx);
+        }
+
+        ctx.renderer.render(ctx.scene, ctx.camera);
+      } catch (e) {
+        console.error('[Canvas3D] Animation loop error:', e);
+        if (e instanceof Error) {
+          console.error('[Canvas3D] Stack:', e.stack);
+        }
       }
-
-      ctx.renderer.render(ctx.scene, ctx.camera);
     };
     animate();
 
@@ -225,6 +232,12 @@ const Canvas3D: React.FC<Canvas3DProps> = ({
       url,
       (gltf) => {
         const model = gltf.scene;
+        if (!model) {
+          console.error('[Canvas3D] ❌ GLTF has no scene!');
+          setLoadStatus('❌ Invalid Model File');
+          setLoadingPct(null);
+          return;
+        }
 
         // ──────────────────────────────────────────────────────
         // STEP 1: Add model to scene FIRST
@@ -240,11 +253,13 @@ const Canvas3D: React.FC<Canvas3DProps> = ({
         const size = worldBox.getSize(new THREE.Vector3());
 
         // Shift model: center horizontally (X,Z), align floor to Y=0 (grid)
-        model.position.set(
-          -center.x,                // center on X
-          -worldBox.min.y,          // align bottom (floor) to Y=0
-          -center.z,                // center on Z
-        );
+        if (model.position) {
+          model.position.set(
+            -center.x,                // center on X
+            -worldBox.min.y,          // align bottom (floor) to Y=0
+            -center.z,                // center on Z
+          );
+        }
         ctx.currentModel = model;
         // Save the model offset for coordinate transformation
         ctx.modelOffset = new THREE.Vector3(center.x, worldBox.min.y, center.z);
@@ -352,9 +367,14 @@ const Canvas3D: React.FC<Canvas3DProps> = ({
     });
 
     simulationPlayback.trajectories.forEach((traj) => {
+      // Safety check: ensure trajectory data is valid
+      if (!traj || !Array.isArray(traj.positions) || traj.positions.length === 0) {
+        console.warn('[Canvas3D] Skipping invalid trajectory:', traj);
+        return;
+      }
       const mesh = new THREE.Mesh(agentGeo, baseMat.clone());
       mesh.userData.trajectory = traj.positions;
-      mesh.userData.agentId = traj.agentId;
+      mesh.userData.agentId = traj.agentId || 0;
       mesh.visible = false;
       ctx.scene.add(mesh);
       ctx.agentMeshes.push(mesh);
@@ -385,42 +405,70 @@ const Canvas3D: React.FC<Canvas3DProps> = ({
     if (!showHeatmap || !heatmapData || heatmapData.length === 0) return;
     if (!ctx.currentModel) return;
 
-    const off = ctx.modelOffset;
+    const off = ctx.modelOffset || new THREE.Vector3(0, 0, 0);
+    // Defensive: ensure off has x, y, z properties
+    const offX = typeof off.x === 'number' ? off.x : 0;
+    const offY = typeof off.y === 'number' ? off.y : 0;
+    const offZ = typeof off.z === 'number' ? off.z : 0;
 
     // 🔥 NEW: Render ALL heatmap objects as collision-point spheres
     // This is clearer than bounding boxes — shows EXACTLY where danger is
     heatmapData.forEach((obj) => {
-      if (!obj.collisionPositions || obj.collisionPositions.length === 0) return;
+      if (!obj || !obj.collisionPositions || obj.collisionPositions.length === 0) return;
+      
+      // Safety: ensure required properties exist
+      if (!obj.heatColor || !Array.isArray(obj.heatColor) || obj.heatColor.length < 3) {
+        console.warn('[Canvas3D] Heatmap object missing or invalid heatColor:', obj);
+        return;
+      }
+      if (typeof obj.intensity !== 'number' || obj.intensity < 0 || obj.intensity > 1) {
+        console.warn('[Canvas3D] Heatmap object has invalid intensity:', obj.intensity);
+        return;
+      }
 
       obj.collisionPositions.forEach((pos) => {
+        // Extra safety: validate pos is array with 3 elements
+        if (!pos || !Array.isArray(pos) || pos.length < 3 || typeof pos[0] !== 'number' || typeof pos[1] !== 'number' || typeof pos[2] !== 'number') {
+          console.warn('[Canvas3D] Skipping invalid position:', pos);
+          return;
+        }
+
         // Sphere size scales with intensity — high danger = larger sphere
         const radius = 0.15 + obj.intensity * 0.35;
         const sphereGeo = new THREE.SphereGeometry(radius, 16, 16);
         const sphereMat = new THREE.MeshBasicMaterial({
-          color: new THREE.Color(obj.heatColor[0], obj.heatColor[1], obj.heatColor[2]),
+          color: new THREE.Color(
+            obj.heatColor?.[0] ?? 0,
+            obj.heatColor?.[1] ?? 1,
+            obj.heatColor?.[2] ?? 0
+          ),
           transparent: true,
           opacity: 0.4 + obj.intensity * 0.5,
           depthWrite: false,
         });
         const sphere = new THREE.Mesh(sphereGeo, sphereMat);
-        sphere.position.set(pos[0] - off.x, pos[1] - off.y, pos[2] - off.z);
+        sphere.position.set(pos[0] - offX, pos[1] - offY, pos[2] - offZ);
         sphere.userData.baseOpacity = 0.4 + obj.intensity * 0.5;
         sphere.userData.intensity = obj.intensity;
         ctx.scene.add(sphere);
         ctx.heatmapMeshes.push(sphere);
 
         // Add a ring/disc around each sphere for ground-level visibility
-        if (obj.intensity >= 0.5) {
+        if (obj.intensity >= 0.5 && obj.heatColor && Array.isArray(obj.heatColor)) {
           const ringGeo = new THREE.RingGeometry(radius * 0.5, radius * 2, 24);
           const ringMat = new THREE.MeshBasicMaterial({
-            color: new THREE.Color(obj.heatColor[0], obj.heatColor[1], obj.heatColor[2]),
+            color: new THREE.Color(
+              obj.heatColor?.[0] ?? 0,
+              obj.heatColor?.[1] ?? 1,
+              obj.heatColor?.[2] ?? 0
+            ),
             transparent: true,
             opacity: 0.2 + obj.intensity * 0.2,
             side: THREE.DoubleSide,
             depthWrite: false,
           });
           const ring = new THREE.Mesh(ringGeo, ringMat);
-          ring.position.set(pos[0] - off.x, pos[1] - off.y, pos[2] - off.z);
+          ring.position.set(pos[0] - offX, pos[1] - offY, pos[2] - offZ);
           ring.rotation.x = -Math.PI / 2; // Lay flat
           ring.userData.baseOpacity = 0.2 + obj.intensity * 0.2;
           ring.userData.intensity = obj.intensity;
@@ -456,7 +504,10 @@ const Canvas3D: React.FC<Canvas3DProps> = ({
   useEffect(() => {
     if (!internals.current) return;
     const ctx = internals.current;
-    const off = ctx.modelOffset;
+    const off = ctx.modelOffset || new THREE.Vector3(0, 0, 0);
+    const offX = typeof off.x === 'number' ? off.x : 0;
+    const offY = typeof off.y === 'number' ? off.y : 0;
+    const offZ = typeof off.z === 'number' ? off.z : 0;
 
     if (!liveAgentPositions || liveAgentPositions.length === 0) {
       // Clean up live agents when simulation finishes
@@ -476,6 +527,17 @@ const Canvas3D: React.FC<Canvas3DProps> = ({
         0x2196f3, 0xcddc39, 0xff5722, 0x607d8b, 0x795548,
       ];
       liveAgentPositions.forEach((agent, i) => {
+        // Safety check: skip if agent or position is undefined
+        if (!agent || !agent.position || !Array.isArray(agent.position) || agent.position.length < 3) {
+          console.warn(`[Canvas3D] Skipping agent ${i}: undefined or invalid position`, agent);
+          return;
+        }
+        // Extra validation: ensure all position values are numbers
+        if (typeof agent.position[0] !== 'number' || typeof agent.position[1] !== 'number' || typeof agent.position[2] !== 'number') {
+          console.warn(`[Canvas3D] Skipping agent ${i}: position contains non-numeric values`, agent.position);
+          return;
+        }
+
         const capsuleGeo = new THREE.CylinderGeometry(0.15, 0.15, 0.6, 8);
         const capsuleMat = new THREE.MeshPhongMaterial({
           color: agentColors[i % agentColors.length],
@@ -486,9 +548,9 @@ const Canvas3D: React.FC<Canvas3DProps> = ({
         });
         const mesh = new THREE.Mesh(capsuleGeo, capsuleMat);
         mesh.position.set(
-          agent.position[0] - off.x,
-          agent.position[1] - off.y + 0.3,
-          agent.position[2] - off.z,
+          agent.position[0] - offX,
+          agent.position[1] - offY + 0.3,
+          agent.position[2] - offZ,
         );
         mesh.castShadow = true;
         ctx.scene.add(mesh);
@@ -497,50 +559,114 @@ const Canvas3D: React.FC<Canvas3DProps> = ({
       console.log(`[Canvas3D] Created ${ctx.liveAgentMeshes.length} live agent meshes`);
     } else {
       // Update existing agent positions with smooth interpolation
-      liveAgentPositions.forEach((agent, i) => {
-        if (i < ctx.liveAgentMeshes.length) {
-          const mesh = ctx.liveAgentMeshes[i];
-          const targetX = agent.position[0] - off.x;
-          const targetY = agent.position[1] - off.y + 0.3;
-          const targetZ = agent.position[2] - off.z;
-          // Smooth interpolation
-          mesh.position.x += (targetX - mesh.position.x) * 0.3;
-          mesh.position.y += (targetY - mesh.position.y) * 0.3;
-          mesh.position.z += (targetZ - mesh.position.z) * 0.3;
-        }
-      });
+      try {
+        liveAgentPositions.forEach((agent, i) => {
+          if (!agent || !agent.position || !Array.isArray(agent.position) || agent.position.length < 3) {
+            return; // Skip invalid agents
+          }
+          // Extra validation: ensure all position values are numbers
+          if (typeof agent.position[0] !== 'number' || typeof agent.position[1] !== 'number' || typeof agent.position[2] !== 'number') {
+            return; // Skip agents with non-numeric positions
+          }
+
+          if (i < ctx.liveAgentMeshes.length) {
+            const mesh = ctx.liveAgentMeshes[i];
+            if (!mesh) return; // Extra safety
+
+            const targetX = agent.position[0] - offX;
+            const targetY = agent.position[1] - offY + 0.3;
+            const targetZ = agent.position[2] - offZ;
+            
+            // Smooth interpolation
+            mesh.position.x += (targetX - mesh.position.x) * 0.3;
+            mesh.position.y += (targetY - mesh.position.y) * 0.3;
+            mesh.position.z += (targetZ - mesh.position.z) * 0.3;
+          }
+        });
+      } catch (e) {
+        console.warn('[Canvas3D] Error updating live agents:', e);
+      }
     }
   }, [liveAgentPositions]);
 
   /* ── Agent position update ─────────────────────────────── */
   function updateAgentPositions(ctx: NonNullable<typeof internals.current>) {
     if (!simulationPlayback) return;
+    if (!simulationPlayback.trajectories || simulationPlayback.trajectories.length === 0) return;
+    
     const fps = simulationPlayback.config?.fps ?? 60;
     const dur = simulationPlayback.config?.duration ?? 10;
     const totalFrames = fps * dur;
 
-    const elapsed = (Date.now() - ctx.playStart) / 1000;
-    ctx.currentFrame = Math.floor(elapsed * fps);
+    try {
+      const elapsed = (Date.now() - ctx.playStart) / 1000;
+      ctx.currentFrame = Math.floor(elapsed * fps);
 
-    if (ctx.currentFrame >= totalFrames) {
-      ctx.currentFrame = 0;
-      ctx.playStart = Date.now();
-    }
-
-    // The model was shifted by -modelOffset, so shift agent coords the same way
-    const offset: THREE.Vector3 = (ctx as any).modelOffset || new THREE.Vector3();
-
-    ctx.agentMeshes.forEach((mesh) => {
-      const traj = mesh.userData.trajectory as number[][] | undefined;
-      if (traj && traj[ctx.currentFrame]) {
-        const pos = traj[ctx.currentFrame];
-        mesh.position.set(
-          pos[0] - offset.x,
-          pos[1] - offset.y,
-          pos[2] - offset.z,
-        );
+      if (ctx.currentFrame >= totalFrames) {
+        ctx.currentFrame = 0;
+        ctx.playStart = Date.now();
       }
-    });
+
+      // The model was shifted by -modelOffset, so shift agent coords the same way
+      const offset = ctx.modelOffset || new THREE.Vector3(0, 0, 0);
+      const offsetX = typeof offset.x === 'number' ? offset.x : 0;
+      const offsetY = typeof offset.y === 'number' ? offset.y : 0;
+      const offsetZ = typeof offset.z === 'number' ? offset.z : 0;
+
+      // Defensive: ensure agentMeshes is an array
+      if (!Array.isArray(ctx.agentMeshes)) {
+        console.warn('[Canvas3D] agentMeshes is not an array:', ctx.agentMeshes);
+        return;
+      }
+
+      ctx.agentMeshes.forEach((mesh) => {
+        if (!mesh || !(mesh instanceof THREE.Mesh)) {
+          console.warn('[Canvas3D] Invalid mesh object:', mesh);
+          return;
+        }
+        
+        const traj = mesh.userData?.trajectory;
+        
+        // Safety check: ensure trajectory exists and has data
+        if (!Array.isArray(traj) || traj.length === 0) {
+          return;
+        }
+        
+        try {
+          // Map current progress (0..1) to trajectory index
+          const progress = totalFrames > 0 ? ctx.currentFrame / totalFrames : 0;
+          const rawIdx = Math.floor(progress * traj.length);
+          const idx = Math.max(0, Math.min(rawIdx, traj.length - 1));
+          
+          const pos = traj[idx];
+          
+          // Extra validation: ensure pos is valid array of numbers
+          if (!Array.isArray(pos) || pos.length < 3) {
+            return;
+          }
+          
+          if (typeof pos[0] !== 'number' || typeof pos[1] !== 'number' || typeof pos[2] !== 'number') {
+            return;
+          }
+          
+          // Ensure mesh.position is valid before setting
+          if (!mesh.position || typeof mesh.position.set !== 'function') {
+            console.warn('[Canvas3D] mesh.position is invalid:', mesh.position);
+            return;
+          }
+          
+          mesh.position.set(
+            pos[0] - offsetX,
+            pos[1] - offsetY,
+            pos[2] - offsetZ,
+          );
+        } catch (e) {
+          console.warn('[Canvas3D] Error updating agent position:', e);
+        }
+      });
+    } catch (e) {
+      console.error('[Canvas3D] updateAgentPositions error:', e);
+    }
   }
 
   /* ── RENDER ─────────────────────────────────────────────── */

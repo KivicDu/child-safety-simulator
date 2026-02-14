@@ -137,7 +137,12 @@ const Simulator = () => {
       const data = await response.json();
       const sceneId = data.sceneId;
       setModelPath(data.filePath);   // For 3D preview
-      setSceneData(data.scene || null);  // For bounding box visualization
+      // Validate scene data before setting
+      if (data.scene && typeof data.scene === 'object') {
+        setSceneData(data.scene);
+      } else {
+        setSceneData(null);
+      }
       return sceneId;
     } catch (err) {
       setError('Failed to upload file: ' + (err instanceof Error ? err.message : 'Unknown error'));
@@ -216,6 +221,15 @@ const Simulator = () => {
 
         const status = await response.json();
 
+        // Check if simulation failed on backend
+        if (status.status === 'error') {
+           clearInterval(newPollInterval);
+           setRunning(false);
+           setPollInterval(null);
+           setError(status.error || 'Simulation failed on server');
+           return;
+        }
+
         // Get collision events
         const eventsResponse = await fetch(`/api/simulate/${simId}/events`, {
           headers: {
@@ -240,7 +254,7 @@ const Simulator = () => {
         });
 
         // Update live agent positions during simulation
-        if (status.agentPositions) {
+        if (status.agentPositions && Array.isArray(status.agentPositions)) {
           setLiveAgentPositions(status.agentPositions);
         }
 
@@ -258,7 +272,18 @@ const Simulator = () => {
             });
             if (simResponse.ok) {
               const simData = await simResponse.json();
-              setSimulationPlayback(simData);
+              // Validate simulation data structure
+              if (simData && typeof simData === 'object') {
+                // Ensure trajectories is array, provide default if missing
+                const validSimData = {
+                  ...simData,
+                  trajectories: Array.isArray(simData.trajectories) ? simData.trajectories : [],
+                  config: simData.config || { fps: 60, duration: 10 }
+                };
+                setSimulationPlayback(validSimData);
+              } else {
+                console.warn('[Simulator] Invalid simulation data structure:', simData);
+              }
             }
           } catch (e) {
             console.warn('Could not load playback data', e);
@@ -271,7 +296,7 @@ const Simulator = () => {
             });
             if (heatmapResponse.ok) {
               const heatData = await heatmapResponse.json();
-              if (heatData.success && heatData.objectHeatmap) {
+              if (heatData.success && heatData.objectHeatmap && Array.isArray(heatData.objectHeatmap)) {
                 setHeatmapData(heatData.objectHeatmap);
                 setShowHeatmap(true); // Auto-show heatmap when data arrives
               }
@@ -284,6 +309,8 @@ const Simulator = () => {
         console.error('Poll error:', err);
         if (newPollInterval) clearInterval(newPollInterval);
         setRunning(false);
+        setError('Simulation connection lost. Please try again.');
+        setPollInterval(null);
       }
     }, 2000);
 
@@ -547,6 +574,7 @@ const Simulator = () => {
                       </thead>
                       <tbody>
                         {simResult.events.slice(0, 20).map((evt, idx) => {
+                          if (!evt) return null; // Safety check for undefined events
                           const riskTierRaw = evt.injury?.riskTier || 'safe';
                           const riskTier = riskTierRaw.toLowerCase();
                           const gForceTier = evt.injury?.gForceTier || 'Observe';
@@ -570,7 +598,7 @@ const Simulator = () => {
                             <td className="py-3 px-4">{(evt.time ?? 0).toFixed(2)}s</td>
                             <td className="py-3 px-4 font-bold">Agent {evt.agentId} → {evt.objectName || evt.objectId}</td>
                             <td className="py-3 px-4 text-xs font-mono">
-                              ({evt.position?.[0]?.toFixed(1)}, {evt.position?.[1]?.toFixed(1)}, {evt.position?.[2]?.toFixed(1)})
+                              ({evt.position?.[0]?.toFixed(1) ?? 0}, {evt.position?.[1]?.toFixed(1) ?? 0}, {evt.position?.[2]?.toFixed(1) ?? 0})
                             </td>
                             <td className="py-3 px-4">
                               <span className="font-bold">{evt.injury?.injuryScore ?? 0}</span>
