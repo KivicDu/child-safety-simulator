@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { generateSafetyReport } from '../utils/ReportGenerator';
 import Canvas3D from '../components/Canvas3D';
 
 interface CollisionEvent {
@@ -29,7 +30,7 @@ interface CollisionEvent {
 interface HeatmapObject {
   objectId: string;
   objectName: string;
-  boundingBox?: { min: number[]; max: number[] };
+  boundingBox?: any;
   totalHits: number;
   collisionPositions: number[][];
   maxInjuryScore: number;
@@ -56,6 +57,11 @@ interface SimulationResult {
   events: CollisionEvent[];
   heatmapData?: any;
   timestamp?: number;
+  roomSafetyIndex?: {
+    score: number;
+    grade: string;
+    breakdown: any;
+  };
 }
 
 const Simulator = () => {
@@ -73,10 +79,21 @@ const Simulator = () => {
   const [running, setRunning] = useState<boolean>(false);
   const [simResult, setSimResult] = useState<SimulationResult | null>(null);
   const [error, setError] = useState<string>('');
+  
+  // Debug logging for RSI data
+  useEffect(() => {
+    if (simResult?.roomSafetyIndex) {
+      console.log('RSI Data Updated:', simResult.roomSafetyIndex);
+    }
+  }, [simResult]);
   const [pollInterval, setPollInterval] = useState<ReturnType<typeof setInterval> | null>(null);
+
   const [heatmapData, setHeatmapData] = useState<HeatmapObject[] | null>(null);
-  const [showHeatmap, setShowHeatmap] = useState<boolean>(false);
+  const [showHeatmap, setShowHeatmap] = useState(false);
+  const [zoneAnalysis, setZoneAnalysis] = useState<any>(null);
+  
   const [liveAgentPositions, setLiveAgentPositions] = useState<{agentId: number; position: number[]}[] | null>(null);
+  const [selectedAgentId, setSelectedAgentId] = useState<number | null>(null);
   const token = localStorage.getItem('token');
 
   // Load user on mount
@@ -177,6 +194,7 @@ const Simulator = () => {
       };
 
       // Start simulation
+      console.log('[Simulator] Starting simulation...');
       const response = await fetch('/api/simulate/start', {
         method: 'POST',
         headers: {
@@ -265,6 +283,21 @@ const Simulator = () => {
           setPollInterval(null);
           setLiveAgentPositions(null); // Clear live agents — simulation done
 
+          // Re-fetch collision events now that simulation is complete
+          // (During polling, the backend returns 202 with no events while running)
+          try {
+            const finalEventsResponse = await fetch(`/api/simulate/${simId}/events`, {
+              headers: { 'Authorization': `Bearer ${token}` },
+            });
+            if (finalEventsResponse.ok) {
+              const finalEventsData = await finalEventsResponse.json();
+              const finalEvents = Array.isArray(finalEventsData) ? finalEventsData : (finalEventsData.events || []);
+              setSimResult(prev => prev ? { ...prev, events: finalEvents, totalEvents: finalEvents.length } : prev);
+            }
+          } catch (e) {
+            console.warn('Could not re-fetch collision events:', e);
+          }
+
           // Fetch full simulation data for agent playback
           try {
             const simResponse = await fetch(`/api/simulate/${simId}/status`, {
@@ -296,9 +329,17 @@ const Simulator = () => {
             });
             if (heatmapResponse.ok) {
               const heatData = await heatmapResponse.json();
-              if (heatData.success && heatData.objectHeatmap && Array.isArray(heatData.objectHeatmap)) {
-                setHeatmapData(heatData.objectHeatmap);
+              if (heatData.success && heatData.heatmap && Array.isArray(heatData.heatmap)) {
+                setHeatmapData(heatData.heatmap);
                 setShowHeatmap(true); // Auto-show heatmap when data arrives
+                // Extract Room Safety Index from heatmap response
+                if (heatData.roomSafetyIndex) {
+                  setSimResult(prev => prev ? { ...prev, roomSafetyIndex: heatData.roomSafetyIndex } : prev);
+                }
+                // Extract Zone Analysis data
+                if (heatData.zoneAnalysis) {
+                  setZoneAnalysis(heatData.zoneAnalysis);
+                }
               }
             }
           } catch (e) {
@@ -523,8 +564,142 @@ const Simulator = () => {
               heatmapData={heatmapData}
               showHeatmap={showHeatmap}
               liveAgentPositions={liveAgentPositions}
+              selectedAgentId={selectedAgentId}
             />
           </div>
+
+          {/* ── Agent Selector Bar ── */}
+          {simulationPlayback?.trajectories && simulationPlayback.trajectories.length > 0 && (
+            <div className="glass-panel p-4 mb-8">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-lg font-black text-slate-700">👶 Agent Inspector</h3>
+                {selectedAgentId !== null && (
+                  <button
+                    onClick={() => setSelectedAgentId(null)}
+                    className="text-xs px-3 py-1 rounded-full bg-gray-200 hover:bg-gray-300 text-gray-600 font-bold transition-colors"
+                  >
+                    Show All Agents
+                  </button>
+                )}
+              </div>
+              <div className="flex gap-2 overflow-x-auto pb-2" style={{ scrollbarWidth: 'thin' }}>
+                {simulationPlayback.trajectories.map((traj: any, i: number) => {
+                  const agentColors = ['#00bcd4','#4caf50','#ff9800','#e91e63','#9c27b0','#2196f3','#cddc39','#ff5722','#00e676','#f44336'];
+                  const color = agentColors[i % agentColors.length];
+                  const isSelected = selectedAgentId === (traj.agentId ?? i);
+                  const collisions = Array.isArray(traj.collisions) ? traj.collisions.length : (traj.collisions ?? 0);
+                  const distance = traj.finalState?.totalDistance ?? 0;
+                  return (
+                    <button
+                      key={traj.agentId ?? i}
+                      onClick={() => setSelectedAgentId(isSelected ? null : (traj.agentId ?? i))}
+                      className={`flex-shrink-0 flex items-center gap-2 px-4 py-2 rounded-xl border-2 transition-all duration-200 cursor-pointer ${
+                        isSelected
+                          ? 'border-pink-400 bg-pink-50 shadow-lg scale-105'
+                          : selectedAgentId !== null
+                          ? 'border-gray-200 bg-gray-50 opacity-50 hover:opacity-80'
+                          : 'border-gray-200 bg-white hover:border-pink-300 hover:bg-pink-50'
+                      }`}
+                    >
+                      <div className="w-3 h-3 rounded-full flex-shrink-0" style={{ backgroundColor: color }} />
+                      <span className="font-bold text-sm text-slate-700">Agent {traj.agentId ?? i}</span>
+                      {collisions > 0 && (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-red-100 text-red-600 font-bold">
+                          {collisions} 💥
+                        </span>
+                      )}
+                      <span className="text-[10px] text-gray-400">{distance.toFixed(1)}m</span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Agent Detail Panel */}
+              {selectedAgentId !== null && (() => {
+                const traj = simulationPlayback.trajectories.find((t: any) => (t.agentId ?? 0) === selectedAgentId);
+                if (!traj) return null;
+                const fs = traj.finalState || {};
+                const agentColors = ['#00bcd4','#4caf50','#ff9800','#e91e63','#9c27b0','#2196f3','#cddc39','#ff5722','#00e676','#f44336'];
+                const color = agentColors[(traj.agentId ?? 0) % agentColors.length];
+                // Count this agent's non-safe events from simResult
+                const agentEvents = simResult?.events?.filter(e => e.agentId === selectedAgentId) || [];
+                const nonSafeEvents = agentEvents.filter(e => (e.injury?.riskTier || 'safe').toLowerCase() !== 'safe');
+
+                // Age group properties lookup
+                const ageGroupNames: Record<string, {label: string; height: string; speed: string; capabilities: string; attracted: string}> = {
+                  infant:     { label: 'Infant (0-1y)',     height: '0.45m', speed: '0.1-0.3 m/s (crawl)',    capabilities: 'Crawl, Roll',                   attracted: 'Bright lights, Faces, Rattles' },
+                  toddler:    { label: 'Toddler (1-3y)',    height: '0.80m', speed: '0.3-1.0 m/s (walk)',     capabilities: 'Walk, Crawl, Climb (low)',       attracted: 'Colorful objects, Doors, Stairs' },
+                  preschool:  { label: 'Preschool (3-5y)',  height: '1.00m', speed: '0.5-1.5 m/s (walk/run)', capabilities: 'Walk, Run, Climb, Jump',         attracted: 'Toys, Furniture edges, Windows' },
+                  school_age: { label: 'School Age (5-8y)', height: '1.20m', speed: '0.8-2.5 m/s (run)',      capabilities: 'Walk, Run, Sprint, Climb, Jump', attracted: 'Electronics, High surfaces, Doors' },
+                  preteen:    { label: 'Pre-teen (8-12y)',  height: '1.45m', speed: '1.0-3.0 m/s (sprint)',    capabilities: 'All movement types',              attracted: 'High places, Heavy objects' },
+                };
+                const ageId = traj.ageGroupId || simulationPlayback.config?.ageGroupId || 'toddler';
+                const ageMeta = ageGroupNames[ageId] || ageGroupNames.toddler;
+
+                return (
+                  <div className="mt-4 p-4 rounded-2xl border-2 border-pink-200 bg-gradient-to-br from-white to-pink-50">
+                    <div className="flex items-center gap-3 mb-3">
+                      <div className="w-5 h-5 rounded-full" style={{ backgroundColor: color }} />
+                      <h4 className="font-black text-lg text-slate-700">Agent {selectedAgentId} — {ageMeta.label}</h4>
+                    </div>
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+                      <div className="bg-white rounded-xl p-3 border border-gray-100">
+                        <div className="text-xs text-gray-400 font-bold">Height</div>
+                        <div className="font-black text-slate-700">{ageMeta.height}</div>
+                      </div>
+                      <div className="bg-white rounded-xl p-3 border border-gray-100">
+                        <div className="text-xs text-gray-400 font-bold">Speed Range</div>
+                        <div className="font-black text-slate-700 text-sm">{ageMeta.speed}</div>
+                      </div>
+                      <div className="bg-white rounded-xl p-3 border border-gray-100">
+                        <div className="text-xs text-gray-400 font-bold">Distance</div>
+                        <div className="font-black text-blue-500">{(fs.totalDistance ?? 0).toFixed(1)}m</div>
+                      </div>
+                      <div className="bg-white rounded-xl p-3 border border-gray-100">
+                        <div className="text-xs text-gray-400 font-bold">Fatigue</div>
+                        <div className="font-black text-orange-500">{((fs.fatigue ?? 0) * 100).toFixed(0)}%</div>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3 mb-4">
+                      <div className="bg-white rounded-xl p-3 border border-gray-100">
+                        <div className="text-xs text-gray-400 font-bold">Capabilities</div>
+                        <div className="text-sm text-slate-600">{ageMeta.capabilities}</div>
+                      </div>
+                      <div className="bg-white rounded-xl p-3 border border-gray-100">
+                        <div className="text-xs text-gray-400 font-bold">Attracted To</div>
+                        <div className="text-sm text-slate-600">{ageMeta.attracted}</div>
+                      </div>
+                    </div>
+                    {nonSafeEvents.length > 0 && (
+                      <div>
+                        <div className="text-xs font-bold text-gray-400 mb-2">⚠️ Risk Events ({nonSafeEvents.length})</div>
+                        <div className="space-y-1 max-h-32 overflow-y-auto">
+                          {nonSafeEvents.slice(0, 8).map((evt, idx) => {
+                            const rawName = evt.objectName || 'Unknown';
+                            const cleanName = rawName.replace(/[^\x20-\x7E]/g, '').trim() || `Object_${idx}`;
+                            const tier = (evt.injury?.riskTier || 'safe').toLowerCase();
+                            const tierColor = tier === 'critical' ? 'text-red-600' : tier === 'dangerous' ? 'text-orange-600' : tier === 'warning' ? 'text-yellow-600' : 'text-amber-500';
+                            return (
+                              <div key={idx} className="flex items-center gap-2 text-xs bg-gray-50 rounded-lg px-3 py-1.5">
+                                <span className="text-gray-400">{(evt.time ?? 0).toFixed(2)}s</span>
+                                <span className="font-bold text-slate-600">{cleanName}</span>
+                                <span className="font-bold text-slate-500">({evt.injury?.bodyPart})</span>
+                                <span className={`font-black ${tierColor}`}>{evt.injury?.riskTier}</span>
+                                <span className="text-gray-400">Score: {evt.injury?.injuryScore ?? 0}</span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+                    {nonSafeEvents.length === 0 && (
+                      <div className="text-sm text-green-600 font-bold">✅ No risk events for this agent</div>
+                    )}
+                  </div>
+                );
+              })()}
+            </div>
+          )}
 
           {/* --- Simulation Results --- */}
           {simResult && (
@@ -547,15 +722,7 @@ const Simulator = () => {
                 </div>
               </div>
 
-              {/* Export Button */}
-              {simResult.status === 'complete' && (
-                <button
-                  onClick={exportToExcel}
-                  className="w-full px-6 py-4 bg-gradient-to-r from-green-400 to-emerald-500 hover:from-green-500 hover:to-emerald-600 text-white font-black rounded-2xl shadow-lg transition-all"
-                >
-                  📊 Export to CSV/Excel
-                </button>
-              )}
+
 
               {/* Collision Events Table */}
               {simResult.events.length > 0 && (
@@ -566,16 +733,26 @@ const Simulator = () => {
                       <thead>
                         <tr className="border-b-2 border-pink-200">
                           <th className="text-left py-2 px-4 font-black text-gray-700">Time</th>
-                          <th className="text-left py-2 px-4 font-black text-gray-700">Agent → Object</th>
+                          <th className="text-left py-2 px-4 font-black text-gray-700">Agent</th>
+                          <th className="text-left py-2 px-4 font-black text-gray-700">Object</th>
                           <th className="text-left py-2 px-4 font-black text-gray-700">Position</th>
                           <th className="text-left py-2 px-4 font-black text-gray-700">Impact</th>
                           <th className="text-left py-2 px-4 font-black text-gray-700">Risk</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {simResult.events.slice(0, 20).map((evt, idx) => {
-                          if (!evt) return null; // Safety check for undefined events
-                          const riskTierRaw = evt.injury?.riskTier || 'safe';
+                        {simResult.events
+                          .filter((evt) => !!evt)
+                          .sort((a, b) => {
+                            // Sort by severity: critical > dangerous > warning > watch > safe
+                            const tierOrder: Record<string, number> = { critical: 0, dangerous: 1, warning: 2, watch: 3, safe: 4 };
+                            const aTier = (a.injury?.riskTier || 'safe').toLowerCase();
+                            const bTier = (b.injury?.riskTier || 'safe').toLowerCase();
+                            return (tierOrder[aTier] ?? 5) - (tierOrder[bTier] ?? 5);
+                          })
+                          .slice(0, 30)
+                          .map((evt, idx) => {
+                          const riskTierRaw = evt.injury?.riskTier || 'Safe';
                           const riskTier = riskTierRaw.toLowerCase();
                           const gForceTier = evt.injury?.gForceTier || 'Observe';
                           const riskColor = riskTier === 'critical'
@@ -586,17 +763,21 @@ const Simulator = () => {
                             ? 'bg-yellow-200 text-yellow-800 border border-yellow-300'
                             : riskTier === 'watch'
                             ? 'bg-amber-100 text-amber-700 border border-amber-200'
-                            : 'bg-green-200 text-green-700 border border-green-300';
+                            : 'bg-green-100 text-green-700 border border-green-200';
                           const gForceIcon = gForceTier === 'Serious Injury' ? '🚨' : gForceTier === 'Soft Injury' ? '⚠️' : '👀';
                           const gForceColor = gForceTier === 'Serious Injury'
                             ? 'text-red-600'
                             : gForceTier === 'Soft Injury'
                             ? 'text-orange-600'
                             : 'text-green-600';
+                          // Clean object name: replace unreadable characters with readable fallback
+                          const rawName = evt.objectName || evt.objectId || 'Unknown';
+                          const cleanObjectName = rawName.replace(/[^\x20-\x7E]/g, '').trim() || `Object_${idx}`;
                           return (
                           <tr key={idx} className="border-b border-pink-100 hover:bg-pink-50">
                             <td className="py-3 px-4">{(evt.time ?? 0).toFixed(2)}s</td>
-                            <td className="py-3 px-4 font-bold">Agent {evt.agentId} → {evt.objectName || evt.objectId}</td>
+                            <td className="py-3 px-4 font-bold">Agent {evt.agentId}</td>
+                            <td className="py-3 px-4 font-medium text-slate-600">{cleanObjectName}</td>
                             <td className="py-3 px-4 text-xs font-mono">
                               ({evt.position?.[0]?.toFixed(1) ?? 0}, {evt.position?.[1]?.toFixed(1) ?? 0}, {evt.position?.[2]?.toFixed(1) ?? 0})
                             </td>
@@ -620,11 +801,17 @@ const Simulator = () => {
                       </tbody>
                     </table>
                   </div>
-                  {simResult.events.length > 20 && (
-                    <p className="text-gray-500 mt-4 font-bold">
-                      Showing 20 of {simResult.events.length} events (export to see all)
-                    </p>
-                  )}
+                  {(() => {
+                    const total = simResult.events.filter(e => !!e).length;
+                    const nonSafeCount = simResult.events.filter(e => e && (e.injury?.riskTier || 'safe').toLowerCase() !== 'safe').length;
+                    return (
+                      <p className="text-gray-400 mt-4 text-sm">
+                        Showing {Math.min(total, 30)} of {total} events
+                        {nonSafeCount > 0 && <span className="font-bold text-orange-500 ml-1">({nonSafeCount} elevated risk)</span>}
+                        {nonSafeCount === 0 && <span className="text-green-500 ml-1">(all events safe)</span>}
+                      </p>
+                    );
+                  })()}
                 </div>
               )}
 
@@ -638,22 +825,90 @@ const Simulator = () => {
             </div>
           )}
 
-          {/* Heatmap Controls & Legend */}
+          {/* ── RESULTS DASHBOARD ────────────────────────────────────── */}
+      {simResult && (
+        <div className="bg-white rounded-2xl shadow-xl overflow-hidden animate-fade-in-up">
+          <div className="bg-gradient-to-r from-pink-500 to-rose-500 p-4 flex justify-between items-center text-white">
+            <h2 className="text-xl font-bold flex items-center gap-2">
+              <span className="text-2xl">📊</span> Simulation Report
+            </h2>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShowHeatmap(!showHeatmap)}
+                className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${
+                  showHeatmap ? 'bg-white text-pink-600 shadow-lg' : 'bg-white/20 hover:bg-white/30'
+                }`}
+              >
+                {showHeatmap ? 'Hide Heatmap' : 'Show Heatmap'}
+              </button>
+              <button
+                onClick={exportToExcel}
+                className="px-4 py-2 bg-white/20 hover:bg-white/30 rounded-lg text-sm font-bold backdrop-blur-sm"
+              >
+                📊 Export CSV
+              </button>
+              <button
+                onClick={() => {
+                  if (simResult && simResult.roomSafetyIndex) {
+                    generateSafetyReport({
+                      id: simResult.id,
+                      roomSafetyIndex: simResult.roomSafetyIndex,
+                      heatmap: heatmapData || [],
+                      config: { ageGroup, duration },
+                      stats: { totalEvents: simResult.totalEvents }
+                    });
+                  }
+                }}
+                className="px-4 py-2 bg-white/20 hover:bg-white/30 rounded-lg text-sm font-bold backdrop-blur-sm"
+              >
+                📄 Export PDF
+              </button>
+            </div>
+          </div>
+
+          <div className="p-6 grid grid-cols-1 md:grid-cols-4 gap-6">
+            {/* RSI Score Card */}
+            <div className="bg-slate-50 rounded-xl p-5 border border-slate-200 relative overflow-hidden">
+              <div className="absolute top-0 right-0 p-4 opacity-10 text-6xl">🛡️</div>
+              <h3 className="text-slate-500 text-sm font-bold uppercase tracking-wider mb-2">Room Safety Grade</h3>
+              <div className="flex items-baseline gap-2">
+                <span className={`text-5xl font-black ${
+                  simResult.roomSafetyIndex?.grade === 'S' || simResult.roomSafetyIndex?.grade === 'A' ? 'text-green-500' :
+                  simResult.roomSafetyIndex?.grade === 'B' ? 'text-yellow-500' :
+                  'text-red-500'
+                }`}>
+                  {simResult.roomSafetyIndex?.grade || '-'}
+                </span>
+                <span className="text-2xl font-bold text-slate-400">/ {simResult.roomSafetyIndex?.score ?? 0}</span>
+              </div>
+              <div className="mt-4 space-y-1">
+                <div className="flex justify-between text-xs text-slate-600">
+                  <span>Critical Incidents:</span>
+                  <span className="font-bold text-red-500">{simResult.roomSafetyIndex?.breakdown?.critical ?? 0}</span>
+                </div>
+                <div className="flex justify-between text-xs text-slate-600">
+                  <span>Serious Injuries:</span>
+                  <span className="font-bold text-orange-500">{simResult.roomSafetyIndex?.breakdown?.serious ?? 0}</span>
+                </div>
+              </div>
+            </div>
+
+
+
+            {/* Total Events */}
+            <div className="bg-pink-50 rounded-xl p-5 border border-pink-100">
+              <h3 className="text-pink-400 text-sm font-bold uppercase tracking-wider mb-1">Total Incidents</h3>
+              <div className="text-3xl font-black text-pink-600">{simResult.events.length}</div>
+              <div className="text-xs text-pink-400 mt-2">Collision events recorded</div>
+            </div>
+          </div>
+        </div>
+      )}
+
+          {/* Heatmap Legend (no duplicate toggle — use the one in the Report header) */}
           {simResult && simResult.status === 'complete' && heatmapData && heatmapData.length > 0 && (
             <div className="glass-panel p-8">
-              <div className="flex items-center justify-between mb-6">
-                <h3 className="text-2xl font-black text-slate-700">🗺️ 3D Danger Heatmap</h3>
-                <button
-                  onClick={() => setShowHeatmap(!showHeatmap)}
-                  className={`px-6 py-3 rounded-2xl font-black text-sm transition-all shadow-lg ${
-                    showHeatmap
-                      ? 'bg-gradient-to-r from-red-400 to-orange-500 text-white'
-                      : 'bg-gray-200 text-gray-600 hover:bg-gray-300'
-                  }`}
-                >
-                  {showHeatmap ? '🔥 Heatmap ON' : '⭕ Heatmap OFF'}
-                </button>
-              </div>
+              <h3 className="text-2xl font-black text-slate-700 mb-6">🗺️ 3D Danger Heatmap</h3>
 
               {/* Color Legend */}
               <div className="flex items-center gap-6 mb-6 bg-white/60 rounded-xl p-4">
@@ -775,6 +1030,66 @@ const Simulator = () => {
                     );
                   })}
               </div>
+            </div>
+          )}
+          {/* ── Zone Analysis Panel ── */}
+          {simResult && simResult.status === 'complete' && zoneAnalysis && (
+            <div className="glass-panel p-8">
+              <h3 className="text-2xl font-black text-slate-700 mb-6">📍 Zone Analysis</h3>
+              <p className="text-sm text-gray-500 mb-4">Room divided into {zoneAnalysis.summary?.gridSize || 8}×{zoneAnalysis.summary?.gridSize || 8} grid. Each cell classified by collision severity.</p>
+
+              {/* Zone Summary Badges */}
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+                <div className="rounded-xl bg-green-50 border-2 border-green-200 p-4 text-center">
+                  <div className="text-3xl font-black text-green-600">{zoneAnalysis.summary?.safe || 0}</div>
+                  <div className="text-xs font-bold text-green-700 mt-1">✅ Safe Zones</div>
+                </div>
+                <div className="rounded-xl bg-yellow-50 border-2 border-yellow-200 p-4 text-center">
+                  <div className="text-3xl font-black text-yellow-600">{zoneAnalysis.summary?.caution || 0}</div>
+                  <div className="text-xs font-bold text-yellow-700 mt-1">👀 Caution Zones</div>
+                </div>
+                <div className="rounded-xl bg-orange-50 border-2 border-orange-200 p-4 text-center">
+                  <div className="text-3xl font-black text-orange-600">{zoneAnalysis.summary?.hazard || 0}</div>
+                  <div className="text-xs font-bold text-orange-700 mt-1">⚠️ Hazard Zones</div>
+                </div>
+                <div className="rounded-xl bg-red-50 border-2 border-red-200 p-4 text-center">
+                  <div className="text-3xl font-black text-red-600">{zoneAnalysis.summary?.danger || 0}</div>
+                  <div className="text-xs font-bold text-red-700 mt-1">🚨 Danger Zones</div>
+                </div>
+              </div>
+
+              {/* Danger Zone Details */}
+              {zoneAnalysis.zones && zoneAnalysis.zones.filter((z: any) => z.classification === 'danger' || z.classification === 'hazard').length > 0 && (
+                <div className="space-y-3">
+                  <h4 className="text-sm font-bold text-gray-700 uppercase tracking-wider">Hazard & Danger Zone Details</h4>
+                  {zoneAnalysis.zones
+                    .filter((z: any) => z.classification === 'danger' || z.classification === 'hazard')
+                    .sort((a: any, b: any) => b.avgScore - a.avgScore)
+                    .slice(0, 8)
+                    .map((zone: any, idx: number) => (
+                      <div key={idx} className={`flex items-center justify-between rounded-xl p-4 border-2 ${
+                        zone.classification === 'danger'
+                          ? 'bg-red-50/80 border-red-200'
+                          : 'bg-orange-50/80 border-orange-200'
+                      }`}>
+                        <div>
+                          <span className={`text-sm font-black ${zone.classification === 'danger' ? 'text-red-700' : 'text-orange-700'}`}>
+                            {zone.classification === 'danger' ? '🚨' : '⚠️'} Grid [{zone.row},{zone.col}]
+                          </span>
+                          <p className="text-xs text-gray-500 mt-1">
+                            {zone.events} collision{zone.events !== 1 ? 's' : ''} • Avg score: {zone.avgScore} • Max: {zone.maxScore}
+                          </p>
+                          {zone.objects && zone.objects.length > 0 && (
+                            <p className="text-xs text-gray-400 mt-0.5">Objects: {zone.objects.slice(0, 3).join(', ')}{zone.objects.length > 3 ? ` +${zone.objects.length - 3} more` : ''}</p>
+                          )}
+                        </div>
+                        <div className={`text-lg font-black ${zone.classification === 'danger' ? 'text-red-600' : 'text-orange-600'}`}>
+                          {zone.avgScore}
+                        </div>
+                      </div>
+                    ))}
+                </div>
+              )}
             </div>
           )}
         </div>

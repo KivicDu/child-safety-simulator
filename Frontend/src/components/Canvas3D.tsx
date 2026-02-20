@@ -1,5 +1,6 @@
 import React, { useRef, useEffect, useState } from 'react';
 import * as THREE from 'three';
+import { DecalGeometry } from 'three/examples/jsm/Addons.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 
@@ -19,25 +20,33 @@ interface SceneData {
 
 interface TrajectoryData {
   agentId: number;
+  ageGroupId?: string;
   positions: number[][];
+  actionLog?: { s: string; a: string; v: number }[];
+  collisions?: number[][];
+  finalState?: any;
 }
 
 interface SimulationPlayback {
   trajectories?: TrajectoryData[];
-  config?: { fps?: number; duration?: number };
+  config?: { fps?: number; duration?: number; ageGroupId?: string };
+}
+
+interface HeatmapCollision {
+  position: number[];
+  normal: number[];
+  score?: number;
+  gForceTier?: string;
+  riskTier?: string;
 }
 
 interface HeatmapObject {
   objectId: string;
   objectName: string;
-  boundingBox?: { min: number[]; max: number[] };
-  totalHits: number;
-  collisionPositions: number[][];
+  boundingBox?: any;
+  collisions?: HeatmapCollision[]; // New format
+  collisionPositions?: number[][]; // Legacy fallback
   maxInjuryScore: number;
-  avgInjuryScore: number;
-  maxGForce: number;
-  avgGForce: number;
-  worstGForceTier: string;
   primaryBodyPart: string;
   heatColor: number[];
   intensity: number;
@@ -57,6 +66,7 @@ interface Canvas3DProps {
   heatmapData?: HeatmapObject[] | null;
   showHeatmap?: boolean;
   liveAgentPositions?: LiveAgentPosition[] | null;
+  selectedAgentId?: number | null;
 }
 
 /* ── Component ───────────────────────────────────────────── */
@@ -67,6 +77,7 @@ const Canvas3D: React.FC<Canvas3DProps> = ({
   heatmapData,
   showHeatmap = false,
   liveAgentPositions,
+  selectedAgentId = null,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const internals = useRef<{
@@ -78,6 +89,9 @@ const Canvas3D: React.FC<Canvas3DProps> = ({
     agentMeshes: THREE.Mesh[];
     heatmapMeshes: THREE.Mesh[];
     liveAgentMeshes: THREE.Mesh[];
+    trailLines: THREE.Object3D[];
+    actionLabelSprites: THREE.Sprite[];
+    collisionHighlights: THREE.Mesh[];
     currentModel: THREE.Object3D | null;
     modelOffset: THREE.Vector3;
     bbHelpers: THREE.Object3D[];
@@ -149,6 +163,9 @@ const Canvas3D: React.FC<Canvas3DProps> = ({
       agentMeshes: [],
       heatmapMeshes: [],
       liveAgentMeshes: [],
+      trailLines: [],
+      actionLabelSprites: [],
+      collisionHighlights: [],
       currentModel: null,
       modelOffset: new THREE.Vector3(),
       bbHelpers: [],
@@ -351,36 +368,89 @@ const Canvas3D: React.FC<Canvas3DProps> = ({
     if (!internals.current) return;
     const ctx = internals.current;
 
-    // Remove old agents
+    // Remove old agents + trails + labels
     ctx.agentMeshes.forEach((m) => ctx.scene.remove(m));
     ctx.agentMeshes = [];
+    ctx.trailLines.forEach((l) => ctx.scene.remove(l));
+    ctx.trailLines = [];
+    (ctx.actionLabelSprites || []).forEach((s) => ctx.scene.remove(s));
+    ctx.actionLabelSprites = [];
     ctx.isPlaying = false;
 
     if (!simulationPlayback?.trajectories) return;
 
-    const agentGeo = new THREE.CapsuleGeometry(0.15, 0.6, 4, 8);
-    const baseMat = new THREE.MeshPhongMaterial({
-      color: 0x00ff88,
-      transparent: true,
-      opacity: 0.85,
-      emissive: 0x003311,
-    });
+    // Age-group-specific capsule dimensions (radius, bodyLength)
+    const ageSizes: Record<string, [number, number]> = {
+      infant:     [0.10, 0.25],
+      toddler:   [0.15, 0.45],
+      preschool: [0.17, 0.55],
+      school_age:[0.19, 0.65],
+      preteen:   [0.22, 0.80],
+    };
+    const defaultAgeId = simulationPlayback.config?.ageGroupId || 'toddler';
 
-    simulationPlayback.trajectories.forEach((traj) => {
-      // Safety check: ensure trajectory data is valid
+    const agentColors = [
+      0x00bcd4, 0x4caf50, 0xff9800, 0xe91e63, 0x9c27b0,
+      0x2196f3, 0xcddc39, 0xff5722, 0x00e676, 0xf44336,
+    ];
+    const offset = ctx.modelOffset || new THREE.Vector3(0, 0, 0);
+    const ox = typeof offset.x === 'number' ? offset.x : 0;
+    const oy = typeof offset.y === 'number' ? offset.y : 0;
+    const oz = typeof offset.z === 'number' ? offset.z : 0;
+
+    simulationPlayback.trajectories.forEach((traj, i) => {
       if (!traj || !Array.isArray(traj.positions) || traj.positions.length === 0) {
         console.warn('[Canvas3D] Skipping invalid trajectory:', traj);
         return;
       }
-      const mesh = new THREE.Mesh(agentGeo, baseMat.clone());
+
+      // Per-agent capsule size based on age group
+      const ageId = (traj as any).ageGroupId || defaultAgeId;
+      const [capRadius, capHeight] = ageSizes[ageId] || ageSizes.toddler;
+      const agentGeo = new THREE.CapsuleGeometry(capRadius, capHeight, 4, 8);
+
+      // Distinct color per agent
+      const color = agentColors[i % agentColors.length];
+      const mat = new THREE.MeshPhongMaterial({
+        color,
+        transparent: true,
+        opacity: 0.9,
+        emissive: color,
+        emissiveIntensity: 0.35,
+      });
+      const mesh = new THREE.Mesh(agentGeo, mat);
       mesh.userData.trajectory = traj.positions;
-      mesh.userData.agentId = traj.agentId || 0;
+      mesh.userData.agentId = traj.agentId ?? i;
+      mesh.userData.actionLog = (traj as any).actionLog || [];
+      mesh.userData.ageGroupId = ageId;
+      mesh.castShadow = true;
       mesh.visible = false;
       ctx.scene.add(mesh);
       ctx.agentMeshes.push(mesh);
+
+      // Trajectory trail line (full path visualization)
+      const validPts = traj.positions.filter(
+        (p: any) => Array.isArray(p) && p.length >= 3 &&
+          typeof p[0] === 'number' && typeof p[1] === 'number' && typeof p[2] === 'number'
+      );
+      if (validPts.length >= 2) {
+        // Sample evenly to avoid too many points (max ~300)
+        const step = Math.max(1, Math.floor(validPts.length / 300));
+        const sampled = validPts.filter((_: any, idx: number) => idx % step === 0);
+        const points = sampled.map(
+          (p: number[]) => new THREE.Vector3(p[0] - ox, p[1] - oy + 0.05, p[2] - oz)
+        );
+        const lineGeo = new THREE.BufferGeometry().setFromPoints(points);
+        const lineMat = new THREE.LineBasicMaterial({
+          color, transparent: true, opacity: 0.5, linewidth: 2,
+        });
+        const line = new THREE.Line(lineGeo, lineMat);
+        ctx.scene.add(line);
+        ctx.trailLines.push(line);
+      }
     });
 
-    console.log(`[Canvas3D] Created ${ctx.agentMeshes.length} agent capsules`);
+    console.log(`[Canvas3D] Created ${ctx.agentMeshes.length} agent capsules + ${ctx.trailLines.length} trails`);
 
     // Auto-play
     ctx.isPlaying = true;
@@ -389,7 +459,84 @@ const Canvas3D: React.FC<Canvas3DProps> = ({
     ctx.agentMeshes.forEach((m) => (m.visible = true));
   }, [simulationPlayback]);
 
-  /* ── HEATMAP OVERLAYS ──────────────────────────────────── */
+  /* ── AGENT SELECTION (highlight one agent + trail) ───────── */
+  useEffect(() => {
+    if (!internals.current) return;
+    const ctx = internals.current;
+
+    ctx.agentMeshes.forEach((m) => {
+      const mat = m.material as THREE.MeshPhongMaterial;
+      if (selectedAgentId === null) {
+        // No selection: show all agents at full opacity
+        mat.opacity = 0.9;
+        m.visible = true;
+      } else {
+        // Dim non-selected agents, highlight selected
+        const isSelected = m.userData.agentId === selectedAgentId;
+        mat.opacity = isSelected ? 1.0 : 0.15;
+        m.visible = true;
+      }
+    });
+
+    ctx.trailLines.forEach((line, i) => {
+      const mat = (line as THREE.Line).material as THREE.LineBasicMaterial;
+      const agentMesh = ctx.agentMeshes[i];
+      if (selectedAgentId === null) {
+        mat.opacity = 0.5;
+        line.visible = true;
+      } else {
+        const isSelected = agentMesh?.userData.agentId === selectedAgentId;
+        mat.opacity = isSelected ? 0.9 : 0.08;
+        line.visible = true;
+      }
+    });
+
+    // Clean up action label sprites for non-selected/deselected agents
+    ctx.actionLabelSprites = (ctx.actionLabelSprites || []).filter((s) => {
+      if (selectedAgentId === null || s.userData?.forAgent !== selectedAgentId) {
+        ctx.scene.remove(s);
+        return false;
+      }
+      return true;
+    });
+
+    // Clean up old collision highlights
+    (ctx.collisionHighlights || []).forEach((m) => {
+      ctx.scene.remove(m);
+      if (m.geometry) m.geometry.dispose();
+      if (m.material) (m.material as THREE.Material).dispose();
+    });
+    ctx.collisionHighlights = [];
+
+    // Render collision highlights for the selected agent
+    if (selectedAgentId !== null && simulationPlayback?.trajectories) {
+      const traj = simulationPlayback.trajectories.find(
+        (t) => (t.agentId ?? 0) === selectedAgentId
+      );
+      const collisionPositions = traj?.collisions;
+      if (Array.isArray(collisionPositions) && collisionPositions.length > 0) {
+        const offset = ctx.modelOffset || new THREE.Vector3(0, 0, 0);
+        const ox = typeof offset.x === 'number' ? offset.x : 0;
+        const oy = typeof offset.y === 'number' ? offset.y : 0;
+        const oz = typeof offset.z === 'number' ? offset.z : 0;
+
+        const sphereGeo = new THREE.SphereGeometry(0.12, 12, 12);
+        const sphereMat = new THREE.MeshBasicMaterial({
+          color: 0xff2222,
+          transparent: true,
+          opacity: 0.8,
+        });
+
+        collisionPositions.forEach((pos) => {
+          if (!Array.isArray(pos) || pos.length < 3) return;
+          const sphere = new THREE.Mesh(sphereGeo, sphereMat.clone());
+          sphere.position.set(pos[0] - ox, pos[1] - oy, pos[2] - oz);
+          ctx.scene.add(sphere);
+          ctx.collisionHighlights.push(sphere);
+        });
+      }
+    }
+  }, [selectedAgentId, simulationPlayback]);
   useEffect(() => {
     if (!internals.current) return;
     const ctx = internals.current;
@@ -397,102 +544,231 @@ const Canvas3D: React.FC<Canvas3DProps> = ({
     // Remove old heatmap meshes
     ctx.heatmapMeshes.forEach((m) => {
       ctx.scene.remove(m);
-      m.geometry.dispose();
-      (m.material as THREE.Material).dispose();
+      if (m.geometry) m.geometry.dispose();
+      if (m.material) {
+        if (Array.isArray(m.material)) m.material.forEach((mat) => mat.dispose());
+        else (m.material as THREE.Material).dispose();
+      }
     });
     ctx.heatmapMeshes = [];
+    if ((ctx as any).heatmapDecals) {
+      (ctx as any).heatmapDecals.forEach((d: THREE.Mesh) => {
+        ctx.scene.remove(d);
+        if (d.geometry) d.geometry.dispose();
+        if (d.material) (d.material as THREE.Material).dispose();
+      });
+      (ctx as any).heatmapDecals = [];
+    }
+
+    // Toggle model bounding boxes: hide when heatmap is active for clarity
+    ctx.bbHelpers.forEach((h) => { h.visible = !showHeatmap; });
 
     if (!showHeatmap || !heatmapData || heatmapData.length === 0) return;
-    if (!ctx.currentModel) return;
+    if (!ctx.currentModel && ctx.scene.children.length === 0) return;
 
     const off = ctx.modelOffset || new THREE.Vector3(0, 0, 0);
-    // Defensive: ensure off has x, y, z properties
     const offX = typeof off.x === 'number' ? off.x : 0;
     const offY = typeof off.y === 'number' ? off.y : 0;
     const offZ = typeof off.z === 'number' ? off.z : 0;
 
-    // 🔥 NEW: Render ALL heatmap objects as collision-point spheres
-    // This is clearer than bounding boxes — shows EXACTLY where danger is
+    console.log(`[Canvas3D] Generating heatmap for ${heatmapData.length} objects...`);
+
     heatmapData.forEach((obj) => {
-      if (!obj || !obj.collisionPositions || obj.collisionPositions.length === 0) return;
-      
-      // Safety: ensure required properties exist
-      if (!obj.heatColor || !Array.isArray(obj.heatColor) || obj.heatColor.length < 3) {
-        console.warn('[Canvas3D] Heatmap object missing or invalid heatColor:', obj);
-        return;
-      }
-      if (typeof obj.intensity !== 'number' || obj.intensity < 0 || obj.intensity > 1) {
-        console.warn('[Canvas3D] Heatmap object has invalid intensity:', obj.intensity);
-        return;
-      }
+      if (!obj) return;
 
-      obj.collisionPositions.forEach((pos) => {
-        // Extra safety: validate pos is array with 3 elements
-        if (!pos || !Array.isArray(pos) || pos.length < 3 || typeof pos[0] !== 'number' || typeof pos[1] !== 'number' || typeof pos[2] !== 'number') {
-          console.warn('[Canvas3D] Skipping invalid position:', pos);
-          return;
-        }
+      // Parse heat color (backend sends [r,g,b] as 0-1 floats)
+      const r = obj.heatColor?.[0] ?? 1;
+      const g = obj.heatColor?.[1] ?? 0;
+      const b = obj.heatColor?.[2] ?? 0;
+      const heatColor = new THREE.Color(r, g, b);
 
-        // Sphere size scales with intensity — high danger = larger sphere
-        const radius = 0.15 + obj.intensity * 0.35;
-        const sphereGeo = new THREE.SphereGeometry(radius, 16, 16);
-        const sphereMat = new THREE.MeshBasicMaterial({
-          color: new THREE.Color(
-            obj.heatColor?.[0] ?? 0,
-            obj.heatColor?.[1] ?? 1,
-            obj.heatColor?.[2] ?? 0
-          ),
-          transparent: true,
-          opacity: 0.4 + obj.intensity * 0.5,
-          depthWrite: false,
+      // ── Object Bounding-Box Highlight ──
+      if (obj.boundingBox) {
+        const bb = obj.boundingBox;
+        const min = bb.min || [0, 0, 0];
+        const max = bb.max || [0, 0, 0];
+        const boxMin = new THREE.Vector3(min[0] - offX, min[1] - offY, min[2] - offZ);
+        const boxMax = new THREE.Vector3(max[0] - offX, max[1] - offY, max[2] - offZ);
+        const box3 = new THREE.Box3(boxMin, boxMax);
+        const boxCenter = box3.getCenter(new THREE.Vector3());
+        const boxSize = box3.getSize(new THREE.Vector3());
+
+        // Translucent filled box
+        const boxGeo = new THREE.BoxGeometry(boxSize.x, boxSize.y, boxSize.z);
+        const boxMat = new THREE.MeshBasicMaterial({
+          color: heatColor, transparent: true,
+          opacity: 0.12 + obj.intensity * 0.18,
+          depthWrite: false, side: THREE.DoubleSide,
         });
-        const sphere = new THREE.Mesh(sphereGeo, sphereMat);
-        sphere.position.set(pos[0] - offX, pos[1] - offY, pos[2] - offZ);
-        sphere.userData.baseOpacity = 0.4 + obj.intensity * 0.5;
-        sphere.userData.intensity = obj.intensity;
-        ctx.scene.add(sphere);
-        ctx.heatmapMeshes.push(sphere);
+        const boxMesh = new THREE.Mesh(boxGeo, boxMat);
+        boxMesh.position.copy(boxCenter);
+        boxMesh.userData.intensity = obj.intensity;
+        boxMesh.userData.baseOpacity = boxMat.opacity;
+        ctx.scene.add(boxMesh);
+        ctx.heatmapMeshes.push(boxMesh);
+      }
 
-        // Add a ring/disc around each sphere for ground-level visibility
-        if (obj.intensity >= 0.5 && obj.heatColor && Array.isArray(obj.heatColor)) {
-          const ringGeo = new THREE.RingGeometry(radius * 0.5, radius * 2, 24);
-          const ringMat = new THREE.MeshBasicMaterial({
-            color: new THREE.Color(
-              obj.heatColor?.[0] ?? 0,
-              obj.heatColor?.[1] ?? 1,
-              obj.heatColor?.[2] ?? 0
-            ),
-            transparent: true,
-            opacity: 0.2 + obj.intensity * 0.2,
-            side: THREE.DoubleSide,
-            depthWrite: false,
-          });
-          const ring = new THREE.Mesh(ringGeo, ringMat);
-          ring.position.set(pos[0] - offX, pos[1] - offY, pos[2] - offZ);
-          ring.rotation.x = -Math.PI / 2; // Lay flat
-          ring.userData.baseOpacity = 0.2 + obj.intensity * 0.2;
-          ring.userData.intensity = obj.intensity;
-          ctx.scene.add(ring);
-          ctx.heatmapMeshes.push(ring);
+      // ── Collision Point Spheres (Severity-Based Coloring) ──
+      const collisions = obj.collisions || [];
+      const legacyPositions = obj.collisionPositions || [];
+
+      // Determine color and blinking from per-collision severity
+      const getSeverityStyle = (score: number, riskTier?: string) => {
+        const isSevere = score >= 50 || riskTier === 'critical' || riskTier === 'dangerous';
+        const isWarning = score >= 25 || riskTier === 'warning';
+        const isCaution = score >= 1 || riskTier === 'watch';
+
+        if (isSevere) return { color: new THREE.Color(1, 0.1, 0.1), blink: true, label: 'severe' };
+        if (isWarning) return { color: new THREE.Color(1, 0.5, 0), blink: false, label: 'warning' };
+        if (isCaution) return { color: new THREE.Color(1, 0.85, 0), blink: false, label: 'caution' };
+        return { color: new THREE.Color(0.2, 0.9, 0.2), blink: false, label: 'safe' };
+      };
+
+      const createHeatSphere = (pos: number[], score = 0, riskTier?: string) => {
+        if (!pos || pos.length < 3) return;
+        let px = pos[0] - offX, py = pos[1] - offY, pz = pos[2] - offZ;
+
+        // Snap to object bounding box surface (so markers sit ON the object)
+        if (obj.boundingBox) {
+          const bMin = obj.boundingBox.min || [0,0,0];
+          const bMax = obj.boundingBox.max || [0,0,0];
+          const mnX = bMin[0] - offX, mnY = bMin[1] - offY, mnZ = bMin[2] - offZ;
+          const mxX = bMax[0] - offX, mxY = bMax[1] - offY, mxZ = bMax[2] - offZ;
+
+          // Clamp inside the box first
+          const cx = Math.max(mnX, Math.min(mxX, px));
+          const cy = Math.max(mnY, Math.min(mxY, py));
+          const cz = Math.max(mnZ, Math.min(mxZ, pz));
+
+          // Push to nearest face of the bounding box (surface projection)
+          const dists = [
+            { axis: 'x', val: mnX, d: Math.abs(cx - mnX) },
+            { axis: 'x', val: mxX, d: Math.abs(cx - mxX) },
+            { axis: 'y', val: mnY, d: Math.abs(cy - mnY) },
+            { axis: 'y', val: mxY, d: Math.abs(cy - mxY) },
+            { axis: 'z', val: mnZ, d: Math.abs(cz - mnZ) },
+            { axis: 'z', val: mxZ, d: Math.abs(cz - mxZ) },
+          ];
+          dists.sort((a, b) => a.d - b.d);
+          const nearest = dists[0];
+          px = cx; py = cy; pz = cz;
+          if (nearest.axis === 'x') px = nearest.val;
+          else if (nearest.axis === 'y') py = nearest.val;
+          else pz = nearest.val;
         }
-      });
+
+        const position = new THREE.Vector3(px, py, pz);
+        const sev = getSeverityStyle(score, riskTier);
+
+        // Outer glow (large, transparent, backside-rendered for bloom effect)
+        const glowR = sev.blink ? 0.5 : 0.35;
+        const glowGeo = new THREE.SphereGeometry(glowR, 16, 16);
+        const glowMat = new THREE.MeshBasicMaterial({
+          color: sev.color, transparent: true,
+          opacity: sev.blink ? 0.3 : 0.2,
+          depthWrite: false, side: THREE.BackSide,
+        });
+        const glow = new THREE.Mesh(glowGeo, glowMat);
+        glow.position.copy(position);
+        glow.userData.intensity = obj.intensity;
+        glow.userData.baseOpacity = glowMat.opacity;
+        glow.userData.severe = sev.blink;
+        glow.userData.severityLabel = sev.label;
+        ctx.scene.add(glow);
+        ctx.heatmapMeshes.push(glow);
+
+        // Inner core (smaller, solid, emissive)
+        const coreR = sev.blink ? 0.2 : 0.14;
+        const coreGeo = new THREE.SphereGeometry(coreR, 12, 12);
+        const coreMat = new THREE.MeshStandardMaterial({
+          color: sev.color, emissive: sev.color,
+          emissiveIntensity: sev.blink ? 2.0 : 1.2,
+          transparent: true, opacity: 0.9, depthWrite: false,
+        });
+        const core = new THREE.Mesh(coreGeo, coreMat);
+        core.position.copy(position);
+        core.userData.intensity = obj.intensity;
+        core.userData.baseOpacity = 0.9;
+        core.userData.severe = sev.blink;
+        core.userData.severityLabel = sev.label;
+        ctx.scene.add(core);
+        ctx.heatmapMeshes.push(core);
+      };
+
+      collisions.forEach((c: any) => createHeatSphere(c.position, c.score ?? 0, c.riskTier));
+      legacyPositions.forEach((p: any) => createHeatSphere(p, 0));
+
+      // ── Decal bonus layer (silent skip if mesh not found) ──
+      let targetMesh: THREE.Mesh | null = null;
+      if (ctx.currentModel) {
+        ctx.currentModel.traverse((child) => {
+          if (child instanceof THREE.Mesh &&
+              (child.name === obj.objectName ||
+               child.userData.name === obj.objectName ||
+               (obj.objectId && child.name.includes(obj.objectId)))) {
+            targetMesh = child;
+          }
+        });
+      }
+      if (targetMesh) {
+        const cv = document.createElement('canvas');
+        cv.width = 64; cv.height = 64;
+        const cx = cv.getContext('2d');
+        if (cx) {
+          const grd = cx.createRadialGradient(32, 32, 0, 32, 32, 32);
+          grd.addColorStop(0, 'rgba(255,255,255,1)');
+          grd.addColorStop(0.5, 'rgba(255,255,255,0.6)');
+          grd.addColorStop(1, 'rgba(0,0,0,0)');
+          cx.fillStyle = grd;
+          cx.fillRect(0, 0, 64, 64);
+        }
+        const splatTex = new THREE.CanvasTexture(cv);
+        collisions.forEach((c: any) => {
+          if (!c.position || c.position.length < 3) return;
+          const p = new THREE.Vector3(c.position[0] - offX, c.position[1] - offY, c.position[2] - offZ);
+          const ori = new THREE.Euler();
+          if (c.normal?.length === 3) {
+            const n = new THREE.Vector3(c.normal[0], c.normal[1], c.normal[2]);
+            const rm = new THREE.Matrix4();
+            rm.lookAt(n, new THREE.Vector3(0,0,0), new THREE.Vector3(0,1,0));
+            ori.setFromRotationMatrix(rm);
+          }
+          try {
+            const dg = new DecalGeometry(targetMesh!, p, ori, new THREE.Vector3(0.5,0.5,0.5));
+            const dm = new THREE.MeshBasicMaterial({
+              map: splatTex, color: heatColor,
+              transparent: true, opacity: 0.75,
+              depthTest: true, depthWrite: false,
+              polygonOffset: true, polygonOffsetFactor: -4,
+            });
+            const decal = new THREE.Mesh(dg, dm);
+            ctx.scene.add(decal);
+            ctx.heatmapMeshes.push(decal);
+          } catch { /* skip failed decal */ }
+        });
+      }
     });
 
-    console.log(`[Canvas3D] Created ${ctx.heatmapMeshes.length} heatmap overlays (spheres at collision points)`);
+    console.log(`[Canvas3D] Created ${ctx.heatmapMeshes.length} heatmap elements`);
   }, [heatmapData, showHeatmap]);
 
-  /* ── Heatmap pulse animation ─────────────────────────── */
+  /* ── Heatmap pulse animation (severity-aware) ──────────── */
   useEffect(() => {
     if (!showHeatmap || !internals.current) return;
     const ctx = internals.current;
     let animId: number;
     const animate = () => {
       animId = requestAnimationFrame(animate);
-      const t = Date.now() * 0.003;
+      const t = Date.now() * 0.004; // ~4Hz blink rate
       ctx.heatmapMeshes.forEach((m) => {
-        if (m.userData.intensity >= 0.5) {
-          const pulse = 1 + Math.sin(t) * 0.15;
-          (m.material as THREE.MeshBasicMaterial).opacity = m.userData.baseOpacity * pulse;
+        if (m.userData.severe) {
+          // Severe: strong blink between 0.3 and 1.0 opacity
+          const blink = 0.5 + Math.sin(t) * 0.5;
+          const mat = m.material as any;
+          mat.opacity = m.userData.baseOpacity * blink;
+          if (mat.emissiveIntensity !== undefined) {
+            mat.emissiveIntensity = 1.0 + blink * 1.5;
+          }
         }
       });
     };
@@ -660,6 +936,69 @@ const Canvas3D: React.FC<Canvas3DProps> = ({
             pos[1] - offsetY,
             pos[2] - offsetZ,
           );
+
+          // ── Action label for selected agent ──
+          if (selectedAgentId !== null && mesh.userData.agentId === selectedAgentId) {
+            const actionLog = mesh.userData.actionLog;
+            if (Array.isArray(actionLog) && actionLog.length > 0) {
+              const logIdx = Math.min(Math.floor(progress * actionLog.length), actionLog.length - 1);
+              const entry = actionLog[logIdx];
+              if (entry) {
+                const actionIcons: Record<string, string> = {
+                  crawl: '🐛', walk: '🚶', run: '🏃', sprint: '💨', climb: '🧗',
+                  stumble: '⚠️', fall: '💥', idle: '😴', reach: '🤚', explore: '👀',
+                  interact: '🖐️', pull: '🔧', push: '💪', roll: '🔄',
+                };
+                const icon = actionIcons[entry.a] || '🔹';
+                const label = `${icon} ${entry.a}`;
+
+                // Create or update the label sprite
+                let sprite = ctx.actionLabelSprites.find(
+                  (s: any) => s.userData?.forAgent === selectedAgentId
+                );
+                if (!sprite) {
+                  // Create a canvas-based text sprite
+                  const cv = document.createElement('canvas');
+                  cv.width = 256; cv.height = 64;
+                  const c2 = cv.getContext('2d')!;
+                  c2.font = 'bold 28px Arial, sans-serif';
+                  c2.textAlign = 'center';
+                  c2.textBaseline = 'middle';
+                  const tex = new THREE.CanvasTexture(cv);
+                  tex.minFilter = THREE.LinearFilter;
+                  const spriteMat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false });
+                  sprite = new THREE.Sprite(spriteMat);
+                  sprite.scale.set(1.2, 0.3, 1);
+                  sprite.userData.forAgent = selectedAgentId;
+                  sprite.userData.canvas = cv;
+                  sprite.userData.texture = tex;
+                  ctx.scene.add(sprite);
+                  ctx.actionLabelSprites.push(sprite);
+                }
+
+                // Redraw the label text
+                const cv2 = sprite.userData.canvas as HTMLCanvasElement;
+                const c2 = cv2.getContext('2d')!;
+                c2.clearRect(0, 0, 256, 64);
+                c2.fillStyle = 'rgba(0,0,0,0.7)';
+                c2.roundRect(10, 8, 236, 48, 12);
+                c2.fill();
+                c2.fillStyle = '#ffffff';
+                c2.font = 'bold 26px Arial, sans-serif';
+                c2.textAlign = 'center';
+                c2.textBaseline = 'middle';
+                c2.fillText(label, 128, 32);
+                (sprite.userData.texture as THREE.CanvasTexture).needsUpdate = true;
+
+                sprite.position.set(
+                  mesh.position.x,
+                  mesh.position.y + 1.0,
+                  mesh.position.z,
+                );
+                sprite.visible = true;
+              }
+            }
+          }
         } catch (e) {
           console.warn('[Canvas3D] Error updating agent position:', e);
         }
