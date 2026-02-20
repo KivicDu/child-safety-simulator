@@ -7,6 +7,7 @@ import behaviorManager from '../services/behaviorManager.js';
 import injuryCalculator from '../services/injuryCalculator.js';
 import Agent from '../services/agent.js';
 import { getAllAgeGroups } from '../config/ageGroups.js';
+import { normalizeSceneToMeters } from '../utils/scaleNormalizer.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -37,6 +38,9 @@ export const batchSimulateAllAges = async (req, res) => {
 
     const parsedPath = path.join(PARSED_DIR, `${sceneId}.json`);
     const sceneData = JSON.parse(await fs.readFile(parsedPath, 'utf8'));
+
+    // Normalize scene coordinates to meters (handles GLB files in inches/cm/feet/mm)
+    normalizeSceneToMeters(sceneData);
 
     const ageGroups = getAllAgeGroups();
     const results = {};
@@ -192,6 +196,12 @@ async function runSingleSimulation(sceneId, sceneData, ageGroupId, ageGroup, age
     // Step physics with event queue
     physicsEngine.step(world, deltaTime, eventQueue);
 
+    // Warmup: skip first 30 frames for physics stabilization
+    if (step < 30) {
+      eventQueue.drainCollisionEvents(() => {});
+      continue;
+    }
+
     // Drain REAL collision events with ACCURATE contact points
     eventQueue.drainCollisionEvents((handle1, handle2, started) => {
       if (!started) return; 
@@ -206,7 +216,14 @@ async function runSingleSimulation(sceneId, sceneData, ageGroupId, ageGroup, age
       const collider = collider1 || collider2;
 
       if (!agent || !collider) return;
-      if (collider.type === 'floor') return; // Skip floor collisions for heatmap
+      // Skip floor/ground collisions by type or name pattern
+      const isFloor = (c) => {
+        if (!c) return false;
+        if (c.type === 'floor') return true;
+        const n = (c.name || c.id || '').toLowerCase();
+        return /floor|vloer|ground|plane|grond|surface/.test(n);
+      };
+      if (isFloor(collider)) return;
 
       const contactPointData = physicsEngine.getContactPoint(
         world,

@@ -16,6 +16,9 @@ router.get('/:id/events', simulationController.getCollisionEvents);
 // GET /api/simulate/:id/heatmap
 router.get('/:id/heatmap', simulationController.getSimulationHeatmap);
 
+// GET /api/simulate/:id/report
+router.get('/:id/report', simulationController.getSimulationReport);
+
 // POST /api/simulate/batch-all-ages
 router.post('/batch-all-ages', batchSimulationController.batchSimulateAllAges);
 

@@ -429,6 +429,69 @@ class InjuryCalculator {
   }
 }
 
+/**
+ * Calculates the Room Safety Index (RSI) - a 0-100 score for the environment
+ * @param {Array} events - List of all collision events in the simulation
+ * @returns {Object} { score: number, grade: string, breakdown: object }
+ */
+export function calculateRoomSafetyIndex(events) {
+  let score = 100;
+  const breakdown = {
+    critical: 0,
+    serious: 0,
+    moderate: 0,
+    minor: 0
+  };
+
+  events.forEach(evt => {
+    if (!evt.injury) return;
+    const tier = evt.injury.riskTier ? evt.injury.riskTier.toLowerCase() : 'safe';
+    
+    if (tier === 'critical' || tier === 'dangerous') {
+      score -= 15;
+      breakdown.critical++;
+    } else if (tier === 'warning') {
+      score -= 5;
+      breakdown.serious++;
+    } else if (tier === 'watch') {
+      score -= 2;
+      breakdown.moderate++;
+    } else if (tier === 'safe' && evt.injury.injuryScore > 10) {
+      score -= 0.5;
+      breakdown.minor++;
+    }
+  });
+
+  // Clamp score between 0 and 100
+  score = Math.max(0, Math.min(100, Math.round(score)));
+
+  let grade = 'F';
+  if (score >= 95) grade = 'S';
+  else if (score >= 85) grade = 'A';
+  else if (score >= 70) grade = 'B';
+  else if (score >= 50) grade = 'C';
+
+  return { score, grade, breakdown };
+}
+
 // Export the material collision map for use by other modules
 export { MATERIAL_COLLISION };
-export default new InjuryCalculator();
+// The original default export was an instance of InjuryCalculator.
+// To align with the requested default export structure, we need to
+// create an instance and then export its methods and properties.
+const calculatorInstance = new InjuryCalculator();
+
+export default {
+  calculateInjury: calculatorInstance.calculateInjury.bind(calculatorInstance),
+  calculateBatchInjuries: calculatorInstance.calculateBatchInjuries.bind(calculatorInstance),
+  getInjurySummary: calculatorInstance.getInjurySummary.bind(calculatorInstance),
+  generateSafetyRecommendations: calculatorInstance.generateSafetyRecommendations.bind(calculatorInstance),
+  calculateRoomSafetyIndex,
+  
+  // Expose helpers if needed by validatons
+  calculateHIC15: calculatorInstance.calculateHIC15.bind(calculatorInstance),
+  getCollisionDuration: calculatorInstance.getCollisionDuration.bind(calculatorInstance),
+
+  RISK_TIERS: calculatorInstance.RISK_TIERS,
+  MATERIAL_COLLISION
+};

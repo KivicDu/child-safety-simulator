@@ -202,7 +202,7 @@ export function getRealisticVelocity(ageGroupId, actionType, elapsedRatio = 0) {
   if (!group) return 0.5;
 
   const profile = group.velocityProfile;
-  const actionProfile = profile[actionType] || profile.walk || { mean: group.speed, stdDev: group.speed * 0.15 };
+  const actionProfile = profile[actionType] || profile.walk || profile.crawl || { mean: group.speed, stdDev: group.speed * 0.15 };
 
   // Sample from Gaussian distribution
   let velocity = sampleGaussian(actionProfile.mean, actionProfile.stdDev);

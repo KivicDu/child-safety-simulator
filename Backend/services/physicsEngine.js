@@ -165,11 +165,11 @@ class PhysicsEngine {
   }
 
   /**
-   * 🔥 ENHANCED: Get contact point with geometric fallback
+   * Get contact point ON the static object's surface.
    * 
-   * Rapier's contactPair manifold may be empty at the same step
-   * the collision event fires. When that happens, we compute
-   * a geometric approximation from collider positions.
+   * collider1 = agent body part, collider2 = static object.
+   * The returned position is on or near collider2's surface so
+   * heatmap markers render directly on the furniture/wall.
    */
   getContactPoint(world, collider1, collider2) {
     let contactData = null;
@@ -189,9 +189,16 @@ class PhysicsEngine {
 
           if (depth > maxDepth) {
             maxDepth = depth;
-            
+
+            // Offset the contact point along the normal toward collider2 (object surface).
+            // The manifold point is between the two surfaces; shift it to the object side.
+            const halfDepth = Math.abs(depth) * 0.5;
             contactData = {
-              position: [point.x, point.y, point.z],
+              position: [
+                point.x - normal.x * halfDepth,
+                point.y - normal.y * halfDepth,
+                point.z - normal.z * halfDepth,
+              ],
               normal: [normal.x, normal.y, normal.z],
               depth: depth,
               contactCount: numContacts,
@@ -204,30 +211,34 @@ class PhysicsEngine {
       // contactPair may fail if colliders are invalid
     }
 
-    // 🔥 GEOMETRIC FALLBACK: if manifold is empty, compute from collider positions
+    // Geometric fallback: use the OBJECT collider's position (collider2)
+    // so the heatmap point sits on/near the object, not midway to the agent.
     if (!contactData) {
       try {
-        const parent1 = collider1.parent();
-        const parent2 = collider2.parent();
+        const parent1 = collider1.parent(); // agent
+        const parent2 = collider2.parent(); // object
         
         if (parent1 && parent2) {
-          const t1 = parent1.translation();
-          const t2 = parent2.translation();
+          const t1 = parent1.translation(); // agent center
+          const t2 = parent2.translation(); // object center
           
-          // Contact point = midpoint between collider centers
-          const midX = (t1.x + t2.x) / 2;
-          const midY = (t1.y + t2.y) / 2;
-          const midZ = (t1.z + t2.z) / 2;
-          
-          // Normal = direction from collider2 to collider1
+          // Use object's position as the base, slightly shifted toward agent
+          // to land on the object's near surface.
           const dx = t1.x - t2.x;
           const dy = t1.y - t2.y;
           const dz = t1.z - t2.z;
           const len = Math.sqrt(dx * dx + dy * dy + dz * dz) || 1;
           
+          // Normal: direction from object to agent
+          const nx = dx / len;
+          const ny = dy / len;
+          const nz = dz / len;
+
+          // Place point on object surface (object center + small offset toward agent)
+          const surfaceShift = Math.min(0.1, len * 0.2);
           contactData = {
-            position: [midX, midY, midZ],
-            normal: [dx / len, dy / len, dz / len],
+            position: [t2.x + nx * surfaceShift, t2.y + ny * surfaceShift, t2.z + nz * surfaceShift],
+            normal: [nx, ny, nz],
             depth: 0,
             contactCount: 1,
             source: 'geometric'

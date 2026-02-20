@@ -80,16 +80,19 @@ class GeminiAPIService {
     const apiKey = process.env.GEMINI_API_KEY;
     
     if (!apiKey) {
-      console.warn('⚠️ GEMINI_API_KEY not found in .env');
+      console.warn('[Gemini] ⚠️ GEMINI_API_KEY not set — AI features disabled (using fallback behaviors)');
       return;
     }
+
+    const initStart = Date.now();
+    console.log('[Gemini] Initializing API...');
 
     try {
       this.genAI = new GoogleGenerativeAI(apiKey);
       
       for (const modelName of this.modelNames) {
         try {
-          console.log(`🧪 Trying model: ${modelName}`);
+          console.log(`[Gemini] 🧪 Trying model: ${modelName}...`);
           const testModel = this.genAI.getGenerativeModel({ 
             model: modelName,
             generationConfig: {
@@ -109,11 +112,11 @@ class GeminiAPIService {
           this.model = testModel;
           this.activeModelName = modelName;
           this.initialized = true;
-          console.log(`✅ Gemini API initialized with: ${modelName}`);
+          console.log(`[Gemini] ✅ Initialized with ${modelName} in ${Date.now() - initStart}ms`);
           return;
           
         } catch (error) {
-          console.log(`❌ ${modelName}: ${error.message.substring(0, 100)}`);
+          console.log(`[Gemini] ❌ ${modelName}: ${error.message.substring(0, 100)}`);
           continue;
         }
       }
@@ -121,7 +124,8 @@ class GeminiAPIService {
       throw new Error('All Gemini models failed');
       
     } catch (error) {
-      console.error('❌ Gemini init failed:', error.message);
+      console.error(`[Gemini] ❌ Init failed after ${Date.now() - initStart}ms: ${error.message}`);
+      console.warn('[Gemini] AI features disabled — simulation will use fallback behaviors');
     }
   }
 
@@ -491,7 +495,7 @@ JSON only.`;
       return cached;
     }
 
-    console.log(`🤖 Generating rare events for ${ageGroup.name}...`);
+    console.log(`🤖 Generating rare events for ${ageGroup?.name || 'unknown age group'}...`);
 
     try {
       const dangerousObjects = sceneData.objects

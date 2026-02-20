@@ -112,5 +112,11 @@ process.on('SIGTERM', () => {
 });
 process.on('uncaughtException', (err) => {
   console.error('💥 Uncaught Exception:', err);
-  process.exit(1);
+  // Only exit for truly fatal errors (e.g. out of memory)
+  if (err.code === 'ERR_OUT_OF_MEMORY' || err.code === 'ENOMEM') {
+    process.exit(1);
+  }
+});
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('⚠️ Unhandled Promise Rejection:', reason);
 });

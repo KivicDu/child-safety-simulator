@@ -7,6 +7,7 @@
 
 import StandardBehaviorLibrary from './standardBehaviorLibrary.js';
 import geminiAPI from './geminiAPI.js';
+import { getAgeGroup } from '../config/ageGroups.js';
 
 class HybridBehaviorEngine {
   constructor() {
@@ -20,7 +21,7 @@ class HybridBehaviorEngine {
     
     // Configuration
     this.config = {
-      aiTimeout: 10000, // 10 seconds
+      aiTimeout: 15000, // 15 seconds (fast fallback to research-based behaviors)
       maxRetries: 2,
       fallbackOnRateLimit: true,
       fallbackOnTimeout: true,
@@ -129,12 +130,20 @@ class HybridBehaviorEngine {
   }
 
   async callGeminiAPI(sceneData, ageGroupId, options = {}) {
-    // Ensure Gemini is initialized
+    // Ensure Gemini is initialized — fast-fail if init already attempted
     if (!geminiAPI.isAvailable()) {
       await geminiAPI.init();
+      // If still not available after init, throw immediately instead of wasting time
+      if (!geminiAPI.isAvailable()) {
+        throw new Error('Gemini API not available after init attempt');
+      }
     }
 
-    const ageGroup = StandardBehaviorLibrary.getBehaviorsForAgeGroup(ageGroupId);
+    // Age group CONFIG (from ageGroups.js) has .name, .height, .canClimb, .ageRange
+    // used by Gemini prompts to generate contextually accurate behaviors
+    const ageGroupConfig = getAgeGroup(ageGroupId);
+    // Behavior library data has .behaviors, .rareEvents for validation/normalization
+    const ageGroupBehaviors = StandardBehaviorLibrary.getBehaviorsForAgeGroup(ageGroupId);
 
     // Generate behavior policy
     let behaviors = [];
@@ -142,7 +151,7 @@ class HybridBehaviorEngine {
 
     while (retries < this.config.maxRetries) {
       try {
-        behaviors = await geminiAPI.generateBehaviorPolicy(sceneData, ageGroup);
+        behaviors = await geminiAPI.generateBehaviorPolicy(sceneData, ageGroupConfig);
         break; // Success
       } catch (error) {
         retries++;
@@ -159,17 +168,17 @@ class HybridBehaviorEngine {
     // Generate rare events
     let rareEvents = [];
     try {
-      rareEvents = await geminiAPI.generateRareEventChains(sceneData, ageGroup);
+      rareEvents = await geminiAPI.generateRareEventChains(sceneData, ageGroupConfig);
     } catch (error) {
       console.warn(`⚠️  Rare events generation failed, using defaults`);
-      rareEvents = ageGroup.rareEvents || [];
+      rareEvents = ageGroupBehaviors.rareEvents || [];
     }
 
     return {
       source: 'AI',
       ageGroupId,
-      behaviors: this.validateAndNormalizeBehaviors(behaviors, ageGroup),
-      rareEvents: this.validateRareEvents(rareEvents, ageGroup),
+      behaviors: this.validateAndNormalizeBehaviors(behaviors, ageGroupBehaviors),
+      rareEvents: this.validateRareEvents(rareEvents, ageGroupBehaviors),
       timestamp: new Date().toISOString()
     };
   }

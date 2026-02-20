@@ -43,9 +43,15 @@ class Agent {
       this.gaitStability = groupData.gaitStability || 0.8; 
     }
 
+    // ── ACTION LOG (per-frame snapshot for playback) ──
+    this.actionLog = [];
+
     // ── METRICS ──
     this.totalDistance = 0;
     this.stateHistory = new Map();
+
+    // ── FREE FALL STATE ──
+    this.fallState = null; // { startY, targetY, velocity, elapsed, duration }
   }
 
   /**
@@ -58,9 +64,17 @@ class Agent {
     // Round to save memory
     const roundedPosition = position.map(v => Math.round(v * 100) / 100);
     this.trajectory.push(roundedPosition);
+
+    // Record what the agent is doing at this exact frame
+    this.actionLog.push({
+      s: this.state,                                                          // state (IDLE/MOVING/INTERACTING/FALLING)
+      a: this.currentBehavior?.action || this.currentBehavior?.type || 'idle', // action type
+      v: Math.round(Math.hypot(this.velocity[0], this.velocity[2]) * 100) / 100, // horizontal speed
+    });
     
     if (this.trajectory.length > this.MAX_TRAJECTORY_POINTS) {
       this.trajectory.shift();
+      this.actionLog.shift(); // Keep in sync with trajectory
     }
   }
 
@@ -81,7 +95,10 @@ class Agent {
     const ageGroup = getAgeGroup(this.ageGroupId);
     if (!ageGroup || !ageGroup.velocityProfile) return 1.0; // Fallback
 
-    const profile = ageGroup.velocityProfile[actionType] || ageGroup.velocityProfile.walk;
+    const profile = ageGroup.velocityProfile[actionType]
+      || ageGroup.velocityProfile.walk
+      || ageGroup.velocityProfile.crawl
+      || { mean: ageGroup.speed || 0.5, stdDev: (ageGroup.speed || 0.5) * 0.15 };
     // 1. Get base Gaussian speed
     let speed = this._gaussianRandom(profile.mean, profile.stdDev);
     
@@ -232,6 +249,12 @@ class Agent {
   }
 
   updateBehavior(deltaTime, colliders, bounds) {
+    // Free fall overrides all behavior — process fall until landing
+    if (this.fallState && this.body) {
+      this.executeAction({ action: 'free_fall' }, deltaTime, colliders, bounds);
+      return;
+    }
+
     if (this.participatingInRareEvent && this.rareEventChain) {
       this.executeRareEventStep(deltaTime, colliders, bounds);
       return;
@@ -345,36 +368,108 @@ class Agent {
 
       case 'trip':
       case 'stumble':
-      case 'fall_forward':
+      case 'fall_forward': {
          this.state = 'INTERACTING';
-         // Simulate stumble physics (surge forward + down)
-         if (this.body) {
-            const pos = this.body.translation();
-            const surge = 2.5 * deltaTime; // Sudden surge
-            // Random direction or forward
-            const angle = Math.random() * Math.PI * 2;
-            this.body.setNextKinematicTranslation({
-              x: pos.x + Math.cos(angle) * surge,
-              y: Math.max(this.spawnY - 0.2, pos.y - surge), // Drop
-              z: pos.z + Math.sin(angle) * surge
-            });
+         const pos = this.body.translation();
+         const heightAboveGround = pos.y - this.spawnY;
+
+         // If elevated (e.g. after climbing), trigger a proper free fall
+         if (heightAboveGround > 0.15) {
+           this.fallState = {
+             startY: pos.y,
+             targetY: this.spawnY,
+             fallHeight: heightAboveGround,
+             // v = sqrt(2 * g * h) — physics-based terminal velocity
+             velocity: Math.sqrt(2 * 9.81 * heightAboveGround),
+             elapsed: 0,
+             // t = sqrt(2h/g) — time to fall height h under gravity
+             duration: Math.sqrt((2 * heightAboveGround) / 9.81),
+           };
+         } else {
+           // Ground-level stumble: horizontal surge + slight drop
+           const surge = 2.5 * deltaTime;
+           const angle = Math.random() * Math.PI * 2;
+           this.body.setNextKinematicTranslation({
+             x: pos.x + Math.cos(angle) * surge,
+             y: Math.max(this.spawnY - 0.2, pos.y - surge),
+             z: pos.z + Math.sin(angle) * surge
+           });
          }
          break;
+      }
+
+      // ── FREE FALL: Gravity-driven descent ──
+      case 'free_fall': {
+        this.state = 'FALLING';
+        if (!this.body) break;
+        const pos = this.body.translation();
+
+        if (!this.fallState) {
+          // Initialize fall from current position
+          const fallHeight = Math.max(0.1, pos.y - this.spawnY);
+          this.fallState = {
+            startY: pos.y,
+            targetY: this.spawnY,
+            fallHeight,
+            velocity: Math.sqrt(2 * 9.81 * fallHeight),
+            elapsed: 0,
+            duration: Math.sqrt((2 * fallHeight) / 9.81),
+          };
+        }
+
+        this.fallState.elapsed += deltaTime;
+        const t = Math.min(this.fallState.elapsed / this.fallState.duration, 1.0);
+        // Quadratic easing (gravity acceleration curve: y = 0.5*g*t²)
+        const fallProgress = t * t;
+        const newY = this.fallState.startY - (this.fallState.fallHeight * fallProgress);
+
+        this.body.setNextKinematicTranslation({
+          x: pos.x,
+          y: Math.max(this.spawnY, newY),
+          z: pos.z
+        });
+
+        // Landing
+        if (t >= 1.0) {
+          this.fallState = null;
+          this.state = 'IDLE';
+        }
+        break;
+      }
 
       // Interaction Actions (Stationary or minimal movement)
       case 'grab':
       case 'reach_up':
-      case 'climb_on':
       case 'open_drawer':
         this.state = 'INTERACTING';
-        // Logic: Face object, maybe small vertical movement for climbing
-        if (actionType === 'climb_on') {
-           const pos = this.body.translation();
-           this.body.setNextKinematicTranslation({
-             x: pos.x, y: pos.y + 0.5 * deltaTime, z: pos.z
-           });
+        break;
+
+      case 'climb_on': {
+        this.state = 'INTERACTING';
+        if (this.body) {
+          const pos = this.body.translation();
+          const groupData = getAgeGroup(this.ageGroupId);
+          const failChance = groupData ? (1 - groupData.gaitStability) * 0.3 : 0.1;
+
+          if (Math.random() < failChance && pos.y > this.spawnY + 0.1) {
+            // Climb failure — trigger free fall back to ground
+            this.fallState = {
+              startY: pos.y,
+              targetY: this.spawnY,
+              fallHeight: pos.y - this.spawnY,
+              velocity: Math.sqrt(2 * 9.81 * (pos.y - this.spawnY)),
+              elapsed: 0,
+              duration: Math.sqrt((2 * (pos.y - this.spawnY)) / 9.81),
+            };
+          } else {
+            // Successful climb step
+            this.body.setNextKinematicTranslation({
+              x: pos.x, y: pos.y + 0.5 * deltaTime, z: pos.z
+            });
+          }
         }
         break;
+      }
         
       case 'pause':
       case 'look_around':
@@ -501,14 +596,17 @@ class Agent {
     return Math.sqrt(vx * vx + vy * vy + vz * vz);
   }
 
+
   getStatus() {
     return {
       id: this.id,
+      ageGroupId: this.ageGroupId,
       state: this.state,
       position: this.getPosition(),
       velocity: this.getVelocity(),
       totalDistance: this.totalDistance,
-      fatigue: this.fatigueLevel, // Exposed metric
+      fatigue: this.fatigueLevel,
+      gaitStability: this.gaitStability,
       behaviorsCompleted: this.behaviorQueue ? this.behaviorQueue.filter(b => b.completed).length : 0
     };
   }
