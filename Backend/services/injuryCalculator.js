@@ -99,10 +99,16 @@ class InjuryCalculator {
     const surfaceType = objectProperties.surfaceType || objectProperties.materialType || 'unknown';
     const collisionDuration = this.getCollisionDuration(surfaceType, objectProperties);
 
-    // ── Core calculations ──
+    // ── Biometric Core calculations ──
     const isHeadImpact = bodyPart === 'head';
     const hicScore = this.calculateHIC15(velocity, collisionDuration, isHeadImpact);
     const impactForce = this.calculateImpactForce(mass, velocity, collisionDuration);
+    
+    // NEW: Biometric Pressure (Force / Area)
+    // Larger heads (infants = 2.5 area factor) distribute force differently than older children
+    const surfaceAreaFactor = ageGroup.surfaceAreaFactor || 1.0;
+    const impactPressure = isHeadImpact ? (impactForce / surfaceAreaFactor) : impactForce;
+
     const deceleration_g = velocity > 0.01 ? (velocity / collisionDuration) / this.GRAVITY : 0;
     const sharpnessScore = objectProperties.edgeSharpness || 0;
     const fallHeightScore = this.calculateFallHeightScore(position[1], ageGroup.height);
@@ -113,14 +119,19 @@ class InjuryCalculator {
 
     // ── Normalized scoring ──
     const normalizedHIC = this.normalizeHIC(hicScore, ageGroup);
-    const normalizedForce = this.normalizeForce(impactForce, mass);
+    // Use impactPressure for force normalization instead of pure force
+    const normalizedForce = this.normalizeForce(impactPressure, mass);
+
+    // NEW: Biometric Bone Density Softness
+    // Infants have softer bones (factor 1.475), preteens have rigid bones (1.0)
+    const boneDensityFactor = ageGroup.boneDensityFactor || 1.0;
 
     const rawScore = (
       this.WEIGHTS.hic * normalizedHIC +
       this.WEIGHTS.impactForce * normalizedForce +
       this.WEIGHTS.sharpness * (sharpnessScore * 100) +
       this.WEIGHTS.fallHeight * (fallHeightScore * 100)
-    );
+    ) * boneDensityFactor; // Apply physiological bone softness across all mechanical impacts
 
     const ageAdjustedScore = calculateAgeAdjustedInjury(rawScore, ageGroupId, bodyPart);
     const finalScore = Math.max(0, Math.min(100, ageAdjustedScore));

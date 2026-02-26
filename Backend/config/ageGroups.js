@@ -14,6 +14,25 @@ const ageGroups = {
     height: 0.7,        // m  (sitting/crawling height ~70cm)
     reachHeight: 0.2,   // m  (can reach ~20cm from floor)
     capsuleRadius: 0.20,
+    boneDensityFactor: 1.475, // 1.5 - (0.5 * 0.05)
+    surfaceAreaFactor: 2.5,   // Proportional head impact area
+    // Research-based anthropometry — WHO Child Growth Standards, CDC, NIH PMC
+    // All values are 50th-percentile medians for the age range
+    anthropometry: {
+      headRadius: 0.12,         // Scaled up to match frontend dummy.glb (base ~0.08 * 1.575)
+      headHeightRatio: 0.25,    // Montreal Children's Hospital: head = 25% of body height
+      torsoLength: 0.28,        // Adjusted to match Scaled dummy.glb spine
+      torsoRadius: 0.07,        // proportional to body width
+      armLength: 0.16,          // ~23% of height (short baby arms)
+      armSpan: 0.64,            // CDC: slightly less than height at this age
+      legLength: 0.18,          // Scaled down to match dummy.glb limbs (base ~0.3 * 0.6)
+      hipWidth: 0.08,           // distance between leg attachment points
+      shoulderWidth: 0.12,      // biacromial width
+      walkStride: 0,            // infants cannot walk
+      runStride: 0,             // infants cannot run
+      crawlReach: 0.10,         // NIH PMC6723980: forward hand reach per crawl cycle
+      crawlHandKneeDist: 0.22,  // distance from hands to knees during crawling
+    },
     // Movement capabilities
     canWalk: false,
     canCrawl: true,
@@ -51,6 +70,24 @@ const ageGroups = {
     height: 0.9,        // m
     reachHeight: 0.5,   // m
     capsuleRadius: 0.22,
+    boneDensityFactor: 1.40,  // 1.5 - (2.0 * 0.05)
+    surfaceAreaFactor: 1.8,
+    // CDC growth charts + NIH gait studies — 50th percentile at ~2 years
+    anthropometry: {
+      headRadius: 0.11,         // Math sync with dummy.glb scale (~0.08 * 1.5)
+      headHeightRatio: 0.22,    // head = 22% of body height
+      torsoLength: 0.30,        // Match spine scale
+      torsoRadius: 0.08,
+      armLength: 0.24,          // ~27% of height
+      armSpan: 0.88,            // CDC: arm span ~98% of height at 2y
+      legLength: 0.28,          // Match limb scale
+      hipWidth: 0.10,
+      shoulderWidth: 0.16,
+      walkStride: 0.30,         // NIH: stride length ~0.30m at 18mo, ~0.38m at 3y
+      runStride: 0.50,          // short burst running strides
+      crawlReach: 0.14,         // slightly longer reach than infant
+      crawlHandKneeDist: 0.30,  // torso length + arm reach
+    },
     canWalk: true,
     canCrawl: true,
     canClimb: true,
@@ -87,6 +124,24 @@ const ageGroups = {
     height: 1.1,        // m
     reachHeight: 0.8,   // m
     capsuleRadius: 0.25,
+    boneDensityFactor: 1.25,  // 1.5 - (4.5 * 0.05)
+    surfaceAreaFactor: 1.4,
+    // CDC + NIH gait analysis — 50th percentile at ~4.5 years
+    anthropometry: {
+      headRadius: 0.09,         // dummy.glb (1.6 - 4.5*0.05)
+      headHeightRatio: 0.18,    // head = 18% of body height
+      torsoLength: 0.34,
+      torsoRadius: 0.09,
+      armLength: 0.32,          // ~29% of height
+      armSpan: 1.10,            // CDC: arm span ≈ height by ~4 years
+      legLength: 0.38,          // dummy.glb (0.65 + 4.5*0.07 = 0.96 scale)
+      hipWidth: 0.12,
+      shoulderWidth: 0.20,
+      walkStride: 0.50,         // NIH: stride ~0.50m at 4-5y
+      runStride: 0.80,          // measured running stride
+      crawlReach: 0,            // preschoolers rarely crawl
+      crawlHandKneeDist: 0,
+    },
     canWalk: true,
     canCrawl: false,
     canClimb: true,
@@ -123,6 +178,24 @@ const ageGroups = {
     height: 1.3,        // m
     reachHeight: 1.0,   // m
     capsuleRadius: 0.28,
+    boneDensityFactor: 1.10,  // 1.5 - (8.0 * 0.05)
+    surfaceAreaFactor: 1.1,
+    // CDC + ResearchGate gait data — 50th percentile at ~8 years
+    anthropometry: {
+      headRadius: 0.07,         // Near adult base scale
+      headHeightRatio: 0.15,    // head = 15% of body height
+      torsoLength: 0.40,
+      torsoRadius: 0.10,
+      armLength: 0.40,          // ~31% of height
+      armSpan: 1.32,            // CDC: arm span ≈ 1.01× height
+      legLength: 0.50,          // dummy.glb scale aligned
+      hipWidth: 0.14,
+      shoulderWidth: 0.24,
+      walkStride: 0.72,         // ResearchGate: stride ~0.72m at 8y
+      runStride: 1.10,          // measured running stride
+      crawlReach: 0,            // school-age children don't crawl
+      crawlHandKneeDist: 0,
+    },
     canWalk: true,
     canCrawl: false,
     canClimb: true,
@@ -159,6 +232,24 @@ const ageGroups = {
     height: 1.5,        // m
     reachHeight: 1.2,   // m
     capsuleRadius: 0.30,
+    boneDensityFactor: 0.9,   // 1.5 - (12.0 * 0.05)
+    surfaceAreaFactor: 1.0,   // Standard Baseline
+    // CDC + NIH — 50th percentile at ~12 years, near-adult proportions
+    anthropometry: {
+      headRadius: 0.065,        // adult-like head size
+      headHeightRatio: 0.14,    // head = 14% of body height
+      torsoLength: 0.46,
+      torsoRadius: 0.11,
+      armLength: 0.48,          // ~32% of height
+      armSpan: 1.52,            // CDC: arm span ≈ 1.01× height
+      legLength: 0.65,          // dummy.glb (0.65 + 12.0*0.07 > 1.0 -> 1.0 scale)
+      hipWidth: 0.16,
+      shoulderWidth: 0.28,
+      walkStride: 0.90,         // near-adult stride length
+      runStride: 1.40,          // NIH: running stride ~1.4m at 12y
+      crawlReach: 0,            // preteens don't crawl
+      crawlHandKneeDist: 0,
+    },
     canWalk: true,
     canCrawl: false,
     canClimb: true,

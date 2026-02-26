@@ -386,7 +386,14 @@ class HybridBehaviorEngine {
         behaviorId: behavior.behaviorId || `ai_behavior_${Date.now()}`,
         description: behavior.description || 'AI-generated behavior',
         probability: Math.max(0, Math.min(1, behavior.probability || 0.5)),
-        sequence: behavior.sequence || [],
+        sequence: (behavior.sequence || []).map(step => {
+          let action = step.action || 'walk';
+          // Force infants to crawl if AI generated walk/run
+          if (ageGroup.ageGroup === 'infant' && (action === 'walk' || action === 'run' || action === 'sprint' || action === 'walk_to' || action === 'walk_random')) {
+            action = 'crawl';
+          }
+          return { ...step, action };
+        }),
         ...behavior
       };
     }).filter(b => b.sequence.length > 0); // Remove invalid behaviors
@@ -399,7 +406,16 @@ class HybridBehaviorEngine {
 
     return events.filter(event => {
       return event.chain && Array.isArray(event.chain) && event.chain.length > 0;
-    });
+    }).map(event => ({
+      ...event,
+      chain: event.chain.map(step => {
+        let action = step.action || 'walk';
+        if (ageGroup.ageGroup === 'infant' && (action === 'walk' || action === 'run' || action === 'sprint' || action === 'walk_to' || action === 'walk_random')) {
+          action = 'crawl';
+        }
+        return { ...step, action };
+      })
+    }));
   }
 
   /**

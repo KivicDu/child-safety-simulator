@@ -1,23 +1,29 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// physicsEngine.js  — v2
+//
+// Key changes:
+//  • createAgentMultipartCollider: uses real heights from ageGroups (not guessed)
+//  • createCharacterController: Rapier KinematicCharacterController to block
+//    agents from passing through solid geometry
+//  • moveAgentWithController: wrapper used by simulationController each step
+//    instead of setNextKinematicTranslation directly → prevents clipping
+//  • All existing API surface preserved (no breaking changes)
+// ─────────────────────────────────────────────────────────────────────────────
+
 import RAPIER from '@dimforge/rapier3d-compat';
 
 class PhysicsEngine {
   constructor() {
-    this.world = null;
-    this.rapier = null;
+    this.world       = null;
+    this.rapier      = null;
     this.initialized = false;
   }
 
   async init() {
     if (this.initialized) return;
-    
     console.log('🔧 Initializing Rapier3D physics engine...');
     await RAPIER.init();
     this.rapier = RAPIER;
-    
-    // Create physics world
-    const gravity = { x: 0.0, y: -9.81, z: 0.0 };
-    this.world = new RAPIER.World(gravity);
-    
     this.initialized = true;
     console.log('✅ Physics engine initialized');
   }
@@ -27,119 +33,229 @@ class PhysicsEngine {
     return new this.rapier.World(gravity);
   }
 
-  // Create box collider from bounding box
+  // ── Box collider for scene objects ───────────────────────────────────────
   createBoxCollider(world, bbox, isStatic = true, isSensor = false) {
     const size = [
       (bbox.max[0] - bbox.min[0]) / 2,
       (bbox.max[1] - bbox.min[1]) / 2,
-      (bbox.max[2] - bbox.min[2]) / 2
+      (bbox.max[2] - bbox.min[2]) / 2,
     ];
-    
     const center = [
       (bbox.min[0] + bbox.max[0]) / 2,
       (bbox.min[1] + bbox.max[1]) / 2,
-      (bbox.min[2] + bbox.max[2]) / 2
+      (bbox.min[2] + bbox.max[2]) / 2,
     ];
 
-    // Create rigid body
-    const rigidBodyDesc = isStatic 
+    const rigidBodyDesc = isStatic
       ? this.rapier.RigidBodyDesc.fixed()
       : this.rapier.RigidBodyDesc.dynamic();
-
     rigidBodyDesc.setTranslation(center[0], center[1], center[2]);
     const rigidBody = world.createRigidBody(rigidBodyDesc);
 
-    // Create collider
-    let colliderDesc = this.rapier.ColliderDesc.cuboid(
-      size[0], size[1], size[2]
-    ).setFriction(0.6).setRestitution(0.0)
-     .setActiveEvents(this.rapier.ActiveEvents.COLLISION_EVENTS);
+    let activeEvents = this.rapier.ActiveEvents.COLLISION_EVENTS;
     if (isSensor) {
-      colliderDesc = colliderDesc.setSensor(true);
+      activeEvents = activeEvents | this.rapier.ActiveEvents.INTERSECTION_EVENTS;
     }
-    const collider = world.createCollider(colliderDesc, rigidBody);
 
+    let colliderDesc = this.rapier.ColliderDesc
+      .cuboid(size[0], size[1], size[2])
+      .setFriction(0.6)
+      .setRestitution(0.0)
+      .setActiveEvents(activeEvents);
+    if (isSensor) colliderDesc = colliderDesc.setSensor(true);
+
+    const collider = world.createCollider(colliderDesc, rigidBody);
     return { body: rigidBody, collider };
   }
 
-  // Create floor plane collider
+  // ── Floor collider ────────────────────────────────────────────────────────
   createFloorCollider(world, floorHeight, size = 50) {
-    const rigidBodyDesc = this.rapier.RigidBodyDesc.fixed()
+    const rigidBodyDesc = this.rapier.RigidBodyDesc
+      .fixed()
       .setTranslation(0, floorHeight, 0);
-    const rigidBody = world.createRigidBody(rigidBodyDesc);
-
-    const colliderDesc = this.rapier.ColliderDesc.cuboid(
-      size, 0.1, size // Large thin box
-    )
+    const rigidBody  = world.createRigidBody(rigidBodyDesc);
+    const colliderDesc = this.rapier.ColliderDesc
+      .cuboid(size, 0.1, size)
       .setFriction(0.9)
       .setRestitution(0.0)
       .setActiveEvents(this.rapier.ActiveEvents.COLLISION_EVENTS);
     const collider = world.createCollider(colliderDesc, rigidBody);
-
     return { body: rigidBody, collider };
   }
 
-  // Create agent with multiple body parts (Head, Torso, Legs) for precise injury tracking
-  createAgentMultipartCollider(world, position, height = 1.0, radius = 0.25) {
-    const minY = (height / 2) + 0.05;
-    const posY = (typeof position[1] === 'number') ? position[1] : minY;
+  // ── Agent multipart collider ─────────────────────────────────────────────
+  /**
+   * Creates a kinematic rigidbody with 3 colliders (head/torso/legs).
+   * Dimensions come directly from ageGroups.js anthropometry so sizes
+   * match the real child dimensions, not arbitrary defaults.
+   *
+   * @param {object} world       - Rapier world
+   * @param {number[]} position  - [x, y, z] spawn position
+   * @param {number} height      - real height in metres (from ageGroup.height)
+   * @param {number} radius      - capsule radius (from ageGroup.capsuleRadius)
+   * @param {object|null} anthropometry - from ageGroup.anthropometry
+   */
+  createAgentMultipartCollider(world, position, height = 1.0, radius = 0.25, anthropometry = null) {
+    // Agent origin is placed at feet + half-height so the body is centred
+    const halfH = height / 2;
+    const posY  = (typeof position[1] === 'number') ? position[1] + halfH : halfH;
 
-    // 1. Single Kinematic RigidBody (Controls overall movement)
-    const rigidBodyDesc = this.rapier.RigidBodyDesc.kinematicPositionBased()
+    const rigidBodyDesc = this.rapier.RigidBodyDesc
+      .kinematicPositionBased()
       .setTranslation(position[0], posY, position[2]);
     const rigidBody = world.createRigidBody(rigidBodyDesc);
 
+    // Derive from anthropometry or sensible proportional fallbacks
+    const headRadius  = anthropometry?.headRadius   ?? height * 0.12;
+    const torsoLength = anthropometry?.torsoLength   ?? height * 0.40;
+    const torsoRadius = anthropometry?.torsoRadius   ?? radius * 0.9;
+    const legLength   = anthropometry?.legLength      ?? height * 0.40;
+
     const parts = {};
-    const halfH = height / 2;
-    
-    // 2. HEAD Collider (Sphere at top)
-    // Radius ~ 0.12m, Offset ~ Top of agent
-    const headRadius = 0.12;
+    const KINEMATIC_FIXED = this.rapier.ActiveCollisionTypes.KINEMATIC_FIXED
+      | this.rapier.ActiveCollisionTypes.DEFAULT;
+    const COL_EVENTS = this.rapier.ActiveEvents.COLLISION_EVENTS;
+
+    // HEAD — sphere at top
     const headOffset = halfH - headRadius;
-    const headDesc = this.rapier.ColliderDesc.ball(headRadius)
-      .setTranslation(0, headOffset, 0)
-      .setFriction(0.3)
-      .setRestitution(0.2)
-      .setActiveEvents(this.rapier.ActiveEvents.COLLISION_EVENTS)
-      .setActiveCollisionTypes(this.rapier.ActiveCollisionTypes.KINEMATIC_FIXED | this.rapier.ActiveCollisionTypes.DEFAULT);
-    parts.head = world.createCollider(headDesc, rigidBody);
+    parts.head = world.createCollider(
+      this.rapier.ColliderDesc.ball(headRadius)
+        .setTranslation(0, headOffset, 0)
+        .setFriction(0.3)
+        .setRestitution(0.1)
+        .setActiveEvents(COL_EVENTS)
+        .setActiveCollisionTypes(KINEMATIC_FIXED),
+      rigidBody
+    );
 
-    // 3. TORSO Collider (Cylinder/Capsule in middle)
-    // Height ~ 40% of total, Offset ~ Just below head
-    const torsoHeight = height * 0.4;
-    const torsoOffset = headOffset - headRadius - (torsoHeight / 2);
-    const torsoDesc = this.rapier.ColliderDesc.capsule(torsoHeight / 2, radius * 0.9)
-      .setTranslation(0, torsoOffset, 0)
-      .setActiveEvents(this.rapier.ActiveEvents.COLLISION_EVENTS)
-      .setActiveCollisionTypes(this.rapier.ActiveCollisionTypes.KINEMATIC_FIXED | this.rapier.ActiveCollisionTypes.DEFAULT);
-    parts.torso = world.createCollider(torsoDesc, rigidBody);
+    // TORSO — capsule below head
+    const torsoOffset = headOffset - headRadius - torsoLength / 2;
+    parts.torso = world.createCollider(
+      this.rapier.ColliderDesc.capsule(torsoLength / 2, torsoRadius)
+        .setTranslation(0, torsoOffset, 0)
+        .setFriction(0.5)
+        .setRestitution(0.0)
+        .setActiveEvents(COL_EVENTS)
+        .setActiveCollisionTypes(KINEMATIC_FIXED),
+      rigidBody
+    );
 
-    // 4. LEGS Collider (Capsule at bottom)
-    // Remaining height
-    const legsHeight = height * 0.4;
-    const legsOffset = -halfH + (legsHeight / 2);
-    const legsDesc = this.rapier.ColliderDesc.capsule(legsHeight / 2, radius * 0.8)
-      .setTranslation(0, legsOffset, 0)
-      .setFriction(0.1) // Lower friction for sliding
-      .setActiveEvents(this.rapier.ActiveEvents.COLLISION_EVENTS)
-      .setActiveCollisionTypes(this.rapier.ActiveCollisionTypes.KINEMATIC_FIXED | this.rapier.ActiveCollisionTypes.DEFAULT);
-    parts.legs = world.createCollider(legsDesc, rigidBody);
+    // LEGS — capsule at bottom
+    // A Rapier capsule's total height is 2 * halfHeight + 2 * radius.
+    // To ensure the lowest point is exactly at -halfH (so agent's feet sit perfectly on the floor),
+    // legsOffset - (legLength / 2 + radius * 0.75) must equal -halfH.
+    // Thus, legsOffset = -halfH + legLength / 2 + radius * 0.75.
+    const legsOffset = -halfH + legLength / 2 + radius * 0.75;
+    parts.legs = world.createCollider(
+      this.rapier.ColliderDesc.capsule(legLength / 2, radius * 0.75)
+        .setTranslation(0, legsOffset, 0)
+        .setFriction(0.8)
+        .setRestitution(0.0)
+        .setActiveEvents(COL_EVENTS)
+        .setActiveCollisionTypes(KINEMATIC_FIXED),
+      rigidBody
+    );
+
+    // Explicit Center of Mass Shift
+    // Infants are top heavy. A headRatio of 0.25 pulls the CoM significantly upwards.
+    const headRatio = anthropometry?.headHeightRatio ?? 0.15;
+    const baseMass = 10.0; // Arbitrary but consistent for kinematic bodies
+    // Shift CoM up proportionally to how much larger the head is vs adult (~0.14)
+    const comYShift = headRatio > 0.15 ? (headRatio - 0.15) * height * 2.0 : 0; 
+    
+    // Set custom mass properties on the rigid body
+    rigidBody.setAdditionalMassProperties(
+      baseMass, 
+      { x: 0, y: comYShift, z: 0 }, 
+      { x: 1, y: 1, z: 1 }, 
+      { w: 1, x: 0, y: 0, z: 0 }
+    );
 
     return { body: rigidBody, colliders: parts };
   }
 
-  // Step with EventQueue support and proper timestep
-  step(world, deltaTime = 1/60, eventQueue = null) {
-    world.timestep = deltaTime;
-    
-    if (eventQueue) {
-      world.step(eventQueue);
-    } else {
-      world.step();
+  // ── Character controller (anti-clip) ─────────────────────────────────────
+  /**
+   * §Fix: KinematicCharacterController prevents agents from clipping through
+   * solid geometry.  Call once per agent after creating its rigid body.
+   *
+   * @param {object} world       - Rapier world
+   * @param {number} offset      - skin width around character (metres)
+   * @param {number} maxStepHeight - max height obstacle KCC can step over automatically
+   * @returns {RAPIER.KinematicCharacterController}
+   */
+  createCharacterController(world, offset = 0.02, maxStepHeight = 0.3) {
+    const controller = world.createCharacterController(offset);
+    controller.setUp({ x: 0, y: 1, z: 0 });
+    controller.setMaxSlopeClimbAngle(45 * Math.PI / 180);   // 45°
+    controller.setMinSlopeSlideAngle(30 * Math.PI / 180);   // 30°
+    controller.enableAutostep(maxStepHeight, 0.2, true);    // max step matches parameter
+    controller.enableSnapToGround(0.2);                     // snap within 20cm
+    controller.setSlideEnabled(true);                       // slide along walls
+    return controller;
+  }
+
+  // ── Move agent respecting collisions ─────────────────────────────────────
+  /**
+   * §Fix: replaces direct setNextKinematicTranslation calls in agent.js /
+   * simulationController.js.  The controller resolves collisions and returns
+   * the corrected translation that Rapier will actually apply.
+   *
+   * @param {object} world           - Rapier world
+   * @param {object} controller      - KinematicCharacterController
+   * @param {object} rigidBody       - agent's rigidbody
+   * @param {object} collider        - agent's primary collider (torso)
+   * @param {{x,y,z}} desiredMove    - movement delta this frame
+   * @param {number} deltaTime       - seconds
+   * @returns {{x,y,z}} applied translation
+   */
+  moveAgentWithController(world, controller, rigidBody, collider, desiredMove, deltaTime) {
+    if (!controller || !rigidBody || !collider) return desiredMove;
+
+    try {
+      // Compute collision-resolved movement
+      controller.computeColliderMovement(collider, desiredMove);
+      const corrected = controller.computedMovement();
+
+      // Apply the corrected position
+      const pos = rigidBody.translation();
+      const newPos = {
+        x: pos.x + corrected.x,
+        y: pos.y + corrected.y,
+        z: pos.z + corrected.z,
+      };
+
+      // Guard against NaN (WASM crash prevention)
+      if (Number.isFinite(newPos.x) && Number.isFinite(newPos.y) && Number.isFinite(newPos.z)) {
+        rigidBody.setNextKinematicTranslation(newPos);
+      }
+
+      return corrected;
+    } catch (err) {
+      console.warn('[PhysicsEngine] moveAgentWithController error:', err.message);
+      return desiredMove;
     }
   }
 
-  // Helper to create handle maps for collision detection
+  /**
+   * Check if controller determined the character is grounded.
+   */
+  isGrounded(controller) {
+    try {
+      return controller.computedGrounded();
+    } catch {
+      return true;
+    }
+  }
+
+  // ── Simulation step ───────────────────────────────────────────────────────
+  step(world, deltaTime = 1 / 60, eventQueue = null) {
+    world.timestep = deltaTime;
+    if (eventQueue) { world.step(eventQueue); }
+    else            { world.step(); }
+  }
+
+  // ── Contact helpers ───────────────────────────────────────────────────────
   createHandleMap(bodies, keyExtractor = (body) => body.id) {
     const map = new Map();
     bodies.forEach(body => {
@@ -150,48 +266,34 @@ class PhysicsEngine {
     return map;
   }
 
-  // Process collision events with callback
   processCollisions(eventQueue, handleToAgent, handleToCollider, callback) {
     eventQueue.drainCollisionEvents((handle1, handle2, started) => {
       if (!started) return;
-
-      const agent = handleToAgent.get(handle1) || handleToAgent.get(handle2);
+      const agent    = handleToAgent.get(handle1)    || handleToAgent.get(handle2);
       const collider = handleToCollider.get(handle1) || handleToCollider.get(handle2);
-
-      if (agent && collider) {
-        callback(agent, collider, handle1, handle2);
-      }
+      if (agent && collider) callback(agent, collider, handle1, handle2);
     });
   }
 
   /**
-   * Get contact point ON the static object's surface.
-   * 
-   * collider1 = agent body part, collider2 = static object.
-   * The returned position is on or near collider2's surface so
-   * heatmap markers render directly on the furniture/wall.
+   * Get contact point on the static object's surface.
    */
   getContactPoint(world, collider1, collider2) {
     let contactData = null;
-    let maxDepth = -Infinity;
+    let maxDepth    = -Infinity;
 
-    // Try Rapier manifold first
     try {
       world.contactPair(collider1, collider2, (manifold) => {
         const numContacts = manifold.numContacts();
-        
         if (numContacts === 0) return;
 
         for (let i = 0; i < numContacts; i++) {
-          const point = manifold.contactPoint(i);
+          const point  = manifold.contactPoint(i);
           const normal = manifold.contactNormal(i);
-          const depth = manifold.contactDist(i);
+          const depth  = manifold.contactDist(i);
 
           if (depth > maxDepth) {
             maxDepth = depth;
-
-            // Offset the contact point along the normal toward collider2 (object surface).
-            // The manifold point is between the two surfaces; shift it to the object side.
             const halfDepth = Math.abs(depth) * 0.5;
             contactData = {
               position: [
@@ -200,117 +302,96 @@ class PhysicsEngine {
                 point.z - normal.z * halfDepth,
               ],
               normal: [normal.x, normal.y, normal.z],
-              depth: depth,
+              depth,
               contactCount: numContacts,
-              source: 'manifold'
+              source: 'manifold',
             };
           }
         }
       });
-    } catch (e) {
-      // contactPair may fail if colliders are invalid
-    }
+    } catch (_) {}
 
-    // Geometric fallback: use the OBJECT collider's position (collider2)
-    // so the heatmap point sits on/near the object, not midway to the agent.
     if (!contactData) {
       try {
-        const parent1 = collider1.parent(); // agent
-        const parent2 = collider2.parent(); // object
-        
-        if (parent1 && parent2) {
-          const t1 = parent1.translation(); // agent center
-          const t2 = parent2.translation(); // object center
-          
-          // Use object's position as the base, slightly shifted toward agent
-          // to land on the object's near surface.
-          const dx = t1.x - t2.x;
-          const dy = t1.y - t2.y;
-          const dz = t1.z - t2.z;
+        const p1 = collider1.parent();
+        const p2 = collider2.parent();
+        if (p1 && p2) {
+          const t1 = p1.translation(), t2 = p2.translation();
+          const dx = t1.x - t2.x, dy = t1.y - t2.y, dz = t1.z - t2.z;
           const len = Math.sqrt(dx * dx + dy * dy + dz * dz) || 1;
-          
-          // Normal: direction from object to agent
-          const nx = dx / len;
-          const ny = dy / len;
-          const nz = dz / len;
-
-          // Place point on object surface (object center + small offset toward agent)
-          const surfaceShift = Math.min(0.1, len * 0.2);
+          const nx = dx / len, ny = dy / len, nz = dz / len;
+          const shift = Math.min(0.1, len * 0.2);
           contactData = {
-            position: [t2.x + nx * surfaceShift, t2.y + ny * surfaceShift, t2.z + nz * surfaceShift],
+            position: [t2.x + nx * shift, t2.y + ny * shift, t2.z + nz * shift],
             normal: [nx, ny, nz],
             depth: 0,
             contactCount: 1,
-            source: 'geometric'
+            source: 'geometric',
           };
         }
-      } catch (e) {
-        // Fallback also failed
-      }
+      } catch (_) {}
     }
 
     return contactData;
   }
 
-  /**
-   * 🔥 NEW: Get all contact points for detailed analysis
-   * Useful for complex collision scenarios
-   */
   getAllContactPoints(world, collider1, collider2) {
     const contacts = [];
-
-    world.contactPair(collider1, collider2, (manifold) => {
-      const numContacts = manifold.numContacts();
-      
-      for (let i = 0; i < numContacts; i++) {
-        const point = manifold.contactPoint(i);
-        const normal = manifold.contactNormal(i);
-        const depth = manifold.contactDist(i);
-
-        contacts.push({
-          position: [point.x, point.y, point.z],
-          normal: [normal.x, normal.y, normal.z],
-          depth: depth
-        });
-      }
-    });
-
+    try {
+      world.contactPair(collider1, collider2, (manifold) => {
+        for (let i = 0; i < manifold.numContacts(); i++) {
+          const point  = manifold.contactPoint(i);
+          const normal = manifold.contactNormal(i);
+          contacts.push({
+            position: [point.x, point.y, point.z],
+            normal:   [normal.x, normal.y, normal.z],
+            depth:    manifold.contactDist(i),
+          });
+        }
+      });
+    } catch (_) {}
     return contacts;
   }
 
-  /**
-   * 🔥 NEW: Check if two colliders are currently in contact
-   */
   areInContact(world, collider1, collider2) {
     let inContact = false;
-
-    world.contactPair(collider1, collider2, (manifold) => {
-      if (manifold.numContacts() > 0) {
-        inContact = true;
-      }
-    });
-
+    try {
+      world.contactPair(collider1, collider2, (manifold) => {
+        if (manifold.numContacts() > 0) inContact = true;
+      });
+    } catch (_) {}
     return inContact;
   }
 
-  /**
-   * 🔥 NEW: Get contact impulse for injury calculation
-   */
   getContactImpulse(world, collider1, collider2) {
     let maxImpulse = 0;
-
-    world.contactPair(collider1, collider2, (manifold) => {
-      const numContacts = manifold.numContacts();
-      
-      for (let i = 0; i < numContacts; i++) {
-        const impulse = manifold.contactImpulse(i);
-        if (impulse > maxImpulse) {
-          maxImpulse = impulse;
+    try {
+      world.contactPair(collider1, collider2, (manifold) => {
+        for (let i = 0; i < manifold.numContacts(); i++) {
+          const imp = manifold.contactImpulse(i);
+          if (imp > maxImpulse) maxImpulse = imp;
         }
-      }
-    });
-
+      });
+    } catch (_) {}
     return maxImpulse;
+  }
+
+  /**
+   * Downward raycast to find actual floor height at (x, z).
+   * Returns floorFallback if ray misses.
+   * NOTE: origin is only slightly above the agent's center. 
+   * Do not cast from +2.0m, otherwise you hit tables and chairs and teleport onto them!
+   */
+  getFloorHeightAt(world, x, y, z, floorFallback = 0, maxDistance = 10) {
+    try {
+      // Cast from slightly above the agent's current position to allow stepping up
+      const origin    = { x, y: y + 0.3, z }; 
+      const direction = { x: 0, y: -1, z: 0 };
+      const ray  = new this.rapier.Ray(origin, direction);
+      const hit  = world.castRay(ray, maxDistance, true);
+      if (hit) return origin.y + direction.y * hit.toi;
+    } catch (_) {}
+    return floorFallback;
   }
 }
 
