@@ -352,7 +352,7 @@ class GLBParser {
           floorCandidate = {
             objectId: obj.id,
             objectName: obj.name,
-            height: yMin, // Always use the bottom-most coordinate
+            height: yMax, // FIX: Use TOP surface (yMax) — this is where characters stand
             topHeight: yMax,
             area: area,
             width: width,

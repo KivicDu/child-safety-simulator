@@ -66,7 +66,7 @@ export const generateSafetyReport = (data: SimulationData) => {
   // Stats column
   doc.setFontSize(11);
   doc.text(`Age Group: ${data.config?.ageGroup || 'Toddler (1-3y)'}`, 120, 65);
-  doc.text(`Duration: ${data.config?.duration || 10} seconds`, 120, 72);
+  doc.text(`Duration: ${data.config?.duration || 30} seconds`, 120, 72);
   doc.text(`Total Incidents: ${data.stats?.totalEvents || 0}`, 120, 79);
   
   // ── BREAKDOWN ──

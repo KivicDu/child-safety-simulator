@@ -153,7 +153,7 @@ class ColliderGenerator {
           world,
           obj.boundingBox,
           true,    // isStatic = true
-          isSoft   // isSensor — soft objects pass through rather than blocking
+          false    // FIX: Soft objects should NOT be sensors; they are solid obstacles that the child cannot walk through
         );
 
         // §4.3: set BOTH event flags so Rapier emits to drainCollisionEvents

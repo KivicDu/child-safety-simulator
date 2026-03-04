@@ -72,7 +72,7 @@ class PhysicsEngine {
   createFloorCollider(world, floorHeight, size = 50) {
     const rigidBodyDesc = this.rapier.RigidBodyDesc
       .fixed()
-      .setTranslation(0, floorHeight, 0);
+      .setTranslation(0, floorHeight - 0.1, 0); // Translate down by half-height so top surface aligns with floorHeight
     const rigidBody  = world.createRigidBody(rigidBodyDesc);
     const colliderDesc = this.rapier.ColliderDesc
       .cuboid(size, 0.1, size)
@@ -377,22 +377,39 @@ class PhysicsEngine {
   }
 
   /**
-   * Downward raycast to find actual floor height at (x, z).
-   * Returns floorFallback if ray misses.
-   * NOTE: origin is only slightly above the agent's center. 
-   * Do not cast from +2.0m, otherwise you hit tables and chairs and teleport onto them!
-   */
-  getFloorHeightAt(world, x, y, z, floorFallback = 0, maxDistance = 10) {
-    try {
-      // Cast from slightly above the agent's current position to allow stepping up
-      const origin    = { x, y: y + 0.3, z }; 
-      const direction = { x: 0, y: -1, z: 0 };
-      const ray  = new this.rapier.Ray(origin, direction);
-      const hit  = world.castRay(ray, maxDistance, true);
-      if (hit) return origin.y + direction.y * hit.toi;
-    } catch (_) {}
-    return floorFallback;
-  }
+ * Downward raycast to find actual floor height at (x, z).
+ * Returns floorFallback if ray misses or hits furniture (not floor).
+ * Only accepts surfaces within maxStepHeight of the scene floor.
+ */
+getFloorHeightAt(world, x, y, z, floorFallback = 0, maxDistance = 10, agentBodyToIgnore = null) {
+  try {
+    // Cast from slightly above the agent's current position to allow stepping up
+    const origin    = { x, y: y + 0.3, z }; 
+    const direction = { x: 0, y: -1, z: 0 };
+    const ray  = new this.rapier.Ray(origin, direction);
+    
+    // We pass agentBodyToIgnore as the filterRigidBody argument (7th positional)
+    // and we also specify QueryFilterFlags.EXCLUDE_KINEMATIC (2) as the filterFlags argument (5th positional)
+    // to ensure we never hit agents.
+    // Signature: castRay(ray, maxToi, solid, collisionGroups, filterFlags, filterTarget, filterBody, filterCollider)
+    const excludeKinematic = 2;
+    const hit  = world.castRay(ray, maxDistance, true, undefined, excludeKinematic, undefined, agentBodyToIgnore, undefined);
+    
+    // Older Rapier JS uses timeOfImpact, newer uses toi. Handle both safely to avoid NaN coordinates
+    const t = hit ? (hit.toi !== undefined ? hit.toi : hit.timeOfImpact) : null;
+    if (t !== null && t !== undefined) {
+      const hitY = origin.y + direction.y * t;
+      // FIX: Reject furniture surfaces — only accept hits within step-up range of scene floor
+      // If hit surface is > 0.3m above scene floor, it's furniture, not walkable floor
+      const maxStepHeight = 0.3;
+      if (hitY > floorFallback + maxStepHeight) {
+        return floorFallback;  // Ignore furniture surface, use scene floor
+      }
+      return hitY;
+    }
+  } catch (_) {}
+  return floorFallback;
+}
 }
 
 const engine = new PhysicsEngine();

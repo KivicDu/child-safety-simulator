@@ -8,6 +8,8 @@
 
 import { getAgeGroup } from '../config/ageGroups.js';
 import physicsEngine from './physicsEngine.js';
+import { visionSystem } from './visionSystem.js';
+import { riskAnalytics } from './riskAnalytics.js';
 
 export const WADING_SCALE_FACTOR = 0.6;
 const MIN_WADING_SPEED  = 0.05;
@@ -101,6 +103,30 @@ class Agent {
     this.fallState     = null;
     this.stunTimer     = 0;
     this.pendingBounce = null;
+
+    // ── Perception → Decision Pipeline (v4: vision, reaction latency) ────
+    this.perceptionQueue = [];       // {object, saliencyScore, seenAt}
+    this.reactionTimer   = 0;        // countdown from reactionLatency
+    this.pendingReaction  = null;     // object waiting for reaction
+
+    // ── Object Permanence Memory (Piaget) ────────────────────────────────
+    this.objectMemory = new Map();   // objectId → {lastSeenPos, lastSeenTime}
+
+    // ── Heading & Kinematics ─────────────────────────────────────────────
+    this.currentHeading     = Math.random() * Math.PI * 2; // radians
+    this.lastDirChangeTime  = 0;
+
+    // ── Learning & Short-term Memory ─────────────────────────────────────
+    this.dangerMap      = new Map(); // posKey → {pos, severity, expiresAt}
+    this.actionFailLog  = new Map(); // "objId_action" → {count}
+    this.frustrationCount = 0;
+
+    // ── Anti-stuck detection ──────────────────────────────────────────────
+    this.stuckCounter  = 0;
+    this.lastMovePos   = [...startPosition];
+
+    // ── Simulation Timer ──────────────────────────────────────────────────
+    this.simTime       = 0;
   }
 
   // ── ActionLog recording ───────────────────────────────────────────────────
@@ -151,54 +177,41 @@ class Agent {
   _setEmotion(e)  { this.emotion = e; }
   _clearEmotion() { this.emotion = 'neutral'; }
 
-  // ── Attraction scanning ───────────────────────────────────────────────────
+  // ── Attraction scanning — Vision-based with Saliency Map ──────────────────
   scanForAttractions(bounds) {
     if (this.participatingInRareEvent) return;
-    // FIX-P1: Increased from 5% to 15% so agents interact more with objects
     if (Math.random() > 0.15) return;
     const ag = getAgeGroup(this.ageGroupId);
     if (!ag || !this.availableObjects.length) return;
 
-    let best = null, maxScore = 0;
-    const cur = this.getPosition();
-    let fwd = [...this.velocity], spd = Math.hypot(fwd[0], fwd[2]);
-    if (spd < 0.01) fwd = [0, 0, 0]; else { fwd[0] /= spd; fwd[2] /= spd; }
+    // Step 1: Vision-based scan with FOV + saliency scoring
+    const visible = visionSystem.scanVisibleObjects(this, this.availableObjects);
+    if (!visible.length) return;
 
-    for (const obj of this.availableObjects) {
-      if (!obj.attractionByAge) continue;
-      let score = obj.attractionByAge[this.ageGroupId] || 0;
-      if (!obj.boundingBox) continue;
-
-      const cx = (obj.boundingBox.min[0] + obj.boundingBox.max[0]) / 2;
-      const cz = (obj.boundingBox.min[2] + obj.boundingBox.max[2]) / 2;
-      const dx = cx - cur[0], dz = cz - cur[2];
-      const dist = Math.hypot(dx, dz);
-      if (dist > 5.0) continue;
-      if (spd > 0.1) {
-        const dot = fwd[0] * (dx/dist) + fwd[2] * (dz/dist);
-        if (dot < 0.5) continue;
-      }
-      if (this.ageGroupId === 'infant' || this.ageGroupId === 'toddler') {
-        const c2 = obj.properties?.material?.baseColor;
-        if (c2 && (c2[0] > 0.8 || c2[2] > 0.8)) score *= 1.5;
-      }
-      const dims = [
-        obj.boundingBox.max[0]-obj.boundingBox.min[0],
-        obj.boundingBox.max[1]-obj.boundingBox.min[1],
-        obj.boundingBox.max[2]-obj.boundingBox.min[2],
-      ];
-      if (Math.max(...dims) < 0.04 && (this.ageGroupId === 'infant' || this.ageGroupId === 'toddler')) {
-        score *= 2.0; obj.isChokeHazard = true;
-      }
-      if (score > 0.6 && score > maxScore) { maxScore = score; best = obj; }
+    // Step 2: Update object permanence memory
+    const now = Date.now() / 1000;
+    for (const v of visible) {
+      this.objectMemory.set(v.object.id, {
+        lastSeenPos: visionSystem._getObjCenter(v.object),
+        lastSeenTime: now,
+      });
+    }
+    // Forget old objects (limited memory by age)
+    const memoryLimit = ag.cognition?.hiddenObjectMemory || 30;
+    for (const [id, mem] of this.objectMemory) {
+      if (now - mem.lastSeenTime > memoryLimit) this.objectMemory.delete(id);
     }
 
-    if (best && Math.random() < maxScore * 0.3) {
-      const act = best.isChokeHazard ? 'mouth_test' : 'investigate';
-      this.behaviorQueue = [{ type: act, action: act === 'mouth_test' ? 'grab_mouth' : 'walk_to', targetObjectId: best.id, duration: 5.0, completed: false }];
-      this.currentBehavior = null;
-      this.state = 'IDLE';
-      this._setEmotion('mischievous');
+    // Step 3: Apply stranger/large-object fear penalty
+    const best = visible[0];
+    let score = best.score;
+    score = this._applyStrangerFear(best.object, score);
+
+    // Step 4: Queue best object with reaction latency delay
+    if (score > 0.5 && Math.random() < score * 0.3) {
+      const stats = this._getFatigueModifiedStats();
+      this.pendingReaction = best;
+      this.reactionTimer = stats.reactionLatency;
     }
   }
 
@@ -206,6 +219,7 @@ class Agent {
   update(deltaTime, colliders, otherAgents, bounds) {
     if (!this.body) return;
     this.availableObjects = colliders || [];
+    this.simTime += deltaTime;
 
     const cur = this.getPosition();
     this.recordPosition(cur);
@@ -230,6 +244,16 @@ class Agent {
     }
 
     this.scanForAttractions(bounds);
+
+    // ── Process Reaction Latency Pipeline ──────────────────────────────────
+    if (this.pendingReaction && this.reactionTimer > 0) {
+      this.reactionTimer -= deltaTime;
+      if (this.reactionTimer <= 0) {
+        this._reactToObject(this.pendingReaction);
+        this.pendingReaction = null;
+      }
+    }
+
     this.updateBehavior(deltaTime, colliders, bounds);
     this.previousPosition = [...cur];
   }
@@ -469,12 +493,9 @@ class Agent {
 
       case 'reach_up': {
         this.state = 'INTERACTING';
-        // Slight upward stretch — agent rises on tiptoes (small Y bump)
-        const pos_r = this.body.translation();
-        const stretchY = Math.sin(this.behaviorTimer * 2) * 0.03;
-        if (Number.isFinite(pos_r.y + stretchY)) {
-          this.body.setNextKinematicTranslation({ x: pos_r.x, y: pos_r.y + stretchY, z: pos_r.z });
-        }
+        // FIX: Remove physical Y-axis accumulation. 'reach_up' (tiptoes) should only 
+        // be a visual animation on the frontend. Modifying physics Y here causes the 
+        // "Flying Bug" because the agent never returns to the floor.
         break;
       }
 
@@ -490,46 +511,164 @@ class Agent {
       }
 
       case 'climb_on': {
-        // FIX-P2: Check if there's actually something climbable within 1.5m
         const pos_c  = this.body.translation();
         const curPos = [pos_c.x, pos_c.y, pos_c.z];
-        let hasClimbable = false;
-        for (const obj of (colliders || [])) {
-          if (!obj.boundingBox) continue;
-          const cx = (obj.boundingBox.min[0] + obj.boundingBox.max[0]) / 2;
-          const cz = (obj.boundingBox.min[2] + obj.boundingBox.max[2]) / 2;
-          const objHeight = obj.boundingBox.max[1] - obj.boundingBox.min[1];
-          const d = Math.hypot(cx - curPos[0], cz - curPos[2]);
-          // Climbable = within 1.5m AND height > 0.2m AND height < 2m
-          if (d < 1.5 && objHeight > 0.2 && objHeight < 2.0) { hasClimbable = true; break; }
+        let climbTarget = null;
+        
+        // 1. Try intended target
+        const intendedTargetId = action.targetObjectId || this.currentBehavior?.targetObjectId;
+        if (intendedTargetId) {
+          climbTarget = (colliders || []).find(c => c.id === intendedTargetId);
         }
-        if (!hasClimbable) {
-          // Nothing to climb — convert to look_around
-          this.state = 'IDLE';
+        
+        // 2. Find nearest climbable-size object (within 0.4m)
+        if (!climbTarget) {
+          let bestDist = 0.4;
+          for (const obj of (colliders || [])) {
+            if (!obj.boundingBox) continue;
+            const cx = (obj.boundingBox.min[0] + obj.boundingBox.max[0]) / 2;
+            const cz = (obj.boundingBox.min[2] + obj.boundingBox.max[2]) / 2;
+            const objHeight = obj.boundingBox.max[1] - obj.boundingBox.min[1];
+            const d = Math.hypot(cx - curPos[0], cz - curPos[2]);
+            if (d < bestDist && objHeight > 0.2 && objHeight < 1.5) { 
+              climbTarget = obj; 
+              bestDist = d;
+            }
+          }
+        }
+        if (!climbTarget) { this.state = 'IDLE'; break; }
+
+        // Non-climbable filter
+        const climbTargetName = (climbTarget.name || climbTarget.id || '').toLowerCase();
+        const isNonClimbable = /curtain|drape|blind|rem|man_cua|shade|banner|tapestry|flag|ri_do|wall|picture|frame|painting|poster|mirror|clock|lamp|sconce|tranh|tuong|anh/.test(climbTargetName);
+        if (isNonClimbable) {
+          this.state = 'INTERACTING';
+          this._setEmotion('mischievous');
+          if (this.currentBehavior) {
+             this.currentBehavior.action = climbTargetName.match(/curtain|drape|blind|rem|man_cua|ri_do/) ? 'pull' : 'reach_up';
+          }
+          break;
+        }
+
+        // Validate climbability
+        const agData = getAgeGroup(this.ageGroupId);
+        // FIX: Strictly limit maxClimbH to 1.0m even for older kids to prevent wall-climbing
+        const maxClimbH = Math.min(1.0, (agData?.reachHeight || 0.5) * 1.5);
+        const objH = climbTarget.boundingBox.max[1] - climbTarget.boundingBox.min[1];
+        const friction = this._getObjectFriction(climbTarget);
+
+        if (!agData?.canClimb || objH > maxClimbH || friction < 0.3) {
+          this.state = 'INTERACTING';
+          this._setEmotion(friction < 0.3 ? 'frustrated' : 'scared');
+          if (this.currentBehavior) {
+            this.currentBehavior.action = 'reach_up';
+          }
           break;
         }
 
         this.state = 'INTERACTING';
         const gd   = getAgeGroup(this.ageGroupId);
         const fail = gd ? (1 - gd.gaitStability) * 0.3 : 0.1;
-        if (Math.random() < fail && pos_c.y > this.spawnY + 0.1) {
+        const adjustedFail = fail + (1 - friction) * 0.2;
+        if (Math.random() < adjustedFail && pos_c.y > this.spawnY + 0.1) {
           const h = pos_c.y - this.spawnY;
           this.fallState = { startY: pos_c.y, targetY: this.spawnY, fallHeight: h,
             velocity: Math.sqrt(2*9.81*h), elapsed: 0, duration: Math.sqrt(2*h/9.81) };
         } else {
-          // FIX-H1: Use realistic climb speed from age group velocity profile
-          const climbSpeed = this.getRealisticVelocity('climb');
-          this.body.setNextKinematicTranslation({
-            x: pos_c.x,
-            y: pos_c.y + climbSpeed * deltaTime,
-            z: pos_c.z
-          });
+          const progress = this.behaviorTimer / (action.duration || 3.0);
+          // FIX: Headboard Bug. Don't blindly use the object's absolute max Y.
+          // Fallback simple cap:
+          const maxAllowedY = this.spawnY + (agData?.height || 0.8) + 0.1;
+          let objectTopY = climbTarget.boundingBox.max[1];
+
+          // Use raycast at the center of the object to find the actual surface height, not the headboard peak.
+          const cx = (climbTarget.boundingBox.min[0] + climbTarget.boundingBox.max[0]) / 2;
+          const cz = (climbTarget.boundingBox.min[2] + climbTarget.boundingBox.max[2]) / 2;
+
+          if (this.world) {
+             const ray = new physicsEngine.rapier.Ray({ x: cx, y: objectTopY + 0.5, z: cz }, { x: 0, y: -1, z: 0 });
+             const hit = this.world.castRay(ray, objectTopY - this.spawnY + 1.0, true);
+             if (hit) {
+               objectTopY = (objectTopY + 0.5) - hit.toi;
+             }
+          }
+
+          const targetTopY = Math.min(objectTopY, maxAllowedY);
+          
+          // Safety fallback: if targetTopY is somehow way above actual floor (e.g., raycast glitch), abort
+          if (targetTopY > maxAllowedY + 0.5) {
+            this.state = 'IDLE';
+            return;
+          }
+          
+          // FIX: Walk to object EDGE (not center) to prevent clipping into geometry
+          const objHalfX = (climbTarget.boundingBox.max[0] - climbTarget.boundingBox.min[0]) / 2;
+          const objHalfZ = (climbTarget.boundingBox.max[2] - climbTarget.boundingBox.min[2]) / 2;
+          const capsuleR = agData?.capsuleRadius || 0.15;
+          const edgeDist = Math.max(objHalfX, objHalfZ) + capsuleR * 1.5;
+          const toObjX = cx - pos_c.x;
+          const toObjZ = cz - pos_c.z;
+          const toObjLen = Math.hypot(toObjX, toObjZ) || 1;
+          const edgeX = cx - (toObjX / toObjLen) * Math.min(edgeDist, Math.max(objHalfX, objHalfZ));
+          const edgeZ = cz - (toObjZ / toObjLen) * Math.min(edgeDist, Math.max(objHalfX, objHalfZ));
+          
+          if (progress < 0.3) {
+            // Phase 1: approach edge of object
+            this.targetPosition = [edgeX, pos_c.y, edgeZ];
+            this.moveTowardsTarget(deltaTime, 'walk');
+          } else {
+            const dObject = Math.hypot(cx - pos_c.x, cz - pos_c.z);
+            if (dObject > 1.2) {
+               // Too far — cancel climb
+               this.state = 'IDLE';
+               this.targetPosition = null;
+               break;
+            }
+            
+            if (progress < 0.8) {
+              // Phase 2: pull up (capped speed, never exceed targetTopY)
+              const climbSpeed = this.getRealisticVelocity('climb');
+              const maxLift = climbSpeed * deltaTime * 0.5; // Max 0.5m/s climb rate
+              const liftY = Math.min(maxLift, targetTopY - pos_c.y);
+              if (liftY > 0) {
+                this.body.setNextKinematicTranslation({
+                  x: pos_c.x, y: Math.min(targetTopY, pos_c.y + liftY), z: pos_c.z
+                });
+              }
+            } else {
+              // Phase 3: on top (capped)
+              this.body.setNextKinematicTranslation({
+                x: pos_c.x, y: Math.min(targetTopY, pos_c.y), z: pos_c.z
+              });
+            }
+          }
         }
         break;
       }
 
+      case 'hurt_light': case 'hurt_medium': case 'hurt_heavy': case 'hurt_shock': case 'recoil':
+        this.state = 'INTERACTING';
+        break;
+
+      case 'crying_stand': case 'crying_sit':
+        this.state = 'INTERACTING';
+        break;
+
+      case 'get_up_slow': case 'get_up_fast':
+        this.state = 'INTERACTING';
+        if (this.behaviorTimer > (action.duration || 1.5) * 0.8) {
+          this._setEmotion('scared');
+        }
+        break;
+
       case 'pause': case 'look_around':
         this.state = 'IDLE';
+        break;
+
+      // Group G: Rare events + F7 slide — agent stays in place, frontend animates
+      case 'dodge': case 'push': case 'throw': case 'pick_up':
+      case 'sit_down': case 'stand_up': case 'jump': case 'land': case 'slide':
+        this.state = 'INTERACTING';
         break;
 
       // FIX-P2: climb_on must check if there's actually something to climb nearby
@@ -543,7 +682,7 @@ class Agent {
     }
   }
 
-  // ── Movement Kernel — Anti-Clip via KCC ───────────────────────────────────
+  // ── Movement Kernel — Anti-Clip via KCC + Turn Rate + Inertia ─────────────
   moveTowardsTarget(deltaTime, actionType = 'walk') {
     if (!this.targetPosition || !this.body) return;
 
@@ -559,6 +698,15 @@ class Agent {
       return;
     }
 
+    // Danger zone avoidance (Learning & Memory system)
+    const dangerCheck = this._isNearDangerZone(this.targetPosition);
+    if (dangerCheck.dangerous) {
+      this._logRiskEvent('near_miss', this.targetPosition, { reason: 'danger_zone_avoided' });
+      this.targetPosition = null;
+      this.state = 'IDLE';
+      return;
+    }
+
     const speed = this.getRealisticVelocity(actionType);
 
     // Stumble check
@@ -570,13 +718,36 @@ class Agent {
       return;
     }
 
-    const moveX = (dx/dist) * speed * deltaTime;
-    const moveZ = (dz/dist) * speed * deltaTime;
+    // ── Kinematics: Turn Rate + Momentum + Forward Bias ──────────────────
+    const ag = getAgeGroup(this.ageGroupId);
+    const kin = ag?.kinematics;
+    const stats = this._getFatigueModifiedStats();
+    let moveX, moveZ;
+
+    if (kin) {
+      // Turn rate limiting — agent can't instantly face target
+      const desiredAngle = Math.atan2(dz, dx);
+      const angleDiff = this._normalizeAngle(desiredAngle - this.currentHeading);
+      const maxTurn = stats.turnRate * deltaTime;
+      const clampedTurn = Math.max(-maxTurn, Math.min(maxTurn, angleDiff));
+      this.currentHeading += clampedTurn;
+
+      // Forward bias — toddlers lunge forward impulsively
+      const biasedSpeed = speed * (1.0 + kin.forwardBias * 0.3);
+
+      // Momentum — velocity carries from previous frame (inertia)
+      const rawX = Math.cos(this.currentHeading) * biasedSpeed * deltaTime;
+      const rawZ = Math.sin(this.currentHeading) * biasedSpeed * deltaTime;
+      const mf = kin.momentumFactor;
+      moveX = rawX * (1 - mf) + (this.velocity[0] * deltaTime) * mf;
+      moveZ = rawZ * (1 - mf) + (this.velocity[2] * deltaTime) * mf;
+    } else {
+      moveX = (dx/dist) * speed * deltaTime;
+      moveZ = (dz/dist) * speed * deltaTime;
+    }
 
     // §Fix: use character controller so agent slides along walls instead of clipping
     if (this.controller && this.world) {
-      // FIX: Use TORSO collider (not legs!) — legs are at floor level and
-      // KCC computeColliderMovement collides with the floor, blocking all movement
       const kccCollider = this.collider ?? this.colliders?.torso ?? this.colliders?.legs ?? null;
       if (kccCollider) {
         const corrected = physicsEngine.moveAgentWithController(
@@ -585,22 +756,52 @@ class Agent {
           deltaTime
         );
 
-        // FIX: If KCC computes near-zero movement but we wanted to move,
-        // fall back to direct translation (KCC might be stuck on geometry)
-        const correctedDist = Math.hypot(corrected?.x || 0, corrected?.z || 0);
-        const desiredDist = Math.hypot(moveX, moveZ);
-        if (correctedDist < desiredDist * 0.1 && desiredDist > 0.001) {
-          // KCC blocked — use direct translation as fallback
-          const pos = this.body.translation();
-          if (Number.isFinite(pos.x + moveX) && Number.isFinite(pos.z + moveZ)) {
-            this.body.setNextKinematicTranslation({ x: pos.x + moveX, y: pos.y, z: pos.z + moveZ });
+        // FIX #12: Do NOT bypass KCC when blocked — this caused clipping through furniture.
+        // Previously: if KCC blocked >90%, we used setNextKinematicTranslation directly.
+        // Now: trust the KCC correction. If blocked, agent slides along the wall.
+
+        // ── Anti-stuck detection ──────────────────────────────────────────
+        const posNow = this.body.translation();
+        const stuckDx = posNow.x - this.lastMovePos[0];
+        const stuckDz = posNow.z - this.lastMovePos[2];
+        const stuckDist = Math.sqrt(stuckDx * stuckDx + stuckDz * stuckDz);
+        if (stuckDist < 0.01) {
+          this.stuckCounter++;
+        } else {
+          this.stuckCounter = 0;
+        }
+        this.lastMovePos = [posNow.x, posNow.y, posNow.z];
+
+        // If stuck for 60+ frames (~1 second), try escape via KCC (not teleport)
+        if (this.stuckCounter > 60) {
+          const escDist = 0.4;
+          const moveLen = Math.hypot(moveX, moveZ) || 1;
+          // Try 3 escape directions via KCC to find the clearest path
+          const escDirs = [
+            { x: -moveZ / moveLen * escDist, z:  moveX / moveLen * escDist },  // perp left
+            { x:  moveZ / moveLen * escDist, z: -moveX / moveLen * escDist },  // perp right
+            { x: -moveX / moveLen * escDist, z: -moveZ / moveLen * escDist },  // backward
+          ];
+          let bestDist = 0;
+          for (const dir of escDirs) {
+            const esc = physicsEngine.moveAgentWithController(
+              this.world, this.controller, this.body, kccCollider,
+              { x: dir.x, y: 0, z: dir.z },
+              deltaTime
+            );
+            const d = Math.hypot(esc?.x || 0, esc?.z || 0);
+            if (d > bestDist) bestDist = d;
           }
+          // If all escape directions are blocked, just pick new target
+          this.stuckCounter = 0;
+          this.targetPosition = null;
+          this.state = 'IDLE';
         }
         return;
       }
     }
 
-    // Fallback: direct translation (when controller not available)
+    // Fallback: direct translation
     const pos = this.body.translation();
     if (Number.isFinite(pos.x + moveX) && Number.isFinite(pos.z + moveZ)) {
       this.body.setNextKinematicTranslation({ x: pos.x + moveX, y: pos.y, z: pos.z + moveZ });
@@ -625,8 +826,24 @@ class Agent {
     this.wadingObjectId = softObj.id || null;
   }
 
-  handleCollision(contactNormal, severity) {
+  handleCollision(contactNormal, severity, objectId = null) {
     if (!this.body) return;
+    if (this.stunTimer > 0) return;
+    if (this.fallState) return;
+
+    // FIX: Ignore all severe impacts in the first 2 seconds to allow the agent to settle after spawn.
+    // The KinematicCharacterController produces massive virtual velocities when pushing agents out of initial overlaps.
+    if (this.simTime < 2.0) return;
+
+    // FIX: Only interrupt behaviors and trigger hurt/cry for significant impacts.
+    // severity < 15 usually means grazing or brushing past an object while KCC is sliding.
+    if (severity < 15) {
+      if (objectId) {
+        this.actionLog.push({ type: 'graze', severity: severity.toFixed(1), objectId });
+      }
+      return; 
+    }
+
     const force    = severity > 50 ? 0.15 : severity > 20 ? 0.08 : 0.01;
     const stun     = severity > 50 ? 1.5  : severity > 20 ? 0.8  : 0.2;
     let nx = 0, nz = 0;
@@ -638,9 +855,35 @@ class Agent {
     }
     this.pendingBounce = { nx, nz, force };
     this.stunTimer     = stun;
-    this.state         = 'IDLE';
     this.velocity      = [0, 0, 0];
-    if (severity > 20) this._setEmotion('crying');
+
+    // FIX #2: Emit hurt action with severity-based response
+    const hurtAction = severity > 80 ? 'hurt_shock'
+      : severity > 50 ? 'hurt_heavy'
+      : severity > 20 ? 'hurt_medium' : 'hurt_light';
+    const hurtDuration = severity > 80 ? 5.0
+      : severity > 50 ? 3.0 : severity > 20 ? 2.0 : 0.5;
+    const hurtEmotion = severity > 20 ? 'crying' : 'scared';
+
+    // Chain: hurt → crying → get_up
+    const chain = [{ type: 'hurt', action: hurtAction, duration: hurtDuration, completed: false }];
+    if (severity > 20) {
+      chain.push({ type: 'crying', action: severity > 50 ? 'crying_sit' : 'crying_stand',
+        duration: severity > 50 ? 3.0 : 1.5, completed: false });
+    }
+    chain.push({ type: 'recovery', action: severity > 50 ? 'get_up_slow' : 'get_up_fast',
+      duration: severity > 50 ? 2.0 : 0.8, completed: false });
+
+    this.behaviorQueue = chain;
+    this.currentBehavior = null;
+    this.state = 'INTERACTING';
+    this._setEmotion(hurtEmotion);
+    this.recoveryTimer = hurtDuration + (severity > 20 ? 3.0 : 0.5);
+
+    // v4: Record danger zone for learning system
+    this._recordDangerZone(this.getPosition(), severity);
+    this._logRiskEvent('collision', this.getPosition(), { severity, objectId: objectId });
+    this._checkTantrumTrigger();
   }
 
   // ── Rare events ───────────────────────────────────────────────────────────
@@ -656,6 +899,274 @@ class Agent {
       this.behaviorTimer = 0;
       if (this.rareEventStep >= this.rareEventChain.chain.length) this.participatingInRareEvent = false;
     }
+  }
+
+  // ── Surface friction helper (for climb validation) ───────────────────────
+  _getObjectFriction(obj) {
+    if (obj?.properties?.friction != null) return obj.properties.friction;
+    const matName = (obj?.properties?.material?.name || obj?.name || obj?.id || '').toLowerCase();
+    // FIX #15: Hanging/suspended objects — cannot support weight
+    if (matName.includes('curtain') || matName.includes('drape') || matName.includes('blind')
+        || matName.includes('rem') || matName.includes('ri_do') || matName.includes('man_cua')) return 0.10;
+    if (matName.includes('glass') || matName.includes('mirror') || matName.includes('window')) return 0.15;
+    if (matName.includes('metal') || matName.includes('steel') || matName.includes('chrome')) return 0.20;
+    if (matName.includes('plastic') || matName.includes('laminate')) return 0.35;
+    if (matName.includes('leather') || matName.includes('da')) return 0.45;
+    if (matName.includes('wood') || matName.includes('go') || matName.includes('timber')) return 0.55;
+    if (matName.includes('fabric') || matName.includes('cloth') || matName.includes('vai')) return 0.70;
+    if (matName.includes('carpet') || matName.includes('rug') || matName.includes('tham')) return 0.75;
+    if (matName.includes('mattress') || matName.includes('nem') || matName.includes('bed')) return 0.70;
+    if (matName.includes('stone') || matName.includes('brick') || matName.includes('da')) return 0.65;
+    return 0.50; // default — moderately climbable
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  //  v4 SUBSYSTEMS — Professional-Grade Child Behavior Simulation
+  // ══════════════════════════════════════════════════════════════════════════
+
+  // ── Reaction to Object (with grasping precision) ──────────────────────
+  _reactToObject(visibleObj) {
+    const ag = getAgeGroup(this.ageGroupId);
+    const stats = this._getFatigueModifiedStats();
+    const obj = visibleObj.object;
+    const dims = obj.boundingBox ? [
+      obj.boundingBox.max[0]-obj.boundingBox.min[0],
+      obj.boundingBox.max[1]-obj.boundingBox.min[1],
+      obj.boundingBox.max[2]-obj.boundingBox.min[2],
+    ] : null;
+    const isChoke = dims && Math.max(...dims) < 0.04 &&
+      (this.ageGroupId === 'infant' || this.ageGroupId === 'toddler');
+    const action = isChoke ? 'grab_mouth' : 'investigate';
+    // Apply grasping offset error
+    const offset = ag?.coordination?.graspingOffset || 0;
+    const targetPos = visionSystem._getObjCenter(obj);
+    targetPos[0] += (Math.random() - 0.5) * 2 * offset;
+    targetPos[2] += (Math.random() - 0.5) * 2 * offset;
+    // Roll for grasp success
+    const willSucceed = Math.random() < stats.graspSuccess;
+    if (willSucceed) {
+      this.behaviorQueue = [{ type: action, action: action === 'grab_mouth' ? 'grab_mouth' : 'walk_to',
+        targetObjectId: obj.id, duration: 5.0, completed: false }];
+      this._setEmotion('mischievous');
+    } else {
+      const willDrop = Math.random() < stats.dropProb;
+      this.behaviorQueue = [{ type: 'reach_fail', action: 'reach_up', duration: 1.5, completed: false }];
+      if (willDrop) {
+        this.behaviorQueue.push({ type: 'stumble', action: 'lose_balance', duration: 0.5, completed: false });
+        this._setEmotion('frustrated');
+        this._logRiskEvent('grasp_fail', this.getPosition(), { objectId: obj.id, severity: 2 });
+        this._recordActionFail(obj.id, action);
+      } else {
+        this._setEmotion('curious');
+      }
+    }
+    this.currentBehavior = null;
+    this.state = 'IDLE';
+  }
+
+  // ── Fatigue-Modified Stats ────────────────────────────────────────────
+  _getFatigueModifiedStats() {
+    const ag = getAgeGroup(this.ageGroupId);
+    const f = this.fatigueLevel;
+    const coord = ag?.coordination || {};
+    const kin = ag?.kinematics || {};
+    return {
+      reactionLatency: (coord.reactionLatency || 0.5) * (1 + f * 0.4),
+      graspSuccess:    (coord.graspSuccessRate || 0.8) * (1 - f * 0.3),
+      dropProb:        (coord.dropProbability || 0.1) * (1 + f * 0.5),
+      turnRate:        (kin.turnRate || 2.0) * (1 - f * 0.2),
+      fovH:            (ag?.vision?.fovHorizontal || 120) * (1 - f * 0.15),
+    };
+  }
+
+  // ── Angle normalization helper ────────────────────────────────────────
+  _normalizeAngle(angle) {
+    while (angle > Math.PI)  angle -= 2 * Math.PI;
+    while (angle < -Math.PI) angle += 2 * Math.PI;
+    return angle;
+  }
+
+  // ── Stranger/Large Object Fear ────────────────────────────────────────
+  _applyStrangerFear(object, score) {
+    const ag = getAgeGroup(this.ageGroupId);
+    if (!ag?.fear) return score;
+    const dims = object.boundingBox ? [
+      object.boundingBox.max[0]-object.boundingBox.min[0],
+      object.boundingBox.max[1]-object.boundingBox.min[1],
+      object.boundingBox.max[2]-object.boundingBox.min[2],
+    ] : null;
+    if (!dims) return score;
+    const objVol = dims[0] * dims[1] * dims[2];
+    const childVol = (ag.height || 0.7) * 0.2 * 0.15;
+    if (objVol > childVol * 8) {
+      score *= (1 - ag.fear.strangerFear);
+    }
+    return score;
+  }
+
+  // ── Acoustic Startle Response ─────────────────────────────────────────
+  handleStartleEvent(soundLevel, sourcePosition) {
+    const ag = getAgeGroup(this.ageGroupId);
+    const fear = ag?.fear;
+    if (!fear) return;
+    const intensity = soundLevel / 100;
+    if (Math.random() > fear.startleSensitivity * intensity) return;
+    this.stunTimer = fear.startleFreezeDuration;
+    this.velocity = [0, 0, 0];
+    if (this.ageGroupId === 'infant') {
+      this._setEmotion('scared');
+      this.behaviorQueue = [{ action: 'crying_stand', duration: 3.0, completed: false }];
+    } else if (this.ageGroupId === 'toddler') {
+      if (Math.random() < 0.5) {
+        const pos = this.getPosition();
+        const dx = pos[0] - sourcePosition[0];
+        const dz = pos[2] - sourcePosition[2];
+        const d = Math.hypot(dx, dz) || 1;
+        this.targetPosition = [pos[0]+(dx/d)*2, pos[1], pos[2]+(dz/d)*2];
+        this.state = 'MOVING';
+        this._setEmotion('scared');
+      } else {
+        this._setEmotion('crying');
+        this.behaviorQueue = [{ action: 'crying_stand', duration: 2.0, completed: false }];
+      }
+    } else {
+      this._setEmotion('surprised');
+    }
+    this.currentBehavior = null;
+    this._logRiskEvent('startle', sourcePosition, { soundLevel });
+  }
+
+  // ── Height Fear (Visual Cliff) ────────────────────────────────────────
+  _checkHeightFear(perceivedHeight) {
+    const ag = getAgeGroup(this.ageGroupId);
+    const fear = ag?.fear;
+    if (!fear || perceivedHeight < fear.heightFearThreshold) return false;
+    switch (fear.heightFearResponse) {
+      case 'cry':
+        this._setEmotion('scared');
+        this.behaviorQueue = [{ action: 'crying_stand', duration: 2.0, completed: false }];
+        this.currentBehavior = null;
+        return true;
+      case 'hesitate':
+        this.stunTimer = 1.0;
+        this._setEmotion('scared');
+        return Math.random() < 0.5;
+      case 'cautious':
+        return Math.random() < 0.2;
+      default:
+        return false;
+    }
+  }
+
+  // ── Object Permanence (Piaget) ────────────────────────────────────────
+  _checkObjectPermanence(objectId) {
+    const ag = getAgeGroup(this.ageGroupId);
+    const cog = ag?.cognition;
+    const mem = this.objectMemory.get(objectId);
+    if (!mem) return { shouldContinue: false };
+    const elapsed = Date.now()/1000 - mem.lastSeenTime;
+    if (Math.random() > (cog?.objectPermanence || 1)) {
+      this.objectMemory.delete(objectId);
+      return { shouldContinue: false };
+    }
+    if (elapsed > (cog?.hiddenObjectMemory || 30)) {
+      this.objectMemory.delete(objectId);
+      return { shouldContinue: false, reason: 'memory_expired' };
+    }
+    return { shouldContinue: true, lastKnownPos: mem.lastSeenPos,
+      confidence: Math.max(0, 1 - elapsed / (cog?.hiddenObjectMemory || 30)) };
+  }
+
+  // ── Danger Zone Memory (Learning) ─────────────────────────────────────
+  _recordDangerZone(position, severity) {
+    const ag = getAgeGroup(this.ageGroupId);
+    const memDuration = ag?.cognition?.dangerMemoryDuration || 30;
+    const maxZones = ag?.cognition?.maxDangerZones || 4;
+    const key = `${Math.round(position[0]*2)}_${Math.round(position[2]*2)}`;
+    this.dangerMap.set(key, { pos: [...position], severity, expiresAt: Date.now()/1000 + memDuration });
+    if (this.dangerMap.size > maxZones) {
+      const oldest = [...this.dangerMap.entries()].sort((a,b) => a[1].expiresAt - b[1].expiresAt)[0];
+      this.dangerMap.delete(oldest[0]);
+    }
+  }
+
+  _isNearDangerZone(targetPos) {
+    const now = Date.now()/1000;
+    for (const [key, zone] of this.dangerMap) {
+      if (now > zone.expiresAt) { this.dangerMap.delete(key); continue; }
+      const d = Math.hypot(targetPos[0]-zone.pos[0], targetPos[2]-zone.pos[2]);
+      if (d < 0.8) return { dangerous: true, zone };
+    }
+    return { dangerous: false };
+  }
+
+  // ── Trial-and-Error Strategy Change ───────────────────────────────────
+  _recordActionFail(objectId, action) {
+    const key = `${objectId}_${action}`;
+    const entry = this.actionFailLog.get(key) || { count: 0 };
+    entry.count++;
+    this.actionFailLog.set(key, entry);
+    const ag = getAgeGroup(this.ageGroupId);
+    const threshold = ag?.cognition?.failBeforeStrategyChange || Infinity;
+    if (entry.count >= threshold && threshold < Infinity) {
+      this.actionFailLog.delete(key);
+      return this._generateAlternativeStrategy(objectId, action, ag);
+    }
+    return null;
+  }
+
+  _generateAlternativeStrategy(objectId, failedAction, ag) {
+    const strategyType = ag?.cognition?.strategyChangeType || 'random_alt';
+    switch (strategyType) {
+      case 'random_alt':
+        return { type: 'redirect', action: 'walk_random', duration: 3.0 };
+      case 'use_tool': {
+        const tools = this.availableObjects.filter(obj => {
+          const h = obj.boundingBox ? obj.boundingBox.max[1] - obj.boundingBox.min[1] : 0;
+          return h > 0.2 && h < 0.6;
+        });
+        if (tools.length) {
+          return { type: 'tool_use', sequence: [
+            { action: 'walk_to', targetObjectId: tools[0].id, duration: 2.0, completed: false },
+            { action: 'push', duration: 2.0, completed: false },
+            { action: 'climb_on', duration: 2.0, completed: false },
+          ]};
+        }
+        return { type: 'redirect', action: 'walk_random', duration: 3.0 };
+      }
+      case 'plan':
+        return { type: 'redirect', action: 'look_around', duration: 2.0 };
+      default:
+        return null;
+    }
+  }
+
+  // ── Tantrum Trigger ───────────────────────────────────────────────────
+  _checkTantrumTrigger() {
+    this.frustrationCount++;
+    if (this.frustrationCount >= 3 && this.fatigueLevel > 0.6) {
+      this.frustrationCount = 0;
+      this._setEmotion('frustrated');
+      this.behaviorQueue = [
+        { action: 'crying_sit', duration: 3.0, completed: false },
+        { action: 'get_up_slow', duration: 2.0, completed: false },
+      ];
+      this.currentBehavior = null;
+      this.state = 'INTERACTING';
+      const pos = this.getPosition();
+      const fallDir = Math.random() * Math.PI * 2;
+      this.pendingBounce = { nx: Math.cos(fallDir), nz: Math.sin(fallDir), force: 0.1 };
+      this._logRiskEvent('tantrum', pos, { fatigue: this.fatigueLevel, severity: 3 });
+      return true;
+    }
+    return false;
+  }
+
+  // ── Risk Analytics Logger ─────────────────────────────────────────────
+  _logRiskEvent(type, position, details = {}) {
+    riskAnalytics.recordEvent(type, position, {
+      agentId: this.id, ageGroup: this.ageGroupId, ...details
+    });
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────────

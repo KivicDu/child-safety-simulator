@@ -154,17 +154,79 @@ async function runSingleSimulation(sceneId, sceneData, ageGroupId, ageGroup, age
   const floorHeight = sceneData.floor?.height || 0;
 
   for (let i = 0; i < agentCount; i++) {
-    const spawnPos = getRandomSpawnPosition(sceneData.boundingBox, floorHeight, ageGroup);
-    
-    const agentBodyObj = physicsEngine.createAgentCollider(
+    let spawnPos;
+    let validSpawn = false;
+    let attempts = 0;
+    let actualFloorY = floorHeight;
+    const r = ageGroup.capsuleRadius || 0.15;
+    const internalHalfH = Math.max(0.01, (ageGroup.height - 2 * r) / 2);
+    const spawnShape = new physicsEngine.rapier.Capsule(internalHalfH, r);
+    const spawnRot = { w: 1.0, x: 0.0, y: 0.0, z: 0.0 };
+
+    while (!validSpawn && attempts < 50) {
+      spawnPos = getRandomSpawnPosition(sceneData.boundingBox, floorHeight, ageGroup);
+      const spX = spawnPos[0], spZ = spawnPos[2];
+
+      const castFromY = floorHeight + 1.5;
+      actualFloorY = physicsEngine.getFloorHeightAt(
+        world, spX, castFromY, spZ,
+        floorHeight, 3.0
+      );
+
+      if (actualFloorY > floorHeight + 0.3) {
+        attempts++;
+        continue;
+      }
+
+      const spawnCenterY = actualFloorY + 0.02 + r + internalHalfH;
+      const pos = new physicsEngine.rapier.Vector3(spX, spawnCenterY, spZ);
+      let hit = false;
+      
+      world.intersectionsWithShape(pos, spawnRot, spawnShape, (handle) => {
+        const c = world.getCollider(handle);
+        const cMeta = handleToCollider.get(handle);
+        const isFloor = cMeta?.type === 'floor' || /floor|vloer|ground|plane|grond|surface/.test((cMeta?.name || cMeta?.id || '').toLowerCase());
+        
+        let localHit = false;
+        if (c && !isFloor) {
+          if (!c.isSensor()) localHit = true;
+          else if (cMeta && cMeta.boundingBox) {
+            const objH = (cMeta.boundingBox.max?.[1] || 0) - (cMeta.boundingBox.min?.[1] || 0);
+            if (objH > 0.15) localHit = true;
+          }
+        }
+        
+        if (localHit && i === 0) {
+          fs.appendFile('spawn_debug.log', `      [SPAWN DEBUG] Agent 0 obj: ${cMeta?.name || cMeta?.id} (isSensor: ${c?.isSensor()})\n`).catch(()=>{});
+        }
+        if (localHit) hit = true;
+        return !hit;
+      });
+      if (!hit) validSpawn = true;
+      
+      if (i === 0) {
+        await fs.appendFile('spawn_debug.log', `      [SPAWN DEBUG] Attempt ${attempts}: x/z=${spX.toFixed(2)}/${spZ.toFixed(2)}, castY=${castFromY.toFixed(2)}, floorY=${actualFloorY.toFixed(2)}, hit=${hit}\n`).catch(()=>{});
+      }
+      attempts++;
+    }
+
+    if (attempts >= 50 && i === 0) {
+      console.warn(`[SIM] Agent ${i} failed to find valid spawn after 50 attempts.`);
+    }
+
+    spawnPos[1] = actualFloorY + 0.02;
+
+    const agentBodyObj = physicsEngine.createAgentMultipartCollider(
       world,
       spawnPos,
       ageGroup.height,
-      ageGroup.capsuleRadius
+      ageGroup.capsuleRadius,
+      ageGroup.anthropometry || null
     );
 
-    const agent = new Agent(i, spawnPos, agentBodyObj.body, ageGroupId);
-    agent.collider = agentBodyObj.collider;
+    const agent = new Agent(i, spawnPos, agentBodyObj.body, ageGroupId, world);
+    agent.spawnY = actualFloorY;
+    agent.colliders = agentBodyObj.colliders;
     agents.push(agent);
   }
 
@@ -385,11 +447,13 @@ function getRandomSpawnPosition(bbox, floorHeight, ageGroup = null) {
     return [0, floorHeight + heightOffset, 0];
   }
 
-  const margin = 1.0;
+  const margin = ageGroup ? (ageGroup.capsuleRadius * 2) : 0.3;
+  const width = Math.max(0, bbox.max[0] - bbox.min[0] - 2 * margin);
+  const depth = Math.max(0, bbox.max[2] - bbox.min[2] - 2 * margin);
 
   return [
-    bbox.min[0] + margin + Math.random() * (bbox.max[0] - bbox.min[0] - 2 * margin),
+    bbox.min[0] + margin + Math.random() * width,
     floorHeight + heightOffset,
-    bbox.min[2] + margin + Math.random() * (bbox.max[2] - bbox.min[2] - 2 * margin)
+    bbox.min[2] + margin + Math.random() * depth
   ];
 }

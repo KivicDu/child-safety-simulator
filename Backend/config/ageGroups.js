@@ -60,6 +60,51 @@ const ageGroups = {
     attractedTo: ['bright_colors', 'shiny', 'small_graspable', 'cords', 'faces'],
     preferredColors: ['red', 'yellow', 'blue'],
     explorationMode: 'mouth_first',
+    // ── Vision System — AAP/AAO developmental ophthalmology ────────────────
+    vision: {
+      eyeLevel: { crawling: 0.34, standing: 0.65 },
+      fovHorizontal: 60,        // degrees — narrow infant focus
+      fovVertical: 40,
+      depthPerception: 0.3,     // 0-1 — poor binocular depth
+      peripheralVision: 0.2,
+      maxScanDistance: 1.5,     // meters — can focus 8-15 inches primarily
+      focusMode: 'floor',       // floor-locked gaze pattern
+      colorSensitivity: 0.3,    // R,Y,B only; limited color discrimination
+      contrastSensitivity: 0.01,// ARVO: ~100x worse than adult at birth
+    },
+    // ── Movement Kinematics — NIH gait studies ────────────────────────────
+    kinematics: {
+      turnRate: 0.8,            // rad/s — very slow turning
+      forwardBias: 0.2,         // low — mostly stationary/crawling
+      dirChangeCooldown: 3.0,   // seconds before direction change
+      momentumFactor: 0.3,      // low inertia
+    },
+    // ── Hand-Eye Coordination — NIH motor development ────────────────────
+    coordination: {
+      reactionLatency: 0.800,   // seconds — NIH gaze RT ~400ms + motor ~400ms
+      graspingOffset: 0.08,     // meters — large spatial error
+      graspSuccessRate: 0.50,   // 50% success rate
+      dropProbability: 0.30,    // 30% chance of dropping
+    },
+    // ── Spatial Cognition — Piaget sensorimotor stage ─────────────────────
+    cognition: {
+      objectPermanence: 0.3,    // partial (4-8mo Piaget)
+      hiddenObjectMemory: 2,    // seconds
+      depthErrorMargin: 0.15,   // meters — large edge misjudging
+      edgeAwareness: 0.1,       // Gibson visual cliff: very low
+      dangerMemoryDuration: 10, // seconds — forgets fast
+      maxDangerZones: 2,
+      failBeforeStrategyChange: Infinity, // no strategy change
+      strategyChangeType: null,
+    },
+    // ── Fear & Caution — Moro reflex, stranger anxiety ───────────────────
+    fear: {
+      startleSensitivity: 1.0,     // Moro reflex fully active
+      startleFreezeDuration: 1.5,  // seconds
+      heightFearThreshold: 0.3,    // meters
+      heightFearResponse: 'cry',
+      strangerFear: 0.7,           // high stranger/large-object avoidance
+    },
   },
 
   toddler: {
@@ -114,6 +159,47 @@ const ageGroups = {
     attractedTo: ['bright_colors', 'shiny', 'moving', 'buttons', 'drawers', 'cords'],
     preferredColors: ['red', 'yellow', 'blue', 'green'],
     explorationMode: 'touch_everything',
+    // ── Vision System ─────────────────────────────────────────────────────
+    vision: {
+      eyeLevel: { crawling: 0.38, standing: 0.75 },
+      fovHorizontal: 90,
+      fovVertical: 50,
+      depthPerception: 0.6,
+      peripheralVision: 0.4,
+      maxScanDistance: 3.0,
+      focusMode: 'near',
+      colorSensitivity: 0.7,
+      contrastSensitivity: 0.3,
+    },
+    kinematics: {
+      turnRate: 1.2,
+      forwardBias: 0.7,         // high — lunges forward impulsively
+      dirChangeCooldown: 1.5,
+      momentumFactor: 0.5,
+    },
+    coordination: {
+      reactionLatency: 0.600,
+      graspingOffset: 0.05,
+      graspSuccessRate: 0.70,
+      dropProbability: 0.15,
+    },
+    cognition: {
+      objectPermanence: 0.7,    // A-not-B error still possible
+      hiddenObjectMemory: 8,
+      depthErrorMargin: 0.08,
+      edgeAwareness: 0.3,
+      dangerMemoryDuration: 30,
+      maxDangerZones: 4,
+      failBeforeStrategyChange: 3,
+      strategyChangeType: 'random_alt',
+    },
+    fear: {
+      startleSensitivity: 0.8,
+      startleFreezeDuration: 1.0,
+      heightFearThreshold: 0.5,
+      heightFearResponse: 'hesitate',
+      strangerFear: 0.5,
+    },
   },
 
   preschool: {
@@ -168,6 +254,47 @@ const ageGroups = {
     attractedTo: ['imaginative_play', 'high_places', 'tools', 'colorful'],
     preferredColors: ['red', 'pink', 'blue', 'purple'],
     explorationMode: 'imaginative_play',
+    // ── Vision System ─────────────────────────────────────────────────────
+    vision: {
+      eyeLevel: { crawling: null, standing: 0.92 },
+      fovHorizontal: 120,
+      fovVertical: 60,
+      depthPerception: 0.85,
+      peripheralVision: 0.7,
+      maxScanDistance: 5.0,
+      focusMode: 'mid',
+      colorSensitivity: 0.9,
+      contrastSensitivity: 0.7,
+    },
+    kinematics: {
+      turnRate: 2.5,
+      forwardBias: 0.5,
+      dirChangeCooldown: 0.8,
+      momentumFactor: 0.7,
+    },
+    coordination: {
+      reactionLatency: 0.450,
+      graspingOffset: 0.02,
+      graspSuccessRate: 0.88,
+      dropProbability: 0.05,
+    },
+    cognition: {
+      objectPermanence: 1.0,
+      hiddenObjectMemory: 30,
+      depthErrorMargin: 0.03,
+      edgeAwareness: 0.6,
+      dangerMemoryDuration: 60,
+      maxDangerZones: 6,
+      failBeforeStrategyChange: 2,
+      strategyChangeType: 'use_tool', // finds stepping stool
+    },
+    fear: {
+      startleSensitivity: 0.5,
+      startleFreezeDuration: 0.5,
+      heightFearThreshold: 0.8,
+      heightFearResponse: 'cautious',
+      strangerFear: 0.3,
+    },
   },
 
   school: {
@@ -222,6 +349,47 @@ const ageGroups = {
     attractedTo: ['sports_equipment', 'tools', 'high_places', 'competition'],
     preferredColors: [],
     explorationMode: 'active_play',
+    // ── Vision System ─────────────────────────────────────────────────────
+    vision: {
+      eyeLevel: { crawling: null, standing: 1.12 },
+      fovHorizontal: 150,
+      fovVertical: 70,
+      depthPerception: 0.95,
+      peripheralVision: 0.9,
+      maxScanDistance: 8.0,
+      focusMode: 'full',
+      colorSensitivity: 1.0,
+      contrastSensitivity: 0.9,
+    },
+    kinematics: {
+      turnRate: 3.5,
+      forwardBias: 0.3,
+      dirChangeCooldown: 0.4,
+      momentumFactor: 0.85,
+    },
+    coordination: {
+      reactionLatency: 0.350,
+      graspingOffset: 0.01,
+      graspSuccessRate: 0.95,
+      dropProbability: 0.02,
+    },
+    cognition: {
+      objectPermanence: 1.0,
+      hiddenObjectMemory: 60,
+      depthErrorMargin: 0.01,
+      edgeAwareness: 0.85,
+      dangerMemoryDuration: 120,
+      maxDangerZones: 8,
+      failBeforeStrategyChange: 2,
+      strategyChangeType: 'plan',
+    },
+    fear: {
+      startleSensitivity: 0.3,
+      startleFreezeDuration: 0.3,
+      heightFearThreshold: 1.2,
+      heightFearResponse: 'aware',
+      strangerFear: 0.1,
+    },
   },
 
   preteen: {
@@ -276,6 +444,47 @@ const ageGroups = {
     attractedTo: ['thrill_seeking', 'high_places', 'heavy_objects', 'electronics'],
     preferredColors: [],
     explorationMode: 'thrill_seeking',
+    // ── Vision System ─────────────────────────────────────────────────────
+    vision: {
+      eyeLevel: { crawling: null, standing: 1.31 },
+      fovHorizontal: 170,
+      fovVertical: 75,
+      depthPerception: 1.0,
+      peripheralVision: 1.0,
+      maxScanDistance: 10.0,
+      focusMode: 'full',
+      colorSensitivity: 1.0,
+      contrastSensitivity: 1.0,
+    },
+    kinematics: {
+      turnRate: 4.0,
+      forwardBias: 0.2,
+      dirChangeCooldown: 0.3,
+      momentumFactor: 0.9,
+    },
+    coordination: {
+      reactionLatency: 0.300,
+      graspingOffset: 0.005,
+      graspSuccessRate: 0.98,
+      dropProbability: 0.01,
+    },
+    cognition: {
+      objectPermanence: 1.0,
+      hiddenObjectMemory: 120,
+      depthErrorMargin: 0.005,
+      edgeAwareness: 0.95,
+      dangerMemoryDuration: 180,
+      maxDangerZones: 10,
+      failBeforeStrategyChange: 1,
+      strategyChangeType: 'plan',
+    },
+    fear: {
+      startleSensitivity: 0.2,
+      startleFreezeDuration: 0.2,
+      heightFearThreshold: 1.5,
+      heightFearResponse: 'rational',
+      strangerFear: 0.05,
+    },
   }
 };
 

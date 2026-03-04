@@ -64,6 +64,8 @@ interface Props {
   playbackPaused?: boolean;
   playbackSeek?: number | null;
   enableFloorSnap?: boolean;
+  showBoundingBoxes?: boolean;
+  isBabyView?: boolean;
 }
 
 // ─── Figure handle ────────────────────────────────────────────────────────────
@@ -92,29 +94,66 @@ function toWorldSpace(
   const y = Array.isArray(pos) ? pos[1] : pos.y;
   const z = Array.isArray(pos) ? pos[2] : pos.z;
 
+  // Guard: if offsetXYZ is not yet computed (model not loaded), use zero offset
+  if (!offsetXYZ) {
+    return new THREE.Vector3(x, y, z);
+  }
+
   return new THREE.Vector3(x - offsetXYZ.x, y - offsetXYZ.y, z - offsetXYZ.z);
 }
 
 function getFloorY(c: any, worldPos: THREE.Vector3): number | null {
-  const meshes = c.sceneMeshes as THREE.Mesh[];
-  if (!meshes.length) return null;
+  const floorMeshes = c.floorMeshes as THREE.Mesh[];
+  const allMeshes = c.sceneMeshes as THREE.Mesh[];
+  if (!allMeshes.length) return null;
 
   const rc = c.raycaster as THREE.Raycaster;
-  // Cast from well above the agent position downward to catch any floor
-  rc.set(
-    new THREE.Vector3(worldPos.x, worldPos.y + 2.0, worldPos.z),
-    new THREE.Vector3(0, -1, 0),
-  );
-  rc.far = 10.0; // detect surfaces within 10m below (handles multi-story)
+  const origin = new THREE.Vector3(worldPos.x, worldPos.y + 5.0, worldPos.z);
+  const down = new THREE.Vector3(0, -1, 0);
+  rc.far = 10.0;
 
-  const hits = rc.intersectObjects(meshes, false);
-  if (!hits.length) {
-    // Fallback: use the scene's known floor height
+  // Pass 1: Raycast only against named floor meshes (Layer 2) — most accurate
+  if (floorMeshes.length > 0) {
+    rc.set(origin, down);
+    const floorHits = rc.intersectObjects(floorMeshes, false);
+    if (floorHits.length > 0) {
+      return floorHits[0].point.y;
+    }
+  }
+
+  // Pass 2: Raycast against ALL scene meshes.
+  // FIX #14: Find the LOWEST hit point — this is the floor surface.
+  // Previously we filtered by sceneFloorY + 0.3, which failed when sceneFloorY was wrong.
+  // The lowest hit is almost always the floor (furniture/table surfaces are higher).
+  // FIX #16: Find hit closest to known physics floor (within 0.5m tolerance).
+  // Previously returned the lowest hit, which could be a geometry artefact.
+  // Now we prefer actual floor-level hits to avoid snapping to furniture surfaces.
+  rc.set(origin, down);
+  const allHits = rc.intersectObjects(allMeshes, false);
+  if (!allHits.length) {
     return c.physicsFloorY ?? null;
   }
 
-  // Take the highest hit surface (closest from above)
-  return hits[0].point.y;
+  // Prioritize hits on floor-classified meshes (e.g. layers containing 2)
+  const floorLayer = new THREE.Layers();
+  floorLayer.set(2);
+  const floorHits = allHits.filter((h) => h.object.layers.test(floorLayer));
+  if (floorHits.length > 0) {
+    return floorHits[0].point.y;
+  }
+
+  const physFloor = c.physicsFloorY ?? 0;
+  let bestY: number | null = null;
+  let bestDist = Infinity;
+  for (let i = 0; i < allHits.length; i++) {
+    const hitY = allHits[i].point.y;
+    const dist = Math.abs(hitY - physFloor);
+    if (dist < 0.5 && dist < bestDist) {
+      bestDist = dist;
+      bestY = hitY;
+    }
+  }
+  return bestY ?? c.physicsFloorY ?? null;
 }
 
 // ─── LOD ─────────────────────────────────────────────────────────────────────
@@ -128,17 +167,45 @@ function getLOD(root: THREE.Group, cam: THREE.Camera): LOD {
 const ICONS: Record<string, string> = {
   crawl: "🐛",
   walk: "🚶",
+  walk_to: "🚶",
+  walk_random: "🚶",
   run: "🏃",
   sprint: "💨",
+  run_unstable: "🏃",
   climb_on: "🧗",
   climb: "🧗",
+  climb_approach: "🧗",
+  climb_reach: "🧗",
+  climb_pull: "🧗",
+  climb_mount: "🧗",
+  climb_fail: "❌",
+  step_up: "⬆️",
+  step_down: "⬇️",
   stumble: "⚠️",
+  trip: "⚠️",
   falling: "💥",
   free_fall: "💥",
+  fall_forward: "💥",
+  lose_balance: "🌀",
+  hurt_light: "😣",
+  hurt_medium: "😢",
+  hurt_heavy: "😭",
+  hurt_shock: "🤕",
+  recoil: "😖",
+  crying_stand: "😭",
+  crying_sit: "😭",
+  get_up_slow: "🧎",
+  get_up_fast: "🧎",
   idle: "💤",
+  pause: "💤",
   wade: "🌊",
+  grab: "✊",
   grab_mouth: "👄",
+  reach_up: "🙆",
+  pull: "🤏",
+  lunge: "💨",
   investigate: "👀",
+  look_around: "👀",
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -157,6 +224,8 @@ const Canvas3D: React.FC<Props> = ({
   playbackPaused = false,
   playbackSeek = null,
   enableFloorSnap = true,
+  showBoundingBoxes = false,
+  isBabyView = false,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const ctx = useRef<any>(null);
@@ -168,6 +237,7 @@ const Canvas3D: React.FC<Props> = ({
     playbackSeek,
     enableFloorSnap,
     sceneData,
+    showBoundingBoxes,
   });
   propsRef.current = {
     simulationPlayback,
@@ -177,6 +247,7 @@ const Canvas3D: React.FC<Props> = ({
     playbackSeek,
     enableFloorSnap,
     sceneData,
+    showBoundingBoxes,
   };
   const [loadStatus, setLoadStatus] = useState("");
   const [loadPct, setLoadPct] = useState<number | null>(null);
@@ -241,6 +312,7 @@ const Canvas3D: React.FC<Props> = ({
       physicsFloorY: 0,
       floorBias: 0,
       sceneMeshes: [] as THREE.Mesh[],
+      floorMeshes: [] as THREE.Mesh[],
       bbHelpers: [] as THREE.Object3D[],
       isPlaying: false,
       playStart: 0,
@@ -304,7 +376,7 @@ const Canvas3D: React.FC<Props> = ({
   useEffect(() => {
     if (!ctx.current || playbackSeek === null) return;
     const fps = simulationPlayback?.config?.fps ?? 60;
-    const dur = simulationPlayback?.config?.duration ?? 10;
+    const dur = simulationPlayback?.config?.duration ?? 30;
     ctx.current.currentFrame = Math.floor(playbackSeek * fps * dur);
     ctx.current.playStart =
       Date.now() - (ctx.current.currentFrame / fps) * 1000;
@@ -381,6 +453,35 @@ const Canvas3D: React.FC<Props> = ({
               });
             }
             c.sceneMeshes.push(mesh);
+
+            // Classify floor meshes by name for layer-based raycasting
+            const name = (mesh.name || "").toLowerCase();
+            if (/floor|ground|plane|surface|vloer|grond/.test(name)) {
+              mesh.layers.enable(2);
+              c.floorMeshes.push(mesh);
+            }
+          }
+        });
+
+        // ── Build bounding box wireframe helpers for debug visualization ──
+        c.bbHelpers.forEach((h: THREE.Object3D) => c.scene.remove(h));
+        c.bbHelpers = [];
+        model.traverse((o: THREE.Object3D) => {
+          const mesh = o as THREE.Mesh;
+          if (mesh.isMesh && mesh.geometry) {
+            mesh.geometry.computeBoundingBox();
+            if (mesh.geometry.boundingBox) {
+              const worldBB = mesh.geometry.boundingBox.clone();
+              worldBB.applyMatrix4(mesh.matrixWorld);
+              const helper = new THREE.Box3Helper(
+                worldBB,
+                new THREE.Color(0x00ff88),
+              );
+              helper.visible = false; // hidden by default, toggle via showBoundingBoxes
+              helper.renderOrder = 998;
+              c.scene.add(helper);
+              c.bbHelpers.push(helper);
+            }
           }
         });
 
@@ -428,26 +529,32 @@ const Canvas3D: React.FC<Props> = ({
     action: string,
     doSnap: boolean,
   ): number {
+    // FIX #13/#14: Floor clearance offset — prevents feet from sinking through floor mesh.
+    // Floor collider has half-height 0.1m; visual floor mesh has additional thickness.
+    // Scale clearance by body size: smaller children need less, bigger need more
+    const FLOOR_CLEARANCE = realHeight * 0.04; // ~4% of body height
+
     // Decode foot position from physics center
     const backendBaseY = worldPos.y - realHeight / 2;
-
-    // The absolute floor of the scene (from the loaded GLB model)
     const sceneFloorY = c.physicsFloorY ?? 0;
 
-    // Always try floor snap — even for falling, to prevent infinite sinking
-    if (doSnap) {
+    // FIX #17: Trust the backend's rigorous raycast-validated spawn Y!
+    // If we indiscriminately cast a new ray from +5.0m here, we will hit the TOP of beds,
+    // overriding the safe floor spawn and yanking the agent up into the mattress visually.
+    // We only snap to the local mesh floor if actively walking/falling, otherwise trust the start point.
+    if (doSnap && ["falling", "free_fall", "walk", "run"].includes(action)) {
       const rayY = getFloorY(c, worldPos);
       if (rayY !== null) {
-        // For falling states allow larger snap distance (agent may be high Up)
-        const threshold = ["falling", "free_fall"].includes(action) ? 5.0 : 1.5;
+        // For falling states allow larger snap distance (agent may be high up)
+        const threshold = ["falling", "free_fall"].includes(action) ? 5.0 : 0.8;
         if (Math.abs(rayY - backendBaseY) < threshold) {
-          return rayY;
+          return rayY + FLOOR_CLEARANCE;
         }
       }
     }
 
-    // Absolute floor guard — agent can NEVER render below the scene floor
-    return Math.max(backendBaseY, sceneFloorY);
+    // Trust the backed position by default, but NEVER go below the absolute scene floor
+    return Math.max(backendBaseY, sceneFloorY + FLOOR_CLEARANCE);
   }
 
   // ── Spawn playback agents ─────────────────────────────────────────────────
@@ -575,6 +682,46 @@ const Canvas3D: React.FC<Props> = ({
     }
   }, [selectedAgentId, simulationPlayback]);
 
+  // ── Bounding Box Debug Toggle ─────────────────────────────────────────────
+  useEffect(() => {
+    if (!ctx.current) return;
+    const c = ctx.current;
+    c.bbHelpers.forEach((h: THREE.Object3D) => {
+      h.visible = showBoundingBoxes;
+    });
+  }, [showBoundingBoxes]);
+
+  // ── Baby View ─────────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (!ctx.current) return;
+    const c = ctx.current;
+    if (isBabyView) {
+      // Store current camera position for restoration
+      c._savedCamPos = c.camera.position.clone();
+      c._savedTarget = c.controls.target.clone();
+      // Set camera to child eye level (~0.6m) looking forward
+      const lookDir = new THREE.Vector3(0, 0, -1)
+        .applyQuaternion(c.camera.quaternion)
+        .normalize();
+      c.camera.position.set(
+        c.controls.target.x - lookDir.x * 2,
+        0.6,
+        c.controls.target.z - lookDir.z * 2,
+      );
+      c.controls.target.set(c.controls.target.x, 0.6, c.controls.target.z);
+      c.controls.maxPolarAngle = Math.PI * 0.55;
+      c.controls.minPolarAngle = Math.PI * 0.35;
+      c.controls.update();
+    } else if (c._savedCamPos) {
+      // Restore saved camera position
+      c.camera.position.copy(c._savedCamPos);
+      c.controls.target.copy(c._savedTarget);
+      c.controls.maxPolarAngle = Math.PI;
+      c.controls.minPolarAngle = 0;
+      c.controls.update();
+    }
+  }, [isBabyView]);
+
   // ── Heatmap ───────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!ctx.current) return;
@@ -585,12 +732,8 @@ const Canvas3D: React.FC<Props> = ({
       (m.material as THREE.Material)?.dispose();
     });
     c.heatMeshes = [];
-    c.bbHelpers.forEach((h: THREE.Object3D) => {
-      h.visible = !showHeatmap;
-    });
     if (!showHeatmap || !heatmapData?.length || !c.model) return;
     const off = c.offsetXYZ as THREE.Vector3;
-    const unitScale = sceneUnitScale || 1.0;
 
     heatmapData.forEach((obj) => {
       if (!obj) return;
@@ -605,20 +748,33 @@ const Canvas3D: React.FC<Props> = ({
         const mx = toWorldSpace([bb.max[0], bb.max[1], bb.max[2]], off);
         const ctr = new THREE.Vector3().addVectors(mn, mx).multiplyScalar(0.5);
         const sz = new THREE.Vector3().subVectors(mx, mn);
+
+        // FIX #9: Add heatbox to SCENE (not model) to avoid double-transformation
+        // The world-space coordinates from toWorldSpace already account for offset.
+        // Adding to model.worldToLocal + scale(1/unitScale) caused double-scaling.
         const heatBox = new THREE.Mesh(
           new THREE.BoxGeometry(sz.x, sz.y, sz.z),
           new THREE.MeshBasicMaterial({
             color: hc,
             transparent: true,
-            opacity: 0.1 + obj.intensity * 0.18,
+            opacity: Math.min(0.25, 0.05 + obj.intensity * 0.1),
             depthWrite: false,
+            depthTest: true,
+            blending: THREE.AdditiveBlending,
             side: THREE.DoubleSide,
           }),
         );
-        heatBox.position.copy(c.model.worldToLocal(ctr.clone()));
-        heatBox.scale.setScalar(1 / unitScale);
-        c.model.add(heatBox);
+        heatBox.renderOrder = 999;
+        heatBox.position.copy(ctr);
+        c.scene.add(heatBox);
         c.heatMeshes.push(heatBox);
+
+        // Debug: log heatmap alignment info
+        console.log(
+          `[Heatmap] "${obj.objectName}" center=(${ctr.x.toFixed(2)}, ${ctr.y.toFixed(2)}, ${ctr.z.toFixed(2)})`,
+          `size=(${sz.x.toFixed(2)}, ${sz.y.toFixed(2)}, ${sz.z.toFixed(2)})`,
+          `intensity=${obj.intensity.toFixed(2)}`,
+        );
       }
       const pts = [
         ...(obj.collisions ?? []).map((x: any) => ({
@@ -649,12 +805,13 @@ const Canvas3D: React.FC<Props> = ({
             depthWrite: false,
           }),
         );
+        sph.renderOrder = 999;
         const wPos = toWorldSpace(pos, off);
-        sph.position.copy(c.model.worldToLocal(wPos.clone()));
-        sph.scale.setScalar(1 / unitScale);
+        // FIX #9: Add to scene directly (not model) — same fix as heatbox
+        sph.position.copy(wPos);
         sph.userData.severe = sev;
         sph.userData.base = 0.9;
-        c.model.add(sph);
+        c.scene.add(sph);
         c.heatMeshes.push(sph);
       });
     });
@@ -685,6 +842,16 @@ const Canvas3D: React.FC<Props> = ({
     const c = ctx.current;
     const offXYZ = c.offsetXYZ as THREE.Vector3;
     const frameDt = 1 / 60;
+
+    // Debug: log offset once when live positions first arrive
+    if (liveAgentPositions?.length && !c._liveOffsetLogged) {
+      c._liveOffsetLogged = true;
+      console.log(
+        `[Canvas3D LIVE] offsetXYZ=${offXYZ ? `(${offXYZ.x.toFixed(3)}, ${offXYZ.y.toFixed(3)}, ${offXYZ.z.toFixed(3)})` : "UNDEFINED"}`,
+        `| first agent pos=[${liveAgentPositions[0]?.position}]`,
+        `| world=${offXYZ ? `(${(liveAgentPositions[0]?.position?.[0] - offXYZ.x).toFixed(3)}, ${(liveAgentPositions[0]?.position?.[2] - offXYZ.z).toFixed(3)})` : "N/A"}`,
+      );
+    }
 
     if (!liveAgentPositions?.length) {
       c.liveFigures.forEach((fh: FigureHandle) => {
@@ -738,7 +905,13 @@ const Canvas3D: React.FC<Props> = ({
       // FIX-M3: Infer action from movement speed instead of hardcoding "walk"
       const liveAction = dist > 0.02 ? "run" : dist > 0.005 ? "walk" : "idle";
 
-      const rawY = resolveAgentY(c, tgt, realHeight, liveAction, enableFloorSnap);
+      const rawY = resolveAgentY(
+        c,
+        tgt,
+        realHeight,
+        liveAction,
+        enableFloorSnap,
+      );
       // Smooth transitions for live positions (interpolate Y only slightly)
       const finalY = fh.root.position.y + (rawY - fh.root.position.y) * 0.2;
       fh.lastFloorY = rawY;
@@ -765,7 +938,7 @@ const Canvas3D: React.FC<Props> = ({
     if (!sp?.trajectories?.length) return;
 
     const fps = sp.config?.fps ?? 60;
-    const dur = sp.config?.duration ?? 10;
+    const dur = sp.config?.duration ?? 30;
     const total = fps * dur;
 
     if (!paused) {
@@ -846,7 +1019,25 @@ const Canvas3D: React.FC<Props> = ({
         );
       }
 
-      fh.root.position.set(worldPos.x, finalY, worldPos.z);
+      // FIX #3: Smooth Y lerp for climbing actions
+      const climbActions = [
+        "climb_on",
+        "climb",
+        "climb_approach",
+        "climb_reach",
+        "climb_pull",
+        "climb_mount",
+        "step_up",
+        "step_down",
+      ];
+      if (climbActions.includes(action)) {
+        // FIX: Increased from 0.08 to 0.25 — faster Y convergence during climb transitions
+        const smoothY =
+          fh.root.position.y + (finalY - fh.root.position.y) * 0.25;
+        fh.root.position.set(worldPos.x, smoothY, worldPos.z);
+      } else {
+        fh.root.position.set(worldPos.x, finalY, worldPos.z);
+      }
 
       const lodLevel = getLOD(fh.root, c.camera);
       if (lodLevel !== "far") {
@@ -892,8 +1083,10 @@ const Canvas3D: React.FC<Props> = ({
           map: tx,
           transparent: true,
           depthTest: false,
+          depthWrite: false,
         }),
       );
+      spr!.renderOrder = 1000;
       spr!.scale.set(1.4, 0.35, 1);
       spr!.userData = { forAgent: selId, canvas: cv, tex: tx };
       c.scene.add(spr);

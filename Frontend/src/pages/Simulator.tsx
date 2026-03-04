@@ -1,7 +1,8 @@
 import React, { useState, useRef, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
 import { generateSafetyReport } from "../utils/ReportGenerator";
 import Canvas3D from "../components/Canvas3D";
+import Header from "../components/Header";
+import Footer from "../components/Footer";
 
 interface CollisionEvent {
   time: number;
@@ -65,9 +66,7 @@ interface SimulationResult {
 }
 
 const Simulator = () => {
-  const navigate = useNavigate();
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [user, setUser] = useState<any>(null);
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
   const [fileName, setFileName] = useState<string>("");
   const [modelPath, setModelPath] = useState<string>("");
@@ -75,10 +74,12 @@ const Simulator = () => {
   const [simulationPlayback, setSimulationPlayback] = useState<any>(null);
   const [ageGroup, setAgeGroup] = useState<string>("Toddler (1-3y)");
   const [agentCount, setAgentCount] = useState<number>(10);
-  const [duration, setDuration] = useState<number>(10);
+  const [duration, setDuration] = useState<number>(30);
   const [running, setRunning] = useState<boolean>(false);
   const [simResult, setSimResult] = useState<SimulationResult | null>(null);
   const [error, setError] = useState<string>("");
+  const [isBabyView, setIsBabyView] = useState(false);
+  const canvasContainerRef = useRef<HTMLDivElement>(null);
 
   // Debug logging for RSI data
   useEffect(() => {
@@ -92,6 +93,7 @@ const Simulator = () => {
 
   const [heatmapData, setHeatmapData] = useState<HeatmapObject[] | null>(null);
   const [showHeatmap, setShowHeatmap] = useState(false);
+  const [showBoundingBoxes, setShowBoundingBoxes] = useState(false);
   const [zoneAnalysis, setZoneAnalysis] = useState<any>(null);
 
   const [liveAgentPositions, setLiveAgentPositions] = useState<
@@ -109,27 +111,12 @@ const Simulator = () => {
 
   const token = localStorage.getItem("token");
 
-  // Load user on mount
-  useEffect(() => {
-    const storedUser = localStorage.getItem("user");
-    if (storedUser) {
-      setUser(JSON.parse(storedUser));
-    }
-  }, []);
-
   // Cleanup poll interval on unmount
   useEffect(() => {
     return () => {
       if (pollInterval) clearInterval(pollInterval);
     };
   }, [pollInterval]);
-
-  const handleLogout = () => {
-    localStorage.removeItem("user");
-    localStorage.removeItem("token");
-    setUser(null);
-    navigate("/login");
-  };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -288,7 +275,11 @@ const Simulator = () => {
           id: simId,
           progress: status.progress || 0,
           status: status.status || "running",
-          totalEvents: events.length,
+          // FIX: Use live collisionEventsCount from status during simulation since events array is 202-empty
+          totalEvents:
+            status.status === "complete"
+              ? events.length
+              : status.collisionEventsCount || 0,
           events,
           timestamp: Date.now(),
         });
@@ -348,7 +339,7 @@ const Simulator = () => {
                   trajectories: Array.isArray(simData.trajectories)
                     ? simData.trajectories
                     : [],
-                  config: simData.config || { fps: 60, duration: 10 },
+                  config: simData.config || { fps: 60, duration: 30 },
                 };
                 setSimulationPlayback(validSimData);
               } else {
@@ -454,88 +445,46 @@ const Simulator = () => {
     }
   };
 
-  return (
-    <div className="min-h-screen bg-pink-50 text-gray-700 font-sans selection:bg-pink-200 selection:text-pink-900">
-      {/* --- Global Navigation --- */}
-      <nav className="fixed top-0 left-0 right-0 z-50 p-6 flex justify-between items-center bg-white/80 backdrop-blur">
-        <div className="flex items-center gap-2">
-          <div className="w-10 h-10 bg-gradient-to-br from-pink-400 to-rose-500 rounded-xl flex items-center justify-center text-white text-xl shadow-lg">
-            🛡️
-          </div>
-          <span className="font-extrabold text-xl tracking-tight text-slate-700">
-            ChildSafety
-          </span>
-        </div>
-        <div className="flex items-center gap-4">
-          {user ? (
-            <>
-              <span className="font-bold text-gray-600 hidden md:inline">
-                Hi, {user.name}! 👋
-              </span>
-              <button
-                onClick={handleLogout}
-                className="bg-white/80 hover:bg-rose-50 text-rose-500 font-bold px-5 py-2 rounded-xl transition shadow-sm border border-rose-100"
-              >
-                Logout
-              </button>
-            </>
-          ) : (
-            <>
-              <button
-                onClick={() => navigate("/login")}
-                className="px-5 py-2 text-pink-600 font-bold hover:bg-pink-50 rounded-xl transition"
-              >
-                Login
-              </button>
-              <button
-                onClick={() => navigate("/register")}
-                className="px-5 py-2 bg-pink-500 hover:bg-pink-600 text-white font-bold rounded-xl shadow-lg shadow-pink-200 transition"
-              >
-                Get Started
-              </button>
-            </>
-          )}
-        </div>
-      </nav>
+  const handleScreenshot = () => {
+    const container = canvasContainerRef.current;
+    if (!container) return;
+    const canvas = container.querySelector("canvas");
+    if (!canvas) return;
+    try {
+      const link = document.createElement("a");
+      link.download = `safehome-screenshot-${Date.now()}.png`;
+      link.href = canvas.toDataURL("image/png");
+      link.click();
+    } catch (err) {
+      console.warn("Screenshot failed:", err);
+    }
+  };
 
-      {/* --- Hero Section --- */}
-      <section className="h-screen flex items-center justify-center px-6 pt-20">
-        <div className="glass-panel p-14 text-center max-w-4xl backdrop-blur-xl bg-white/60">
-          <h1 className="text-6xl font-black bg-gradient-to-r from-pink-500 to-purple-500 bg-clip-text text-transparent mb-6">
-            Child Safety Simulator
-          </h1>
-          <p className="text-xl text-gray-600 font-bold mb-10">
-            🎮 Upload 3D models and simulate child safety scenarios with
-            AI-powered behavior analysis
-          </p>
-          <div className="flex gap-4 justify-center flex-wrap">
-            <a
-              href="#simulator"
-              className="px-8 py-4 bg-pink-500 hover:bg-pink-600 text-white font-bold rounded-2xl shadow-xl shadow-pink-300/50 transition-all hover:scale-105"
-            >
-              Start Simulation 🚀
-            </a>
-            <a
-              href="http://localhost:3000/api/health"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="px-8 py-4 bg-blue-500 hover:bg-blue-600 text-white font-bold rounded-2xl shadow-xl"
-            >
-              API Status
-            </a>
-          </div>
-        </div>
-      </section>
+  return (
+    <div className="min-h-screen bg-gradient-to-b from-pink-50 via-white to-rose-50 text-gray-700 font-sans selection:bg-pink-200 selection:text-pink-900">
+      <Header />
+
+      {/* Background blobs */}
+      <div className="fixed inset-0 pointer-events-none overflow-hidden z-0">
+        <div className="blob blob-1" />
+        <div className="blob blob-2" />
+        <div className="blob blob-3" />
+      </div>
 
       {/* --- Main Simulator Interface --- */}
       <section
         id="simulator"
-        className="min-h-screen py-20 px-8 bg-white/40 backdrop-blur-md"
+        className="relative z-10 min-h-screen pt-24 pb-20 px-8"
       >
         <div className="max-w-7xl mx-auto">
-          <h2 className="text-4xl font-black text-slate-700 mb-10">
-            Simulator Controls
-          </h2>
+          <div className="mb-10">
+            <span className="text-sm font-bold text-pink-400 tracking-widest uppercase">
+              3D Environment
+            </span>
+            <h2 className="text-4xl font-black text-slate-700 mt-1">
+              Simulator Controls
+            </h2>
+          </div>
 
           {/* Error Message */}
           {error && (
@@ -623,6 +572,26 @@ const Simulator = () => {
                 {running ? "⏳ Running..." : "🚀 Run Simulation"}
               </button>
             </div>
+
+            {/* View Tools Row */}
+            <div className="flex flex-wrap gap-3 mt-4 pt-4 border-t border-pink-100">
+              <button
+                onClick={() => setIsBabyView(!isBabyView)}
+                className={`px-5 py-2.5 rounded-xl font-bold text-sm transition-all ${
+                  isBabyView
+                    ? "bg-gradient-to-r from-violet-500 to-purple-500 text-white shadow-lg shadow-purple-200/50"
+                    : "bg-white/80 text-gray-600 hover:bg-violet-50 hover:text-violet-600 border border-gray-200"
+                }`}
+              >
+                {isBabyView ? "👶 Baby View ON" : "👁️ Baby View"}
+              </button>
+              <button
+                onClick={handleScreenshot}
+                className="px-5 py-2.5 rounded-xl font-bold text-sm bg-white/80 text-gray-600 hover:bg-emerald-50 hover:text-emerald-600 border border-gray-200 transition-all"
+              >
+                📸 Screenshot
+              </button>
+            </div>
           </div>
 
           {/* --- Progress Indicator --- */}
@@ -644,7 +613,15 @@ const Simulator = () => {
           )}
 
           {/* --- 3D Visualization --- */}
-          <div className="h-[500px] rounded-3xl border-4 border-gray-800 relative overflow-hidden shadow-2xl mb-8">
+          <div
+            ref={canvasContainerRef}
+            className="h-[500px] rounded-3xl border-4 border-gray-800 relative overflow-hidden shadow-2xl mb-8"
+          >
+            {isBabyView && (
+              <div className="absolute top-4 left-1/2 -translate-x-1/2 z-20 px-4 py-2 rounded-full bg-violet-500/90 text-white text-sm font-bold backdrop-blur-sm shadow-lg animate-pulse-glow">
+                👶 Baby View — Camera at child eye level (~60cm)
+              </div>
+            )}
             <Canvas3D
               modelPath={modelPath}
               sceneData={sceneData}
@@ -661,6 +638,8 @@ const Simulator = () => {
               onPlaybackUpdate={setPlaybackInfo}
               playbackPaused={playbackPaused}
               playbackSeek={playbackSeek}
+              showBoundingBoxes={showBoundingBoxes}
+              isBabyView={isBabyView}
             />
           </div>
 
@@ -1258,6 +1237,16 @@ const Simulator = () => {
                     {showHeatmap ? "Hide Heatmap" : "Show Heatmap"}
                   </button>
                   <button
+                    onClick={() => setShowBoundingBoxes(!showBoundingBoxes)}
+                    className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${
+                      showBoundingBoxes
+                        ? "bg-green-100 text-green-700 shadow-lg"
+                        : "bg-white/20 hover:bg-white/30"
+                    }`}
+                  >
+                    {showBoundingBoxes ? "Hide BBoxes" : "Show BBoxes"}
+                  </button>
+                  <button
                     onClick={exportToExcel}
                     className="px-4 py-2 bg-white/20 hover:bg-white/30 rounded-lg text-sm font-bold backdrop-blur-sm"
                   >
@@ -1642,17 +1631,7 @@ const Simulator = () => {
         </div>
       </section>
 
-      {/* --- Footer --- */}
-      <footer className="bg-white/60 backdrop-blur-md border-t border-pink-100 py-12 mt-20">
-        <div className="max-w-7xl mx-auto px-8 text-center">
-          <p className="font-black text-slate-600">
-            HUTECH University - AI Innovation Contest 2026
-          </p>
-          <p className="text-sm text-slate-500 mt-2">
-            Đỗ Thư Kỳ (Backend) & Triệu Đoan Kỳ (Frontend)
-          </p>
-        </div>
-      </footer>
+      <Footer />
     </div>
   );
 };

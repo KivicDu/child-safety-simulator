@@ -1,52 +1,3 @@
-/**
- * FigureDriver.ts — v2.0 (BUG-FIX)
- * ─────────────────────────────────────────────────────────────────────────────
- *
- * ═══ ROOT CAUSE ANALYSIS ════════════════════════════════════════════════════
- *
- * BUG-01  CAMERA UNDER FLOOR / AGENTS CLIPPING INTO FLOOR
- *         File:  SkeletonDriver.alignToFloor()
- *         Cause: alignToFloor() scans ALL bones including root-level Hips bone
- *                which in Mixamo rigs sits at Y≈0.9m in bind pose.
- *                After model.position.y = 0, worldToLocal(hipPos).y ≈ 0.9m → minLocalY = 0.9
- *                → model.position.y = -0.9 → model pushed DOWN 0.9m INTO the floor.
- *                Canvas3D then also subtracts realHeight/2 → total offset ≈ -1.35m.
- *         Fix:   alignToFloor() now scans only FOOT/TOE bones (lowest extremity).
- *                If no foot bones found, falls back to scanning only shin/knee bones.
- *                If still nothing, uses bbox min instead of bone scan.
- *                Additionally, Canvas3D already handles foot Y placement via
- *                backendBaseY = centerY - realHeight/2 → alignToFloor should
- *                produce an offset of ~0, not negative. Added guard: if computed
- *                offset < -0.05, clamp to 0 (physics engine already handles floor).
- *
- * BUG-02  ARM/SPINE CONTORTION IN PROCEDURAL FALLBACK (forceProcedural=true)
- *         File:  SkeletonDriver.update() — Procedural Fallback section
- *         Cause: Same unclamped joint values as ProceduralFigure had:
- *                - isFall armL_x = -PI*0.8 = -144° (arm physically impossible)
- *                - excited armL_x = -(PI+0.32) = -198° (arm wraps through body)
- *                - crawl cycleRate = 1.8 rad/s (too slow, NIH data: needs 3.2)
- *         Fix:   Applied same JOINT_LIMITS and corrected values as ProceduralFigure v2.
- *
- * BUG-03  forceProcedural DOUBLE-DRIVES BONES ALREADY IN MIXER
- *         Cause: When forceProcedural=true, the code falls through to procedural
- *                fallback AFTER mixer.update(). _applyBone() adds rotation.x on top
- *                of mixer quaternion → bones accumulate rotation every frame.
- *         Fix:   When mixer is active AND forceProcedural=true, procedural values
- *                are applied as REPLACE (not additive) only to bones NOT in mixer.
- *                Bones in mixer keep mixer-driven values unchanged.
- *
- * BUG-04  MODEL REGISTRY — dummy.glb fallback leads to 0 bones mapped
- *         Cause: All age groups point to '/models/dummy.glb' which may not exist
- *                or may not have Mixamo bones → 0 bones mapped → T-pose or
- *                placeholder ProceduralDriver shown instead of GLB.
- *                forceProcedural:true was a workaround that caused BUG-03.
- *         Fix:   Added forceProceduralOnly: true option. When set, SkeletonDriver
- *                skips GLB loading entirely and drives bones purely procedurally.
- *                This is cleaner than forceProcedural:true with a broken GLB path.
- *                For production: replace glbPath with real model path and remove
- *                forceProceduralOnly.
- */
-
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { ProceduralFigure, createFigure, type ActionEntry } from './Proceduralfigure';
@@ -110,22 +61,17 @@ export interface ModelRegistryEntry {
   modelHeight?:        number;
   boneMap?:            BoneMap;
   forceProcedural?:    boolean;
-  /** FIX-BUG04: When true, skip GLB loading and drive everything procedurally.
-   *  Use this when no GLB is available. Much cleaner than forceProcedural+bad GLB. */
   forceProceduralOnly?: boolean;
   restPoseOffsets?:    Partial<Record<keyof BoneMap, [number, number, number]>>;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// FIX-BUG02: Anatomical joint limits — same as ProceduralFigure v2
-// ─────────────────────────────────────────────────────────────────────────────
 const JOINT_LIMITS: Record<string, [number, number]> = {
   armL_x:     [-1.047, Math.PI],   // shoulder: -60° → +180° (overhead)
   armR_x:     [-1.047, Math.PI],
-  forearmL_x: [0, 2.530],          // elbow: 0° → 145°, no hyperextension
-  forearmR_x: [0, 2.530],
-  thighL_x:   [-0.698, 1.222],     // hip: -40° → +70°
-  thighR_x:   [-0.698, 1.222],
+  forearmL_x: [-2.530, 0],
+  forearmR_x: [-2.530, 0],
+  thighL_x:   [-1.745, 1.222],     // hip: -100° → +70° (sitting/lying/crawl needs ≥90°)
+  thighR_x:   [-1.745, 1.222],
   shinL_x:    [0, 2.443],          // knee: 0° → 140°, no hyperextension
   shinR_x:    [0, 2.443],
   spine_x:    [-0.436, 1.309],     // spine: -25° → +75°
@@ -140,12 +86,6 @@ function clampJoint(key: string, value: number): number {
   return Math.max(lim[0], Math.min(lim[1], value));
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// MODEL REGISTRY
-// ─────────────────────────────────────────────────────────────────────────────
-// FIX-BUG04: Use forceProceduralOnly:true when no valid GLB is available.
-// Remove forceProceduralOnly and set real glbPath when production models are ready.
-// ─────────────────────────────────────────────────────────────────────────────
 export const MODEL_REGISTRY: Record<string, ModelRegistryEntry> = {
   infant: {
     realHeight:          0.70,
@@ -169,6 +109,13 @@ export const MODEL_REGISTRY: Record<string, ModelRegistryEntry> = {
     forceProceduralOnly: true,
   },
   school_age: {
+    realHeight:          1.30,
+    driver:              'mixamo',
+    glbPath:             '/models/dummy.glb',
+    modelHeight:         1.0,
+    forceProceduralOnly: true,
+  },
+  school: {
     realHeight:          1.30,
     driver:              'mixamo',
     glbPath:             '/models/dummy.glb',
@@ -446,8 +393,21 @@ export class SkeletonDriver implements IFigureDriver {
     const isWade  = action === 'wade';
     const isCrawl = action === 'crawl';
     const isFall  = ['falling', 'free_fall', 'stumble', 'trip', 'fall_forward', 'lose_balance'].includes(action);
-    const isClimb = ['climb_on', 'climb'].includes(action);
-    const isIdle  = !isRun && !isWalk && !isWade && !isCrawl && !isFall && !isClimb;
+    const isClimb = ['climb_on', 'climb', 'climb_approach', 'climb_reach', 'climb_pull', 'climb_mount', 'climb_down', 'step_up', 'step_down'].includes(action);
+    const isClimbFail = action === 'climb_fail';
+    const isHurt     = ['hurt_light', 'hurt_medium', 'hurt_heavy', 'hurt_shock', 'recoil'].includes(action);
+    const isCrying   = ['crying_stand', 'crying_sit'].includes(action);
+    const isGetUp    = ['get_up_slow', 'get_up_fast'].includes(action);
+    const isGrab     = ['grab', 'grab_mouth'].includes(action);
+    const isReach    = action === 'reach_up';
+    const isPull     = ['pull', 'pull_to_stand', 'open_drawer'].includes(action);
+    const isLunge    = action === 'lunge';
+    const isLookAround = action === 'look_around';
+    const isPause    = action === 'pause';
+    const isSlide    = action === 'slide';
+    const isRareEvent = ['dodge', 'push', 'throw', 'pick_up', 'sit_down', 'stand_up', 'jump', 'land'].includes(action);
+    const isInteract = isGrab || isReach || isPull || isLunge || isLookAround || isPause || isHurt || isCrying || isGetUp || isClimbFail || isSlide || isRareEvent;
+    const isIdle  = !isRun && !isWalk && !isWade && !isCrawl && !isFall && !isClimb && !isInteract;
     const vel     = entry?.v ?? 0;
 
     // ── Mixer-driven animation ─────────────────────────────────────────────
@@ -485,8 +445,8 @@ export class SkeletonDriver implements IFigureDriver {
 
         overrideIfMissing('armL',     armSwing > 0 ? -s * armSwing : 0);
         overrideIfMissing('armR',     armSwing > 0 ?  s * armSwing : 0);
-        overrideIfMissing('forearmL', elbowBend);
-        overrideIfMissing('forearmR', elbowBend);
+        overrideIfMissing('forearmL', -elbowBend);
+        overrideIfMissing('forearmR', -elbowBend);
 
         this.updateScale(this.currentAgeGroupId);
         this._alignToFloor();
@@ -498,8 +458,13 @@ export class SkeletonDriver implements IFigureDriver {
     }
 
     // ── Full procedural fallback (no mixer, or forceProcedural=true) ───────
-    // FIX-BUG02: Corrected cycle rates (NIH crawl: 3.2 rad/s)
-    const cycleRate = isRun ? 3.8 : isWalk ? 2.5 : isWade ? 1.2 : isCrawl ? 3.2 : 0.6;
+    // FIX #1: cycleRate = 0 when idle to prevent sliding
+    const cycleRate = isRun ? 3.8 : isWalk ? 2.5 : isWade ? 1.2 : isCrawl ? 3.2
+      : isFall ? 5.0 : isClimb ? 1.5 : isHurt ? 2.0 : isCrying ? 1.5
+      : isGetUp ? 0.8
+      : action === 'push' ? 1.0 : action === 'pick_up' ? 0.8 : action === 'sit_down' ? 0.5
+      : action === 'stand_up' ? 0.8 : isSlide ? 0 : isRareEvent ? 0
+      : isInteract ? 1.0 : 0;
     this.cycle += dt * cycleRate;
     const s = Math.sin(this.cycle);
     const c = Math.cos(this.cycle);
@@ -531,6 +496,75 @@ export class SkeletonDriver implements IFigureDriver {
       this._t('thighR_x', -(0.52 - t2 * 0.17));
       this._t('shinL_x',   0.87 + t2 * 0.35);
       this._t('shinR_x',   0.52 + t2 * 0.17);
+    } else if (isHurt) {
+      if (action === 'hurt_light' || action === 'recoil') {
+        this._t('thighL_x', 0.10); this._t('thighR_x', 0.10);
+        this._t('shinL_x', 0.17); this._t('shinR_x', 0.17);
+      } else if (action === 'hurt_medium') {
+        this._t('thighL_x', -0.70); this._t('thighR_x', -0.70);
+        this._t('shinL_x', 1.22); this._t('shinR_x', 1.22);
+      } else if (action === 'hurt_heavy') {
+        const phase = Math.min(1, this.cycle * 0.5);
+        this._t('thighL_x', -(0.35 + phase * 0.70));
+        this._t('thighR_x', -(0.35 + phase * 0.70));
+        this._t('shinL_x', 0.52 + phase * 1.57);
+        this._t('shinR_x', 0.52 + phase * 1.57);
+      } else {
+        this._t('thighL_x', -1.05); this._t('thighR_x', -1.05);
+        this._t('shinL_x', 2.09); this._t('shinR_x', 2.09);
+      }
+    } else if (isCrying) {
+      if (action === 'crying_sit') {
+        this._t('thighL_x', -0.87); this._t('thighR_x', -0.87);
+        this._t('shinL_x', 1.57); this._t('shinR_x', 1.57);
+      } else {
+        this._t('thighL_x', 0); this._t('thighR_x', 0);
+        this._t('shinL_x', 0.10); this._t('shinR_x', 0.10);
+      }
+    } else if (isGetUp) {
+      const prog = Math.min(1, this.cycle * 0.8);
+      this._t('thighL_x', -0.87 * (1 - prog)); this._t('thighR_x', -0.87 * (1 - prog));
+      this._t('shinL_x', 1.57 * (1 - prog)); this._t('shinR_x', 1.57 * (1 - prog));
+    } else if (isGrab) {
+      this._t('thighL_x', -0.17); this._t('thighR_x', -0.17);
+      this._t('shinL_x', 0.35); this._t('shinR_x', 0.35);
+    } else if (isPull) {
+      this._t('thighL_x', -0.26); this._t('thighR_x', -0.26);
+      this._t('shinL_x', 0.52); this._t('shinR_x', 0.52);
+    } else if (isLunge) {
+      this._t('thighL_x', -0.70); this._t('thighR_x', 0.35);
+      this._t('shinL_x', 0.87); this._t('shinR_x', 0.17);
+    } else if (isSlide) {
+      this._t('thighL_x', -0.17); this._t('thighR_x', -0.17);
+      this._t('shinL_x', 0.35); this._t('shinR_x', 0.35);
+    } else if (isRareEvent) {
+      if (action === 'pick_up') {
+        this._t('thighL_x', -0.52); this._t('thighR_x', -0.52);
+        this._t('shinL_x', 0.87); this._t('shinR_x', 0.87);
+      } else if (action === 'sit_down') {
+        const sp = Math.min(1, this.cycle * 0.5);
+        this._t('thighL_x', -1.22 * sp); this._t('thighR_x', -1.22 * sp);
+        this._t('shinL_x', 1.57 * sp); this._t('shinR_x', 1.57 * sp);
+      } else if (action === 'stand_up') {
+        const sp = Math.min(1, this.cycle * 0.8);
+        this._t('thighL_x', -1.22 * (1 - sp)); this._t('thighR_x', -1.22 * (1 - sp));
+        this._t('shinL_x', 1.57 * (1 - sp)); this._t('shinR_x', 1.57 * (1 - sp));
+      } else if (action === 'jump') {
+        const jp = Math.min(1, this.cycle * 2);
+        if (jp < 0.4) {
+          this._t('thighL_x', -0.52); this._t('thighR_x', -0.52);
+          this._t('shinL_x', 1.05); this._t('shinR_x', 1.05);
+        } else {
+          this._t('thighL_x', 0.10); this._t('thighR_x', 0.10);
+          this._t('shinL_x', 0); this._t('shinR_x', 0);
+        }
+      } else if (action === 'land') {
+        this._t('thighL_x', -0.35); this._t('thighR_x', -0.35);
+        this._t('shinL_x', 0.70); this._t('shinR_x', 0.70);
+      } else {
+        this._t('thighL_x', 0); this._t('thighR_x', 0);
+        this._t('shinL_x', 0); this._t('shinR_x', 0);
+      }
     } else {
       this._t('thighL_x', 0); this._t('thighR_x', 0);
       this._t('shinL_x',  0); this._t('shinR_x',  0);
@@ -538,8 +572,14 @@ export class SkeletonDriver implements IFigureDriver {
 
     // ── Arms ──────────────────────────────────────────────────────────────
     const armSwing  = isRun ? 1.10 : isWalk ? 0.70 : isWade ? 0.30 : 0;
-    // FIX-BUG02: crawl elbow = 0.05 (weight bearing, nearly straight)
-    const elbowBend = isRun ? 0.60 : isWalk ? 0.30 : isCrawl ? 0.05 : isClimb ? 0.52 : 0.10;
+    const elbowBend = isRun ? 0.60 : isWalk ? 0.30 : isCrawl ? 0.05 : isClimb ? 0.52
+      : isHurt ? (action === 'hurt_light' ? 1.05 : action === 'hurt_medium' ? 1.40 : 0.52)
+      : isCrying ? 1.40 : isGetUp ? (1.57 * (1 - Math.min(1, this.cycle * 0.8)))
+      : isSlide ? 0.17
+      : action === 'dodge' ? 1.05 : action === 'push' ? 0.26 : action === 'throw' ? 0.17
+      : action === 'pick_up' ? 0.35 : action === 'sit_down' ? 0.35
+      : action === 'stand_up' ? 0.52 : action === 'jump' ? 0.26 : action === 'land' ? 0.35
+      : isGrab ? 0.52 : isReach ? 0.17 : isPull ? 0.70 : isLunge ? 0.35 : 0.10;
 
     if (armSwing > 0) {
       this._t('armL_x', -s * armSwing);
@@ -548,27 +588,91 @@ export class SkeletonDriver implements IFigureDriver {
       this._t('armL_x', -(1.40 - s * 0.45));
       this._t('armR_x', -(1.40 + s * 0.45));
     } else if (isFall) {
-      // FIX-BUG02: was -PI*0.8 = -144° (impossible). Correct: arms fly FORWARD ~-70°
       const flA = Math.sin(this.cycle * 5) * 0.28;
       this._t('armL_x', -(1.22 + flA));
       this._t('armR_x', -(1.22 - flA));
     } else if (isClimb) {
       const t2 = Math.abs(s);
-      this._t('armL_x',  2.44 - t2 * 0.87);
-      this._t('armR_x',  2.09 - t2 * 0.87);
+      this._t('armL_x', -(2.44 - t2 * 0.87));
+      this._t('armR_x', -(2.09 - t2 * 0.87));
+    } else if (isHurt) {
+      if (action === 'hurt_light' || action === 'recoil') {
+        this._t('armL_x', -0.52); this._t('armR_x', -0.52);
+      } else if (action === 'hurt_medium') {
+        this._t('armL_x', -0.87); this._t('armR_x', -0.87);
+      } else if (action === 'hurt_heavy') {
+        const phase = Math.min(1, this.cycle * 0.5);
+        this._t('armL_x', -(1.57 - phase * 0.70));
+        this._t('armR_x', -(1.57 - phase * 0.70));
+      } else {
+        this._t('armL_x', -0.52); this._t('armR_x', -0.52);
+      }
+    } else if (isCrying) {
+      this._t('armL_x', -0.87); this._t('armR_x', -0.87);
+    } else if (isGetUp) {
+      const prog = Math.min(1, this.cycle * 0.8);
+      this._t('armL_x', -(1.05 * (1 - prog))); this._t('armR_x', -(1.05 * (1 - prog)));
+    } else if (isGrab) {
+      this._t('armL_x', -1.22); this._t('armR_x', -1.22);
+    } else if (isReach) {
+      this._t('armL_x', -(2.27 + s * 0.10));
+      this._t('armR_x', -(2.27 - s * 0.10));
+    } else if (isPull) {
+      this._t('armL_x', -(0.87 - s * 0.17));
+      this._t('armR_x', -(0.87 + s * 0.17));
+    } else if (isLunge) {
+      this._t('armL_x', -0.52); this._t('armR_x', -0.52);
+    } else if (isSlide) {
+      this._t('armL_x', 0); this._t('armR_x', 0);
+    } else if (isRareEvent) {
+      if (action === 'push')     { this._t('armL_x', -1.22); this._t('armR_x', -1.22); }
+      else if (action === 'throw') { this._t('armL_x', -1.57); this._t('armR_x',  0.35); }
+      else if (action === 'pick_up') { this._t('armL_x', -1.40); this._t('armR_x', -1.40); }
+      else if (action === 'jump') {
+        const jp = Math.min(1, this.cycle * 2);
+        if (jp < 0.4) { this._t('armL_x', -0.52); this._t('armR_x', -0.52); }
+        else           { this._t('armL_x', -1.57); this._t('armR_x', -1.57); }
+      } else { this._t('armL_x', 0); this._t('armR_x', 0); }
     } else {
       this._t('armL_x', isWade ? -s * 0.30 : 0);
       this._t('armR_x', isWade ?  s * 0.30 : 0);
     }
-    this._t('forearmL_x', elbowBend);
-    this._t('forearmR_x', elbowBend);
+    this._t('forearmL_x', -elbowBend);
+    this._t('forearmR_x', -elbowBend);
 
     // ── Spine ─────────────────────────────────────────────────────────────
     if (isCrawl)      { this._t('spine_x',  1.10); this._t('spine_y', 0); }
     else if (isRun)   { this._t('spine_x',  0.18); this._t('spine_y', s * 0.10); }
     else if (isFall)  { this._t('spine_x',  0.52); this._t('spine_y', 0); }
     else if (isClimb) { this._t('spine_x', -0.26); this._t('spine_y', 0); }
-    else {
+    else if (isHurt) {
+      if (action === 'hurt_light' || action === 'recoil') this._t('spine_x', -0.15);
+      else if (action === 'hurt_medium') this._t('spine_x', 0.52);
+      else if (action === 'hurt_heavy') {
+        const phase = Math.min(1, this.cycle * 0.5);
+        this._t('spine_x', 0.87 + phase * 0.18);
+      } else this._t('spine_x', 0.70);
+      this._t('spine_y', 0);
+    } else if (isCrying) {
+      this._t('spine_x', action === 'crying_sit' ? 0.44 : 0.26);
+      this._t('spine_y', Math.sin(this.cycle * 3) * 0.06);
+    } else if (isGetUp) {
+      this._t('spine_x', 0.52 * (1 - Math.min(1, this.cycle * 0.8)));
+      this._t('spine_y', 0);
+    } else if (isGrab) {
+      this._t('spine_x', 0.44); this._t('spine_y', 0);
+    } else if (isPull) {
+      this._t('spine_x', -0.35); this._t('spine_y', s * 0.05);
+    } else if (isSlide) {
+      this._t('spine_x', -0.17); this._t('spine_y', 0);
+    } else if (isRareEvent) {
+      if (action === 'push') this._t('spine_x', 0.26);
+      else if (action === 'pick_up') this._t('spine_x', 0.52);
+      else if (action === 'jump') this._t('spine_x', -0.10);
+      else if (action === 'land') this._t('spine_x', 0.10);
+      else this._t('spine_x', 0);
+      this._t('spine_y', 0);
+    } else {
       const breathe = isIdle ? Math.sin(this.cycle * 0.5) * 0.022 : 0;
       this._t('spine_x', breathe);
       this._t('spine_y', (isWalk || isWade) ? s * 0.08 : 0);
@@ -577,37 +681,90 @@ export class SkeletonDriver implements IFigureDriver {
     // ── Head ──────────────────────────────────────────────────────────────
     if (isFall)       this._t('head_x', -0.26);
     else if (isCrawl) this._t('head_x', -0.52);
-    else              this._t('head_x',  0);
-    this._t('head_y', isIdle ? Math.sin(this.cycle * 0.3) * 0.06 : 0);
+    else if (isHurt) {
+      if (action === 'hurt_light' || action === 'recoil') this._t('head_x', -0.20);
+      else if (action === 'hurt_medium') this._t('head_x', 0.35);
+      else if (action === 'hurt_heavy') {
+        const phase = Math.min(1, this.cycle * 0.5);
+        this._t('head_x', phase > 0.5 ? 0.44 : Math.sin(this.cycle * 8) * 0.20);
+      } else this._t('head_x', 0.44);
+    } else if (isCrying) {
+      this._t('head_x', 0.35 + Math.sin(this.cycle * 10) * 0.08);
+    } else if (isGetUp) {
+      this._t('head_x', 0.35 * (1 - Math.min(1, this.cycle * 0.8)));
+    } else if (isClimb) {
+      this._t('head_x', -0.35);
+    } else if (isGrab) {
+      this._t('head_x', 0.26);
+    } else if (action === 'pick_up') {
+      this._t('head_x', 0.35);
+    } else if (action === 'jump') {
+      this._t('head_x', -0.20);
+    } else this._t('head_x', 0);
+
+    const headYaw = isLookAround ? Math.sin(this.cycle * 0.8) * 0.78
+      : isCrying ? Math.sin(this.cycle * 5) * 0.10
+      : isHurt ? 0
+      : isIdle ? Math.sin(this.cycle * 0.3) * 0.06 : 0;
+    this._t('head_y', headYaw);
 
     // ── Emotion overrides (upper body only) ───────────────────────────────
-    switch (emotion) {
-      case 'crying':
-        this._t('head_x',  0.42 + Math.sin(this.cycle * 10) * 0.08);
-        this._t('spine_x', 0.32);
-        // FIX-BUG02: was -2.55rad (-146°). Correct: arms forward-down ~-50° (hugging self)
-        this._t('armL_x', -0.87); this._t('forearmL_x', 1.40);
-        this._t('armR_x', -0.87); this._t('forearmR_x', 1.40);
-        break;
-      case 'mischievous':
-        this._t('spine_x', -0.18);
-        this._t('head_y',   0.30);
-        this._t('armL_x',  -0.52); this._t('forearmL_x', 1.57);
-        this._t('armR_x',  -0.52); this._t('forearmR_x', 1.57);
-        break;
-      case 'excited':
-        // FIX-BUG02: was -(PI+0.32) = -198° (impossible). Correct: arms UP +150°
-        this._t('armL_x', 2.62 + Math.sin(this.cycle * 8) * 0.26);
-        this._t('armR_x', 2.62 + Math.sin(this.cycle * 8 + Math.PI) * 0.26);
-        this._t('forearmL_x', 0.26);
-        this._t('forearmR_x', 0.26);
-        this._t('spine_x', 0.08);
-        break;
-      case 'scared':
-        this._t('head_x',  0.35); this._t('spine_x', 0.26);
-        this._t('armL_x', -0.52); this._t('armR_x', -0.52);
-        this._t('forearmL_x', 1.57); this._t('forearmR_x', 1.57);
-        break;
+    if (emotion !== 'neutral') {
+      switch (emotion) {
+        case 'crying':
+          this._t('head_x',  0.42 + Math.sin(this.cycle * 10) * 0.08);
+          this._t('spine_x', 0.32);
+          this._t('armL_x', -0.87); this._t('forearmL_x', -1.40);
+          this._t('armR_x', -0.87); this._t('forearmR_x', -1.40);
+          break;
+        case 'mischievous':
+          this._t('spine_x', -0.18); this._t('head_y', 0.30);
+          this._t('armL_x', -0.52); this._t('forearmL_x', -1.57);
+          this._t('armR_x', -0.52); this._t('forearmR_x', -1.57);
+          break;
+        case 'excited':
+          this._t('armL_x', -(2.62 + Math.sin(this.cycle * 8) * 0.26));
+          this._t('armR_x', -(2.62 + Math.sin(this.cycle * 8 + Math.PI) * 0.26));
+          this._t('forearmL_x', -0.26); this._t('forearmR_x', -0.26);
+          this._t('spine_x', 0.08);
+          break;
+        case 'scared':
+          this._t('head_x', 0.35); this._t('spine_x', 0.26);
+          this._t('armL_x', -0.52); this._t('armR_x', -0.52);
+          this._t('forearmL_x', -1.57); this._t('forearmR_x', -1.57);
+          break;
+        case 'focused':
+          this._t('spine_x', 0.14); this._t('head_x', -0.18);
+          this._t('armL_x', -0.87); this._t('armR_x', -0.87);
+          this._t('forearmL_x', -0.52); this._t('forearmR_x', -0.52);
+          break;
+        case 'curious':
+          this._t('armL_x', -0.35); this._t('armR_x', 0);
+          this._t('forearmL_x', -0.87); this._t('forearmR_x', -0.10);
+          this._t('spine_x', 0.10); this._t('head_x', -0.15);
+          break;
+        case 'surprised':
+          this._t('armL_x', -0.70); this._t('armR_x', -0.70);
+          this._t('forearmL_x', -0.26); this._t('forearmR_x', -0.26);
+          this._t('spine_x', -0.10); this._t('head_x', -0.20);
+          break;
+        case 'tired':
+          this._t('armL_x', 0); this._t('armR_x', 0);
+          this._t('forearmL_x', -0.05); this._t('forearmR_x', -0.05);
+          this._t('spine_x', 0.15); this._t('head_x', 0.15);
+          break;
+        case 'frustrated':
+          this._t('armL_x', -0.87); this._t('armR_x', -0.87);
+          this._t('forearmL_x', -0.52); this._t('forearmR_x', -0.52);
+          this._t('spine_x', 0.10); this._t('head_x', 0);
+          break;
+        case 'happy':
+          this._t('armL_x', -0.35 + Math.sin(this.cycle * 4) * 0.17);
+          this._t('armR_x', -0.35 + Math.sin(this.cycle * 4 + Math.PI) * 0.17);
+          this._t('forearmL_x', -0.35); this._t('forearmR_x', -0.35);
+          this._t('spine_x', -0.05); this._t('head_x', -0.10);
+          break;
+      }
     }
 
     // ── Apply bones ───────────────────────────────────────────────────────
@@ -682,7 +839,7 @@ export class SkeletonDriver implements IFigureDriver {
     if (offset < -0.05) {
       this.model.position.y = 0;
     } else {
-      this.model.position.y = Math.min(offset, 0.10); // max 10cm upward correction
+      this.model.position.y = Math.min(offset, 0.20); // max 20cm upward correction (was 10cm — too low for crawl/climb)
     }
   }
 
@@ -699,7 +856,10 @@ export class SkeletonDriver implements IFigureDriver {
     let diff = t - cv;
     while (diff >  Math.PI) diff -= Math.PI * 2;
     while (diff < -Math.PI) diff += Math.PI * 2;
-    const n = cv + diff * alpha;
+    let n = cv + diff * alpha;
+    // FIX-D: Normalize accumulated value to prevent rotation drift
+    while (n >  Math.PI) n -= Math.PI * 2;
+    while (n < -Math.PI) n += Math.PI * 2;
     this.current[key] = n;
     return n;
   }

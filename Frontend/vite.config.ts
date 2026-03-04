@@ -5,7 +5,15 @@ import react from '@vitejs/plugin-react'
 export default defineConfig({
   plugins: [react()],
   optimizeDeps: {
-    include: ['xlsx', 'file-saver'],
+    force: true,
+    include: [
+      'xlsx',
+      'file-saver',
+      '@react-three/fiber',
+      '@react-three/drei',
+      'three',
+      'framer-motion',
+    ],
   },
   server: {
     proxy: {
