@@ -33,9 +33,10 @@ export function detectSceneScale(bbox) {
     return { unit: 'meters', factor: 1.0, maxDimMeters: 0 };
   }
 
-  const width = Math.abs(bbox.max[0] - bbox.min[0]);
-  const depth = Math.abs(bbox.max[2] - bbox.min[2]);
-  const maxHorizontal = Math.max(width, depth);
+  const width = Math.abs(bbox.max[0] - bbox.min[0]) || 0;
+  const depth = Math.abs(bbox.max[2] - bbox.min[2]) || 0;
+  let maxHorizontal = Math.max(width, depth);
+  if (!Number.isFinite(maxHorizontal)) maxHorizontal = 0;
 
   // Already in plausible meter range → no conversion needed
   if (maxHorizontal >= ROOM_MIN_M && maxHorizontal <= ROOM_MAX_M) {
@@ -61,7 +62,10 @@ export function detectSceneScale(bbox) {
   if (best) return best;
 
   // Fallback: no standard unit matches — scale so max dim ≈ 8m
-  const fallbackFactor = 8.0 / maxHorizontal;
+  // Guard against division by zero if maxHorizontal is extremely small or zero
+  const safeHorizontal = Math.max(maxHorizontal, 0.001);
+  const fallbackFactor = 8.0 / safeHorizontal;
+  
   return {
     unit: 'unknown',
     factor: fallbackFactor,

@@ -124,9 +124,22 @@ class Agent {
     // ── Anti-stuck detection ──────────────────────────────────────────────
     this.stuckCounter  = 0;
     this.lastMovePos   = [...startPosition];
+    // FIX STATE LOOP: idle cooldown prevents instant re-targeting after stuck escape,
+    // breaking the MOVING → stuck 60f → IDLE → MOVING → stuck loop.
+    this.idleCooldown  = 0;
 
     // ── Simulation Timer ──────────────────────────────────────────────────
     this.simTime       = 0;
+  }
+
+  // ── Physics Utility ───────────────────────────────────────────────────────
+  setSafeTranslation(newPos) {
+    if (!this.body) return;
+    if (Number.isFinite(newPos.x) && Number.isFinite(newPos.y) && Number.isFinite(newPos.z)) {
+      this.body.setNextKinematicTranslation(newPos);
+    } else {
+      console.warn(`[Agent ${this.id}] Guarded NaN in setSafeTranslation:`, newPos);
+    }
   }
 
   // ── ActionLog recording ───────────────────────────────────────────────────
@@ -136,9 +149,12 @@ class Agent {
 
     this.trajectory.push(position.map(v => Math.round(v * 100) / 100));
 
+    // FIX BUG #9: When agent is MOVING with no currentBehavior (wander), log 'walk' not 'idle'.
+    // Previously entry.a was always 'idle' during wander — causing wrong animation in Canvas3D.
+    const wanderAction = (this.state === 'MOVING' && !this.currentBehavior) ? 'walk' : null;
     const entry = {
       s: this.state,
-      a: this.currentBehavior?.action || this.currentBehavior?.type || 'idle',
+      a: wanderAction || this.currentBehavior?.action || this.currentBehavior?.type || 'idle',
       v: Math.round(Math.hypot(this.velocity[0], this.velocity[2]) * 100) / 100,
     };
     if (this.emotion && this.emotion !== 'neutral')    entry.e        = this.emotion;
@@ -265,7 +281,7 @@ class Agent {
       const newX = pos.x + this.pendingBounce.nx * this.pendingBounce.force;
       const newZ = pos.z + this.pendingBounce.nz * this.pendingBounce.force;
       if (Number.isFinite(newX) && Number.isFinite(newZ)) {
-        this.body.setNextKinematicTranslation({ x: newX, y: pos.y, z: newZ });
+        this.setSafeTranslation({ x: newX, y: pos.y, z: newZ });
       }
       this.pendingBounce = null;
     }
@@ -273,6 +289,14 @@ class Agent {
     if (this.stunTimer > 0) { this.stunTimer -= deltaTime; return; }
     if (this.fallState && this.body) { this.executeAction({ action: 'free_fall' }, deltaTime, colliders, bounds); return; }
     if (this.participatingInRareEvent && this.rareEventChain) { this.executeRareEventStep(deltaTime, colliders, bounds); return; }
+
+    // FIX STATE LOOP: honour idle cooldown — do NOT pick a new target while cooling down.
+    // This breaks the rapid MOVING→stuck→IDLE→MOVING→stuck cycle by inserting a real pause.
+    if (this.idleCooldown > 0) {
+      this.idleCooldown = Math.max(0, this.idleCooldown - deltaTime);
+      this.state = 'IDLE';
+      return;
+    }
 
     if (this.currentBehavior) {
       this.behaviorTimer += deltaTime;
@@ -304,10 +328,24 @@ class Agent {
 
     // If all behaviors are done, reset and cycle
     if (!next) {
-      this.behaviorQueue.forEach(b => {
-        b.completed = false;
-        if (b.sequence) b.sequence.forEach(a => { a.completed = false; });
-      });
+      // FIX: Remove one-shot reaction behaviors (hurt/crying/recovery) — they must NOT be recycled.
+      // handleCollision replaces behaviorQueue with [hurt, cry, get_up]. Without this filter,
+      // pickNextBehavior resets them to completed=false and replays the chain forever.
+      const REACTION_TYPES = ['hurt', 'crying', 'recovery'];
+      this.behaviorQueue = this.behaviorQueue.filter(b => !REACTION_TYPES.includes(b.type));
+
+      // Restore saved behaviors if collision had replaced them
+      if (!this.behaviorQueue.length && this._savedBehaviorQueue?.length) {
+        this.behaviorQueue = this._savedBehaviorQueue;
+        this._savedBehaviorQueue = null;
+      }
+
+      if (this.behaviorQueue.length) {
+        this.behaviorQueue.forEach(b => {
+          b.completed = false;
+          if (b.sequence) b.sequence.forEach(a => { a.completed = false; });
+        });
+      }
       // Walk to random target between behavior cycles
       this.state = 'MOVING';
       this.setRandomTarget(bounds);
@@ -356,10 +394,24 @@ class Agent {
         c.id === targetId || c.name?.toLowerCase().includes(targetId.toLowerCase())
       );
       if (obj?.boundingBox) {
+        // FIX STATE LOOP: Target the NEAR EDGE of the bounding box, not its geometric center.
+        // Targeting the center places the goal INSIDE the furniture, causing the KCC to
+        // block immediately, triggering stuckCounter, and creating the MOVING→stuck→IDLE loop.
+        const cur = this.getPosition();
+        const cx = (obj.boundingBox.min[0] + obj.boundingBox.max[0]) / 2;
+        const cz = (obj.boundingBox.min[2] + obj.boundingBox.max[2]) / 2;
+        const toCurX = cur[0] - cx;
+        const toCurZ = cur[2] - cz;
+        const toCurLen = Math.hypot(toCurX, toCurZ) || 1;
+        const hx = (obj.boundingBox.max[0] - obj.boundingBox.min[0]) / 2;
+        const hz = (obj.boundingBox.max[2] - obj.boundingBox.min[2]) / 2;
+        const edgeRadius = Math.max(hx, hz);
+        const capsR = this.anthropometry ? (this.anthropometry.walkStride || 0.3) : 0.3;
+        const approachOffset = edgeRadius + capsR * 2.5;
         this.targetPosition = [
-          (obj.boundingBox.min[0] + obj.boundingBox.max[0]) / 2,
+          cx + (toCurX / toCurLen) * approachOffset,
           obj.boundingBox.min[1],
-          (obj.boundingBox.min[2] + obj.boundingBox.max[2]) / 2,
+          cz + (toCurZ / toCurLen) * approachOffset,
         ];
         return;
       }
@@ -380,10 +432,22 @@ class Agent {
         }
       }
       if (bestObj) {
+        // FIX STATE LOOP: same edge-approach fix for type-matched objects
+        const cur2 = this.getPosition();
+        const cx = (bestObj.boundingBox.min[0] + bestObj.boundingBox.max[0]) / 2;
+        const cz = (bestObj.boundingBox.min[2] + bestObj.boundingBox.max[2]) / 2;
+        const toCurX = cur2[0] - cx;
+        const toCurZ = cur2[2] - cz;
+        const toCurLen = Math.hypot(toCurX, toCurZ) || 1;
+        const hx = (bestObj.boundingBox.max[0] - bestObj.boundingBox.min[0]) / 2;
+        const hz = (bestObj.boundingBox.max[2] - bestObj.boundingBox.min[2]) / 2;
+        const edgeRadius = Math.max(hx, hz);
+        const capsR = this.anthropometry ? (this.anthropometry.walkStride || 0.3) : 0.3;
+        const approachOffset = edgeRadius + capsR * 2.5;
         this.targetPosition = [
-          (bestObj.boundingBox.min[0] + bestObj.boundingBox.max[0]) / 2,
+          cx + (toCurX / toCurLen) * approachOffset,
           bestObj.boundingBox.min[1],
-          (bestObj.boundingBox.min[2] + bestObj.boundingBox.max[2]) / 2,
+          cz + (toCurZ / toCurLen) * approachOffset,
         ];
         return;
       }
@@ -440,16 +504,19 @@ class Agent {
         break;
 
       case 'trip': case 'stumble': case 'fall_forward': {
-        this.state = 'INTERACTING';
+        // FIX BUG #11: Use FALLING state immediately so injury calculator gets correct severity.
+        // Previously was INTERACTING for the entire action (even when fallState was set).
         const pos = this.body.translation();
         const h   = pos.y - this.spawnY;
         if (h > 0.15) {
+          this.state = 'FALLING';   // ← CORRECTED: agent is actually falling
           this.fallState = { startY: pos.y, targetY: this.spawnY, fallHeight: h,
             velocity: Math.sqrt(2*9.81*h), elapsed: 0, duration: Math.sqrt(2*h/9.81) };
         } else {
+          this.state = 'INTERACTING'; // ground-level stumble: no airtime, use INTERACTING
           if (this.behaviorTimer < 0.3) {
             const surge = 1.0 * deltaTime, angle = Math.random() * Math.PI * 2;
-            this.body.setNextKinematicTranslation({
+            this.setSafeTranslation({
               x: pos.x + Math.cos(angle)*surge,
               y: Math.max(this.spawnY-0.2, pos.y - Math.sin(this.behaviorTimer*10)*0.1),
               z: pos.z + Math.sin(angle)*surge,
@@ -475,7 +542,7 @@ class Agent {
         this.fallState.elapsed += deltaTime;
         const t2       = Math.min(this.fallState.elapsed / this.fallState.duration, 1.0);
         const newY     = this.fallState.startY - this.fallState.fallHeight * t2 * t2;
-        this.body.setNextKinematicTranslation({ x: pos.x, y: Math.max(this.spawnY, newY), z: pos.z });
+        this.setSafeTranslation({ x: pos.x, y: Math.max(this.spawnY, newY), z: pos.z });
         if (t2 >= 1.0) {
           this.fallState = null; this.state = 'IDLE';
           this.recoveryTimer = RECOVERY_DURATION;
@@ -505,7 +572,7 @@ class Agent {
         const pos_p = this.body.translation();
         const pullBack = Math.sin(this.behaviorTimer * 1.5) * 0.02 * deltaTime;
         if (Number.isFinite(pos_p.z + pullBack)) {
-          this.body.setNextKinematicTranslation({ x: pos_p.x, y: pos_p.y, z: pos_p.z + pullBack });
+          this.setSafeTranslation({ x: pos_p.x, y: pos_p.y, z: pos_p.z + pullBack });
         }
         break;
       }
@@ -566,16 +633,24 @@ class Agent {
           break;
         }
 
-        this.state = 'INTERACTING';
-        const gd   = getAgeGroup(this.ageGroupId);
-        const fail = gd ? (1 - gd.gaitStability) * 0.3 : 0.1;
+        const progress = this.behaviorTimer / (action.duration || 3.0);
+
+        // FIX BUG #7: Set state based on phase.
+        // Phase 1 (approach) = MOVING; Phase 2+ (actual climb) = INTERACTING.
+        // Previously was INTERACTING for ALL phases causing fatigue/animation mismatch.
+        if (progress < 0.3) {
+          this.state = 'MOVING';  // ← approaching the object, agent is walking
+        } else {
+          this.state = 'INTERACTING'; // ← actually climbing
+        }
+        
+        const fail = agData?.climbFailRate || 0.1;
         const adjustedFail = fail + (1 - friction) * 0.2;
         if (Math.random() < adjustedFail && pos_c.y > this.spawnY + 0.1) {
           const h = pos_c.y - this.spawnY;
           this.fallState = { startY: pos_c.y, targetY: this.spawnY, fallHeight: h,
             velocity: Math.sqrt(2*9.81*h), elapsed: 0, duration: Math.sqrt(2*h/9.81) };
         } else {
-          const progress = this.behaviorTimer / (action.duration || 3.0);
           // FIX: Headboard Bug. Don't blindly use the object's absolute max Y.
           // Fallback simple cap:
           const maxAllowedY = this.spawnY + (agData?.height || 0.8) + 0.1;
@@ -589,7 +664,8 @@ class Agent {
              const ray = new physicsEngine.rapier.Ray({ x: cx, y: objectTopY + 0.5, z: cz }, { x: 0, y: -1, z: 0 });
              const hit = this.world.castRay(ray, objectTopY - this.spawnY + 1.0, true);
              if (hit) {
-               objectTopY = (objectTopY + 0.5) - hit.toi;
+               const hitToi = hit.toi !== undefined ? hit.toi : hit.timeOfImpact;
+               objectTopY = (objectTopY + 0.5) - hitToi;
              }
           }
 
@@ -631,13 +707,13 @@ class Agent {
               const maxLift = climbSpeed * deltaTime * 0.5; // Max 0.5m/s climb rate
               const liftY = Math.min(maxLift, targetTopY - pos_c.y);
               if (liftY > 0) {
-                this.body.setNextKinematicTranslation({
+                this.setSafeTranslation({
                   x: pos_c.x, y: Math.min(targetTopY, pos_c.y + liftY), z: pos_c.z
                 });
               }
             } else {
               // Phase 3: on top (capped)
-              this.body.setNextKinematicTranslation({
+              this.setSafeTranslation({
                 x: pos_c.x, y: Math.min(targetTopY, pos_c.y), z: pos_c.z
               });
             }
@@ -656,8 +732,15 @@ class Agent {
 
       case 'get_up_slow': case 'get_up_fast':
         this.state = 'INTERACTING';
-        if (this.behaviorTimer > (action.duration || 1.5) * 0.8) {
+        // FIX BUG #12: 'scared' should be set at the BEGINNING of get_up (just fell, frightened),
+        // then cleared to 'cautious' as agent finishes standing up.
+        // Previously was setting 'scared' at 80% done — logically backwards.
+        if (this.behaviorTimer <= deltaTime * 2) {
+          // First frame of get_up: agent is scared from the fall
           this._setEmotion('scared');
+        } else if (this.behaviorTimer > (action.duration || 1.5) * 0.8) {
+          // Near end: agent has recovered, transition to cautious
+          this._setEmotion('cautious');
         }
         break;
 
@@ -674,10 +757,11 @@ class Agent {
       // FIX-P2: climb_on must check if there's actually something to climb nearby
       // If nothing climbable within 1.5m, convert to 'look_around' instead
       default: {
-        // Actions like 'reach', 'swing_open', etc. that fall through — treat as walk
+        // FIX BUG #8: Use `t` (the extracted string) not `action` (the object) for comparison.
+        // Previously `action === 'crawl'` was ALWAYS false because action is an object like {action:'crawl',...}.
         this.state = 'MOVING';
         if (!this.targetPosition) this.setRandomTarget(bounds);
-        this.moveTowardsTarget(deltaTime, action === 'crawl' ? 'crawl' : 'walk');
+        this.moveTowardsTarget(deltaTime, t === 'crawl' ? 'crawl' : 'walk');
       }
     }
   }
@@ -792,10 +876,13 @@ class Agent {
             const d = Math.hypot(esc?.x || 0, esc?.z || 0);
             if (d > bestDist) bestDist = d;
           }
-          // If all escape directions are blocked, just pick new target
+          // FIX STATE LOOP: set idleCooldown so the agent waits in IDLE before re-targeting.
+          // Without this, stuckCounter reset → IDLE → pickNextBehavior → MOVING → stuck again
+          // all within 1-2 frames, creating a visible thrashing loop.
           this.stuckCounter = 0;
           this.targetPosition = null;
           this.state = 'IDLE';
+          this.idleCooldown = 1.0 + Math.random() * 1.0; // 1–2 seconds of genuine IDLE
         }
         return;
       }
@@ -804,7 +891,7 @@ class Agent {
     // Fallback: direct translation
     const pos = this.body.translation();
     if (Number.isFinite(pos.x + moveX) && Number.isFinite(pos.z + moveZ)) {
-      this.body.setNextKinematicTranslation({ x: pos.x + moveX, y: pos.y, z: pos.z + moveZ });
+      this.setSafeTranslation({ x: pos.x + moveX, y: pos.y, z: pos.z + moveZ });
     }
   }
 
@@ -831,9 +918,24 @@ class Agent {
     if (this.stunTimer > 0) return;
     if (this.fallState) return;
 
-    // FIX: Ignore all severe impacts in the first 2 seconds to allow the agent to settle after spawn.
+    // FIX: Ignore all severe impacts in the first 3 seconds to allow the agent to settle after spawn.
     // The KinematicCharacterController produces massive virtual velocities when pushing agents out of initial overlaps.
-    if (this.simTime < 2.0) return;
+    // 2s was not always enough for furniture-spawn cases; increased to 3s.
+    if (this.simTime < 3.0) return;
+
+    // FIX: Don't start a new hurt chain while still recovering from a previous collision.
+    // This breaks the get_up_fast → hurt_medium → cry_standing infinite loop.
+    if (this.recoveryTimer > 0) return;
+
+    // FIX: Per-object collision cooldown — ignore repeated collisions with same object within 8s.
+    // Increased from 5s to 8s: agents spawning very close to furniture kept retriggering
+    // the hurt chain every 5s even after physically settling, causing a perpetual state loop.
+    if (objectId) {
+      if (!this._collisionCooldowns) this._collisionCooldowns = new Map();
+      const lastHit = this._collisionCooldowns.get(objectId) || 0;
+      if (this.simTime - lastHit < 8.0) return;
+      this._collisionCooldowns.set(objectId, this.simTime);
+    }
 
     // FIX: Only interrupt behaviors and trigger hurt/cry for significant impacts.
     // severity < 15 usually means grazing or brushing past an object while KCC is sliding.
@@ -874,6 +976,11 @@ class Agent {
     chain.push({ type: 'recovery', action: severity > 50 ? 'get_up_slow' : 'get_up_fast',
       duration: severity > 50 ? 2.0 : 0.8, completed: false });
 
+    // FIX: Save original behaviors before replacing with reaction chain
+    // so pickNextBehavior can restore them after the chain completes.
+    if (this.behaviorQueue.length && !this.behaviorQueue.every(b => ['hurt', 'crying', 'recovery'].includes(b.type))) {
+      this._savedBehaviorQueue = [...this.behaviorQueue];
+    }
     this.behaviorQueue = chain;
     this.currentBehavior = null;
     this.state = 'INTERACTING';
@@ -1170,8 +1277,33 @@ class Agent {
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────────
+  // FIX STATE LOOP: Collision-aware random target — reject points inside furniture bounding boxes.
+  // Also handles fallback more gracefully: if 10 random attempts fail (dense room),
+  // try 20 more with a smaller exclusion pad before accepting any clear position.
   setRandomTarget(bounds) {
     if (!bounds) return;
+    const pads = [0.15, 0.05]; // first try with normal pad, then minimal pad
+    for (const pad of pads) {
+      for (let attempt = 0; attempt < 15; attempt++) {
+        const x = bounds.min[0] + Math.random() * (bounds.max[0] - bounds.min[0]);
+        const z = bounds.min[2] + Math.random() * (bounds.max[2] - bounds.min[2]);
+        let insideFurniture = false;
+        for (const obj of (this.availableObjects || [])) {
+          if (!obj.boundingBox) continue;
+          const bb = obj.boundingBox;
+          if (x > bb.min[0] - pad && x < bb.max[0] + pad &&
+              z > bb.min[2] - pad && z < bb.max[2] + pad) {
+            insideFurniture = true;
+            break;
+          }
+        }
+        if (!insideFurniture) {
+          this.targetPosition = [x, bounds.min[1], z];
+          return;
+        }
+      }
+    }
+    // Last resort: accept random point rather than hang. KCC will block the agent at the edge.
     this.targetPosition = [
       bounds.min[0] + Math.random() * (bounds.max[0] - bounds.min[0]),
       bounds.min[1],

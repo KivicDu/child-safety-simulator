@@ -401,7 +401,7 @@ export class ProceduralFigure {
     // FIX #17: Enforce minimum action duration — ignore action changes that happen
     // too fast (< 0.3s), unless moving to a higher-priority state like 'hurt' or 'fall'
     this._actionTimer += dt;
-    const PRIORITY_ACTIONS = ['fall', 'falling', 'free_fall', 'hurt_light', 'hurt_medium', 'hurt_heavy', 'recoil'];
+    const PRIORITY_ACTIONS = ['fall', 'falling', 'free_fall', 'fall_forward', 'hurt_light', 'hurt_medium', 'hurt_heavy', 'recoil'];
     if (action !== this._lastAction) {
       if (this._actionTimer < ProceduralFigure.MIN_ACTION_DURATION && !PRIORITY_ACTIONS.includes(action)) {
         // Keep the previous action — too early to switch

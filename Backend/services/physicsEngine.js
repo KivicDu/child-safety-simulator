@@ -96,8 +96,15 @@ class PhysicsEngine {
    * @param {object|null} anthropometry - from ageGroup.anthropometry
    */
   createAgentMultipartCollider(world, position, height = 1.0, radius = 0.25, anthropometry = null) {
+    // Guard against NaN in position
+    if (!position || !Array.isArray(position) || position.some(v => !Number.isFinite(v))) {
+      console.warn('[PhysicsEngine] NaN in agent spawn position:', position);
+      position = [0, 1.0, 0];
+    }
+    const safeHeight = Number.isFinite(height) ? height : 1.0;
+
     // Agent origin is placed at feet + half-height so the body is centred
-    const halfH = height / 2;
+    const halfH = safeHeight / 2;
     const posY  = (typeof position[1] === 'number') ? position[1] + halfH : halfH;
 
     const rigidBodyDesc = this.rapier.RigidBodyDesc
@@ -161,7 +168,8 @@ class PhysicsEngine {
     const headRatio = anthropometry?.headHeightRatio ?? 0.15;
     const baseMass = 10.0; // Arbitrary but consistent for kinematic bodies
     // Shift CoM up proportionally to how much larger the head is vs adult (~0.14)
-    const comYShift = headRatio > 0.15 ? (headRatio - 0.15) * height * 2.0 : 0; 
+    let comYShift = headRatio > 0.15 ? (headRatio - 0.15) * safeHeight * 2.0 : 0; 
+    if (!Number.isFinite(comYShift)) comYShift = 0;
     
     // Set custom mass properties on the rigid body
     rigidBody.setAdditionalMassProperties(
@@ -211,6 +219,12 @@ class PhysicsEngine {
    */
   moveAgentWithController(world, controller, rigidBody, collider, desiredMove, deltaTime) {
     if (!controller || !rigidBody || !collider) return desiredMove;
+
+    // Guard against NaN in desiredMove BEFORE calling Rapier WebAssembly
+    if (!Number.isFinite(desiredMove.x) || !Number.isFinite(desiredMove.y) || !Number.isFinite(desiredMove.z)) {
+      console.warn('[PhysicsEngine] NaN detected in desiredMove:', desiredMove);
+      return { x: 0, y: 0, z: 0 };
+    }
 
     try {
       // Compute collision-resolved movement
@@ -382,6 +396,8 @@ class PhysicsEngine {
  * Only accepts surfaces within maxStepHeight of the scene floor.
  */
 getFloorHeightAt(world, x, y, z, floorFallback = 0, maxDistance = 10, agentBodyToIgnore = null) {
+  if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) return floorFallback;
+
   try {
     // Cast from slightly above the agent's current position to allow stepping up
     const origin    = { x, y: y + 0.3, z }; 
@@ -399,17 +415,52 @@ getFloorHeightAt(world, x, y, z, floorFallback = 0, maxDistance = 10, agentBodyT
     const t = hit ? (hit.toi !== undefined ? hit.toi : hit.timeOfImpact) : null;
     if (t !== null && t !== undefined) {
       const hitY = origin.y + direction.y * t;
-      // FIX: Reject furniture surfaces — only accept hits within step-up range of scene floor
-      // If hit surface is > 0.3m above scene floor, it's furniture, not walkable floor
-      const maxStepHeight = 0.3;
-      if (hitY > floorFallback + maxStepHeight) {
-        return floorFallback;  // Ignore furniture surface, use scene floor
-      }
+      // return the actual surface so agents don't snap through furniture
       return hitY;
     }
   } catch (_) {}
   return floorFallback;
 }
+
+  // ── BUG #3 FIX: Multi-part spawn geometry helper ─────────────────────────
+  /**
+   * Returns per-part shape descriptors matching the real createAgentMultipartCollider geometry.
+   * Used by simulationController spawn checks to test each body-part individually,
+   * catching gaps between torso-bottom and legs-top that a single capsule misses.
+   *
+   * @param {number} height       - agent height in metres
+   * @param {number} radius       - capsule radius
+   * @param {object|null} anthro  - ageGroup.anthropometry
+   * @returns {Array<{shape, centerOffsetY}>}  shapes with Y offsets relative to body center
+   */
+  getAgentSpawnShapes(height, radius, anthro = null) {
+    const halfH       = height / 2;
+    const headRadius  = anthro?.headRadius   ?? height * 0.12;
+    const torsoLength = anthro?.torsoLength  ?? height * 0.40;
+    const torsoRadius = anthro?.torsoRadius  ?? radius  * 0.9;
+    const legLength   = anthro?.legLength    ?? height  * 0.40;
+
+    return [
+      // HEAD sphere
+      {
+        shape:         this.rapier.Ball,
+        params:        [headRadius],
+        centerOffsetY: halfH - headRadius,
+      },
+      // TORSO capsule
+      {
+        shape:         this.rapier.Capsule,
+        params:        [torsoLength / 2, torsoRadius],
+        centerOffsetY: (halfH - headRadius) - headRadius - torsoLength / 2,
+      },
+      // LEGS capsule
+      {
+        shape:         this.rapier.Capsule,
+        params:        [legLength / 2, radius * 0.75],
+        centerOffsetY: -halfH + legLength / 2 + radius * 0.75,
+      },
+    ];
+  }
 }
 
 const engine = new PhysicsEngine();

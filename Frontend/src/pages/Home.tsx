@@ -1,15 +1,13 @@
 import { Suspense, useState, useEffect, useRef, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
-import {
-  motion,
-  useScroll,
-  useTransform,
-  useMotionValue,
-  useSpring,
-} from "framer-motion";
+import { motion, useTransform, useMotionValue, useSpring } from "framer-motion";
 import Header from "../components/Header";
 import Footer from "../components/Footer";
 import HomeScene3D from "../components/HomeScene3D";
+import SpotlightCard from "../components/SpotlightCard";
+import InteractiveSandbox from "../components/InteractiveSandbox";
+import HorizontalScrollSteps from "../components/HorizontalScrollSteps";
+import DraggableAsset from "../components/DraggableAsset";
 
 /* ─── Animated Counter Hook ───────────────────────────────────────────────── */
 function useCounter(target: number, duration = 2000) {
@@ -173,50 +171,6 @@ const hazards = [
   },
 ];
 
-/* ─── Steps Data ──────────────────────────────────────────────────────────── */
-const steps = [
-  {
-    num: "01",
-    title: "Upload Your Space",
-    desc: "Drag and drop a 3D model (.GLB/.GLTF) of your living room, nursery, or kitchen.",
-  },
-  {
-    num: "02",
-    title: "AI Simulation",
-    desc: "Smart agents mimic real child behavior: crawling, walking, pulling up, and exploring.",
-  },
-  {
-    num: "03",
-    title: "Safety Insights",
-    desc: "Receive actionable safety reports detailing hidden impact zones and collision heatmaps.",
-  },
-];
-
-/* ─── Parallax Image Component ─────────────────────────────────────────────── */
-const ParallaxImage = ({
-  src,
-  className,
-  offset,
-  speed = 0.5,
-}: {
-  src: string;
-  className: string;
-  offset: number;
-  speed?: number;
-}) => {
-  const { scrollY } = useScroll();
-  const y = useTransform(scrollY, [0, 1000], [offset, offset - 200 * speed]);
-
-  return (
-    <motion.img
-      src={src}
-      style={{ y }}
-      className={`absolute select-none pointer-events-none ${className}`}
-      alt=""
-    />
-  );
-};
-
 /* ─── 3D Tilt Card Component ─────────────────────────────────────────────── */
 const TiltCard = ({
   children,
@@ -321,7 +275,7 @@ const Home = () => {
   return (
     <div
       onMouseMove={handleMouseMove}
-      className="min-h-screen bg-[#fdf2f8] text-slate-700 font-sans selection:bg-pink-100 selection:text-pink-900 overflow-hidden mesh-bg noise-overlay"
+      className="min-h-screen bg-[#fdf2f8] text-slate-700 font-sans selection:bg-pink-100 selection:text-pink-900 overflow-clip mesh-bg noise-overlay"
     >
       <Header />
 
@@ -357,21 +311,24 @@ const Home = () => {
       </div>
 
       {/* ── Parallax 3D Assets Background ── */}
-      <ParallaxImage
+      <DraggableAsset
         src="/glass_sphere.png"
-        className="w-[420px] blur-[3px] opacity-75 top-[8%] -left-[8%]"
+        className="blur-[3px] opacity-75 top-[8%] -left-[8%]"
+        width="420px"
         offset={0}
         speed={0.8}
       />
-      <ParallaxImage
+      <DraggableAsset
         src="/abstract_shapes.png"
-        className="w-[520px] blur-[5px] opacity-55 top-[35%] -right-[12%]"
+        className="blur-[5px] opacity-55 top-[35%] -right-[12%]"
+        width="520px"
         offset={0}
         speed={1.2}
       />
-      <ParallaxImage
+      <DraggableAsset
         src="/glass_sphere.png"
-        className="w-[260px] blur-[2px] opacity-65 top-[78%] left-[4%]"
+        className="blur-[2px] opacity-65 top-[78%] left-[4%]"
+        width="260px"
         offset={0}
         speed={0.4}
       />
@@ -522,12 +479,13 @@ const Home = () => {
               <motion.div
                 variants={fadeIn}
                 key={i}
-                className="glass-panel p-8 text-center"
+                className="relative glass-panel p-8 text-center group overflow-hidden"
               >
-                <div className="text-4xl md:text-5xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-slate-900 to-slate-700 font-serif">
+                <div className="absolute inset-0 bg-gradient-to-r from-pink-500/10 to-violet-500/10 opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
+                <div className="relative z-10 text-5xl md:text-6xl font-black text-transparent bg-clip-text bg-gradient-to-br from-slate-900 via-slate-700 to-slate-500 font-serif drop-shadow-sm mb-2">
                   {stat.value}
                 </div>
-                <div className="text-sm font-semibold text-slate-500 mt-2 uppercase tracking-wide">
+                <div className="relative z-10 text-sm font-bold text-pink-500 mt-2 uppercase tracking-widest">
                   {stat.label}
                 </div>
               </motion.div>
@@ -537,9 +495,16 @@ const Home = () => {
       </section>
 
       {/* ════════════════════════════════════════════════════════════════════
+          INTERACTIVE SANDBOX
+      ════════════════════════════════════════════════════════════════════ */}
+      <section className="relative z-20 py-24 px-6 bg-white/30 backdrop-blur-xl border-y border-white flex items-center justify-center">
+        <InteractiveSandbox />
+      </section>
+
+      {/* ════════════════════════════════════════════════════════════════════
           COMMON RISKS (CARDS with 3D Tilt)
       ════════════════════════════════════════════════════════════════════ */}
-      <section className="relative z-20 py-24 px-6 bg-white/50 backdrop-blur-3xl border-y border-white">
+      <section className="relative z-20 py-24 px-6 bg-white/50 backdrop-blur-3xl border-b border-white">
         <div className="max-w-7xl mx-auto">
           <div className="text-center mb-16">
             <h2 className="text-3xl md:text-4xl lg:text-5xl font-extrabold text-slate-900 tracking-tight">
@@ -561,20 +526,23 @@ const Home = () => {
           >
             {hazards.map((h, i) => (
               <motion.div variants={fadeIn} key={i}>
-                <TiltCard
-                  className={`card-3d glass-panel p-8 bg-gradient-to-br ${h.color} border ${h.border} flex flex-col items-start h-full cursor-default`}
-                >
-                  <div
-                    className={`w-12 h-12 ${h.iconBg} rounded-2xl flex items-center justify-center mb-6 shadow-sm border ${h.border} ${h.iconColor}`}
+                <TiltCard className="h-full">
+                  <SpotlightCard
+                    className={`p-8 bg-gradient-to-br ${h.color} flex flex-col items-start h-full cursor-default border-none`}
+                    spotlightColor="rgba(255,255,255,0.9)"
                   >
-                    {h.icon}
-                  </div>
-                  <h3 className="text-xl font-bold text-slate-800 mb-3 tracking-tight">
-                    {h.title}
-                  </h3>
-                  <p className="text-slate-500 leading-relaxed font-medium">
-                    {h.desc}
-                  </p>
+                    <div
+                      className={`relative z-10 w-12 h-12 ${h.iconBg} rounded-2xl flex items-center justify-center mb-6 shadow-sm border ${h.border} ${h.iconColor}`}
+                    >
+                      {h.icon}
+                    </div>
+                    <h3 className="relative z-10 text-xl font-bold text-slate-800 mb-3 tracking-tight">
+                      {h.title}
+                    </h3>
+                    <p className="relative z-10 text-slate-500 leading-relaxed font-medium">
+                      {h.desc}
+                    </p>
+                  </SpotlightCard>
                 </TiltCard>
               </motion.div>
             ))}
@@ -583,83 +551,54 @@ const Home = () => {
       </section>
 
       {/* ════════════════════════════════════════════════════════════════════
-          HOW IT WORKS
+          HOW IT WORKS (Horizontal Scroll)
       ════════════════════════════════════════════════════════════════════ */}
-      <section id="how-it-works" className="relative z-20 py-32 px-6">
-        <div className="max-w-6xl mx-auto">
-          <div className="text-center mb-20">
-            <h2 className="text-3xl md:text-4xl lg:text-5xl font-extrabold text-slate-900 tracking-tight">
-              Three steps to a{" "}
-              <span className="text-transparent bg-clip-text bg-gradient-to-r from-violet-500 to-indigo-500">
-                safer home.
-              </span>
-            </h2>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-12 relative lg:px-10">
-            {/* Connecting line */}
-            <div className="hidden md:block absolute top-[20%] left-[10%] w-[80%] h-px bg-gradient-to-r from-transparent via-pink-200 to-transparent" />
-
-            {steps.map((s, i) => (
-              <motion.div
-                initial={{ opacity: 0, y: 30 }}
-                whileInView={{ opacity: 1, y: 0 }}
-                viewport={{ once: true }}
-                transition={{
-                  delay: i * 0.2,
-                  duration: 0.65,
-                  ease: [0.16, 1, 0.3, 1],
-                }}
-                key={i}
-                className="relative text-center"
-              >
-                <motion.div
-                  whileHover={{ scale: 1.1, rotate: 3 }}
-                  transition={{ type: "spring", stiffness: 400, damping: 15 }}
-                  className="w-16 h-16 mx-auto rounded-2xl bg-white border border-slate-100 flex items-center justify-center text-xl font-extrabold text-slate-800 shadow-xl shadow-slate-200/50 mb-8 z-10 relative"
-                >
-                  {s.num}
-                </motion.div>
-                <h3 className="text-2xl font-bold text-slate-900 mb-4 tracking-tight">
-                  {s.title}
-                </h3>
-                <p className="text-base text-slate-500 leading-relaxed font-medium max-w-[280px] mx-auto">
-                  {s.desc}
-                </p>
-              </motion.div>
-            ))}
-          </div>
-        </div>
-      </section>
+      <HorizontalScrollSteps />
 
       {/* ════════════════════════════════════════════════════════════════════
           CTA SECTION
       ════════════════════════════════════════════════════════════════════ */}
-      <section className="relative z-20 pb-32 px-6">
+      <section className="relative z-20 py-32 px-6 overflow-hidden">
+        {/* Animated Background Rays */}
+        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[800px] h-[800px] bg-gradient-to-r from-pink-500/20 to-violet-500/20 blur-[100px] rounded-full animate-pulse z-0 pointer-events-none" />
+
         <motion.div
           initial={{ opacity: 0, scale: 0.95 }}
           whileInView={{ opacity: 1, scale: 1 }}
           viewport={{ once: true }}
           transition={{ duration: 0.8, ease: [0.16, 1, 0.3, 1] }}
-          className="max-w-5xl mx-auto"
+          className="max-w-5xl mx-auto relative z-10"
         >
-          <div className="glass-panel p-12 md:p-20 bg-gradient-to-br from-slate-900 to-slate-800 text-center border-none relative overflow-hidden group">
+          <div className="glass-panel p-12 md:p-20 text-center border-none relative overflow-hidden group shadow-[0_20px_60px_-15px_rgba(236,72,153,0.3)]">
             {/* Background glow */}
-            <div className="absolute top-0 left-1/2 -translate-x-1/2 w-full max-w-2xl h-full bg-gradient-to-b from-pink-500/20 to-transparent blur-3xl opacity-50 group-hover:opacity-100 transition-opacity duration-700" />
+            <div className="absolute top-0 left-1/2 -translate-x-1/2 w-full max-w-2xl h-full bg-gradient-to-b from-pink-500/10 to-transparent blur-3xl opacity-50 group-hover:opacity-100 transition-opacity duration-700 pointer-events-none" />
             {/* Subtle grid overlay */}
             <div
-              className="absolute inset-0 opacity-5"
+              className="absolute inset-0 opacity-[0.03] pointer-events-none"
               style={{
                 backgroundImage:
-                  "linear-gradient(rgba(255,255,255,0.1) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.1) 1px, transparent 1px)",
+                  "linear-gradient(#000 1px, transparent 1px), linear-gradient(90deg, #000 1px, transparent 1px)",
                 backgroundSize: "40px 40px",
               }}
             />
+            {/* Animated Rings */}
+            <div
+              className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] border border-pink-500/10 rounded-full pointer-events-none"
+              style={{
+                animation: "ping 6s cubic-bezier(0, 0, 0.2, 1) infinite",
+              }}
+            />
+            <div
+              className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[800px] h-[800px] border border-pink-500/10 rounded-full pointer-events-none"
+              style={{
+                animation: "ping 6s cubic-bezier(0, 0, 0.2, 1) infinite 3s",
+              }}
+            />
 
-            <h2 className="text-4xl md:text-5xl font-extrabold text-white mb-6 tracking-tight relative z-10">
+            <h2 className="text-4xl md:text-5xl font-extrabold text-slate-900 mb-6 tracking-tight relative z-10">
               Ready to secure your space?
             </h2>
-            <p className="text-lg md:text-xl text-slate-300 mb-10 max-w-2xl mx-auto font-medium relative z-10">
+            <p className="text-lg md:text-xl text-slate-600 mb-10 max-w-2xl mx-auto font-medium relative z-10">
               Transform your 3D models into actionable safety insights in
               seconds. No setup required.
             </p>
@@ -667,7 +606,7 @@ const Home = () => {
               onClick={() => navigate("/simulator")}
               whileHover={{ scale: 1.05 }}
               whileTap={{ scale: 0.97 }}
-              className="bubble-btn px-10 py-5 bg-white text-slate-900 font-bold rounded-2xl shadow-xl transition-all text-lg inline-flex items-center gap-2 relative z-10"
+              className="bubble-btn px-10 py-5 bg-slate-900 text-white font-extrabold rounded-2xl shadow-xl transition-all text-lg inline-flex items-center gap-2 relative z-10"
             >
               Start Free Simulation
               <svg

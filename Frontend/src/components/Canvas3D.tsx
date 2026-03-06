@@ -74,6 +74,7 @@ interface FigureHandle {
   root: THREE.Group;
   agentId: number;
   ageId: string;
+  color: number;
   trajectory?: number[][];
   actionLog?: ActionEntry[];
   lx?: number;
@@ -81,6 +82,9 @@ interface FigureHandle {
   walkCycle: number;
   currentlyWading: boolean;
   lastFloorY: number;
+  // Trail vẽ động — chỉ hiện khi agent được chọn
+  trailPoints: THREE.Vector3[];
+  trailLine: THREE.Line | null;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -286,8 +290,8 @@ const Canvas3D: React.FC<Props> = ({
     sun.shadow.mapSize.set(2048, 2048);
     scene.add(sun);
     scene.add(new THREE.HemisphereLight(0xb0d0ff, 0x806040, 0.38));
-    scene.add(new THREE.GridHelper(30, 30, 0x334455, 0x1a2535));
-    scene.add(new THREE.AxesHelper(2));
+    // scene.add(new THREE.GridHelper(30, 30, 0x334455, 0x1a2535));
+    // scene.add(new THREE.AxesHelper(2));
 
     const raycaster = new THREE.Raycaster();
     raycaster.layers.set(1);
@@ -542,12 +546,43 @@ const Canvas3D: React.FC<Props> = ({
     // If we indiscriminately cast a new ray from +5.0m here, we will hit the TOP of beds,
     // overriding the safe floor spawn and yanking the agent up into the mattress visually.
     // We only snap to the local mesh floor if actively walking/falling, otherwise trust the start point.
-    if (doSnap && ["falling", "free_fall", "walk", "run"].includes(action)) {
+    // FIX BUG #10: Old list was ["falling","free_fall","walk","run"] — missing most real
+    // action names that come from entry.a (e.g. walk_to, walk_random, crawl, lunge, investigate).
+    // Expanded to cover all locomotion actions so floor snap fires correctly.
+    const SNAP_ACTIONS = new Set([
+      "falling",
+      "free_fall",
+      "fall_forward",
+      "walk",
+      "walk_to",
+      "walk_random",
+      "run",
+      "run_unstable",
+      "sprint",
+      "crawl",
+      "lunge",
+      "investigate",
+      "wade",
+    ]);
+    if (doSnap && SNAP_ACTIONS.has(action)) {
       const rayY = getFloorY(c, worldPos);
       if (rayY !== null) {
         // For falling states allow larger snap distance (agent may be high up)
-        const threshold = ["falling", "free_fall"].includes(action) ? 5.0 : 0.8;
-        if (Math.abs(rayY - backendBaseY) < threshold) {
+        const threshold = ["falling", "free_fall", "fall_forward"].includes(
+          action,
+        )
+          ? 5.0
+          : 0.8;
+        // FIX BUG #6: Only snap when ray hit is CLOSE to the backend foot position.
+        // Previously we snapped unconditionally if within threshold, causing the figure
+        // to jump onto a bed surface when the 3D ray hit the mattress mesh.
+        // New guard: if rayY is ABOVE the backend foot position by more than FLOOR_CLEARANCE,
+        // it likely hit a furniture surface — ignore it and trust the backend Y.
+        const rayAboveBackend = rayY - backendBaseY;
+        if (
+          Math.abs(rayY - backendBaseY) < threshold &&
+          rayAboveBackend <= FLOOR_CLEARANCE * 3
+        ) {
           return rayY + FLOOR_CLEARANCE;
         }
       }
@@ -574,7 +609,7 @@ const Canvas3D: React.FC<Props> = ({
     if (!simulationPlayback?.trajectories) return;
 
     const defAge = simulationPlayback.config?.ageGroupId ?? "toddler";
-    const offXYZ = c.offsetXYZ as THREE.Vector3;
+    // const offXYZ = c.offsetXYZ as THREE.Vector3;
 
     simulationPlayback.trajectories.forEach((tr, i) => {
       if (!tr?.positions?.length) return;
@@ -586,54 +621,33 @@ const Canvas3D: React.FC<Props> = ({
         root: driver.root,
         agentId: tr.agentId ?? i,
         ageId,
+        color,
         trajectory: tr.positions,
         actionLog: tr.actionLog ?? [],
         walkCycle: 0,
         currentlyWading: false,
         lastFloorY: 0,
+        trailPoints: [],
+        trailLine: null,
       };
       driver.root.traverse((o: THREE.Object3D) => o.layers.set(0));
       driver.root.visible = false;
       c.scene.add(driver.root);
       c.figures.push(handle);
-
-      // Trail (uses same toWorldSpace so it correctly maps to the scene)
-      const raw = tr.positions.filter(
-        (p: any) => Array.isArray(p) && p.length >= 3,
-      );
-      if (raw.length >= 2) {
-        const step = Math.max(1, Math.floor(raw.length / 300));
-        const pts = raw
-          .filter((_: any, j: number) => j % step === 0)
-          .map((p: number[]) => {
-            const wp = toWorldSpace(p, offXYZ);
-            const rh = driver.registryEntry?.realHeight ?? 0.8;
-            // Place trail at foot level
-            return new THREE.Vector3(wp.x, wp.y - rh / 2, wp.z);
-          });
-        const line = new THREE.Line(
-          new THREE.BufferGeometry().setFromPoints(pts),
-          new THREE.LineBasicMaterial({
-            color,
-            transparent: true,
-            opacity: 0.4,
-          }),
-        );
-        c.scene.add(line);
-        c.trails.push(line);
-      }
+      // Trail vẽ động — không pre-build ở đây, tick() sẽ xử lý
     });
 
     c.isPlaying = !playbackPaused;
     c.playStart = Date.now();
     c.currentFrame = 0;
     c.figures.forEach((fh: FigureHandle) => (fh.root.visible = true));
-  }, [simulationPlayback]);
+  }, [simulationPlayback, modelPath, sceneUnitScale]);
 
   // ── Selection / highlights ────────────────────────────────────────────────
   useEffect(() => {
     if (!ctx.current) return;
     const c = ctx.current;
+    // Fade out non-selected agents
     c.figures.forEach((fh: FigureHandle) => {
       const sel = selectedAgentId === null || fh.agentId === selectedAgentId;
       fh.root.traverse((ch: any) => {
@@ -643,14 +657,17 @@ const Canvas3D: React.FC<Props> = ({
         }
       });
     });
-    c.trails.forEach((l: THREE.Line, i: number) => {
-      const mat2 = l.material as THREE.LineBasicMaterial;
-      mat2.opacity =
-        selectedAgentId === null
-          ? 0.4
-          : c.figures[i]?.agentId === selectedAgentId
-            ? 0.85
-            : 0.04;
+
+    // Xóa trail của tất cả figures khi selection thay đổi.
+    // tick() sẽ tự build lại trail cho agent được chọn từ vị trí hiện tại.
+    c.figures.forEach((fh: FigureHandle) => {
+      if (fh.trailLine) {
+        c.scene.remove(fh.trailLine);
+        fh.trailLine.geometry.dispose();
+        (fh.trailLine.material as THREE.Material).dispose();
+        fh.trailLine = null;
+      }
+      fh.trailPoints = [];
     });
 
     c.hitSpheres.forEach((m: THREE.Mesh) => {
@@ -871,9 +888,12 @@ const Canvas3D: React.FC<Props> = ({
           root: driver.root,
           agentId: a.agentId,
           ageId: a.ageGroupId ?? "toddler",
+          color,
           walkCycle: 0,
           currentlyWading: false,
           lastFloorY: 0,
+          trailPoints: [],
+          trailLine: null,
         };
         driver.root.traverse((o: THREE.Object3D) => o.layers.set(0));
         const wp = toWorldSpace(a.position, offXYZ);
@@ -1054,6 +1074,50 @@ const Canvas3D: React.FC<Props> = ({
           entry?.wadingIn ? "wading" : (entry?.e ?? "neutral"),
           fh,
         );
+
+        // Vẽ trail từ đỉnh đầu agent, mỗi 3 frame thêm 1 điểm
+        if (c.currentFrame % 3 === 0) {
+          const headY =
+            fh.root.position.y + (fh.driver.currentHeight ?? realHeight);
+          const headPt = new THREE.Vector3(
+            fh.root.position.x,
+            headY,
+            fh.root.position.z,
+          );
+
+          // Chỉ thêm nếu agent đã di chuyển đủ xa (tránh duplicate points khi đứng yên)
+          const last = fh.trailPoints[fh.trailPoints.length - 1];
+          if (!last || last.distanceTo(headPt) > 0.02) {
+            fh.trailPoints.push(headPt.clone());
+            if (fh.trailPoints.length > 600) fh.trailPoints.shift(); // giới hạn độ dài trail
+          }
+
+          if (fh.trailPoints.length >= 2) {
+            if (!fh.trailLine) {
+              // Tạo line lần đầu khi có đủ 2 điểm
+              fh.trailLine = new THREE.Line(
+                new THREE.BufferGeometry().setFromPoints(fh.trailPoints),
+                new THREE.LineBasicMaterial({
+                  color: fh.color,
+                  transparent: true,
+                  opacity: 0.85,
+                  depthTest: false, // Trail luôn hiện, không bị che bởi đồ vật
+                }),
+              );
+              fh.trailLine.renderOrder = 999;
+              c.scene.add(fh.trailLine);
+            } else {
+              // Cập nhật geometry với điểm mới
+              (fh.trailLine.geometry as THREE.BufferGeometry).setFromPoints(
+                fh.trailPoints,
+              );
+              (
+                fh.trailLine.geometry.attributes
+                  .position as THREE.BufferAttribute
+              ).needsUpdate = true;
+            }
+          }
+        }
       }
     });
 

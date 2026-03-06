@@ -19,7 +19,7 @@ await fs.mkdir(SIMULATION_DIR, { recursive: true });
 
 const activeSimulations = new Map();
 
-// Periodic cleanup of stale simulation data
+// Xóa các simulation đã hoàn thành hoặc bị treo sau 1 giờ để tránh memory leak
 setInterval(() => {
   const ONE_HOUR = 60 * 60 * 1000;
   const now = Date.now();
@@ -36,17 +36,8 @@ setInterval(() => {
   }
 }, 60 * 60 * 1000);
 
-// ─────────────────────────────────────────────────────────────────────────────
-// §4.2 Floor height enforcement via downward raycast
-//
-// Problem with old approach: agent.spawnY was used to lock Y during recovery.
-// spawnY is the spawn-time floor and becomes stale once the agent moves to a
-// different area (ramp, step, multi-level geometry).
-//
-// Fix: cast a short downward ray from the agent's current XZ each physics frame.
-// The hit point gives the real floor at that location.  If no hit is found
-// (agent over a void) we fall back to the scene-level floorHeight.
-// ─────────────────────────────────────────────────────────────────────────────
+// Lấy Y mặt sàn tại vị trí XZ hiện tại của agent bằng raycast xuống.
+// Dùng mỗi physics frame để cập nhật floor Y chính xác khi agent di chuyển.
 function getCurrentFloorY(world, agentPos, sceneFloorHeight, agentBodyToIgnore = null) {
   return physicsEngine.getFloorHeightAt(
     world,
@@ -55,6 +46,161 @@ function getCurrentFloorY(world, agentPos, sceneFloorHeight, agentBodyToIgnore =
     5.0,
     agentBodyToIgnore
   );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SPAWN HELPERS
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Tạo danh sách bounding box 2D (XZ) của các đồ vật nổi trên sàn.
+// Dùng để loại trừ vùng có đồ vật TRƯỚC KHI random XZ, tránh thử ngẫu nhiên
+// vào giữa giường/bàn/ghế rồi mới bị reject bởi physics check.
+function buildFurnitureExclusionZones(sceneObjects, floorHeight, padding) {
+  if (!sceneObjects || !sceneObjects.length) return [];
+  return sceneObjects
+    .filter(obj => {
+      if (!obj.boundingBox) return false;
+      const { min, max } = obj.boundingBox;
+      const objHeight = max[1] - min[1];
+      // Chỉ loại trừ đồ vật CHẠM SÀN thật sự:
+      //   - Chân đồ vật (min[1]) phải nằm trong vòng 40cm so với sàn
+      //     → loại bỏ tranh treo tường, kệ cao, đèn trần không chạm sàn
+      //   - Mặt trên (max[1]) phải cao hơn sàn ít nhất 10cm → có thể chặn agent
+      //   - Độ dày tối thiểu 10cm → không phải mặt phẳng mỏng (rug/thảm)
+      return min[1] <= floorHeight + 0.40
+          && max[1]  >  floorHeight + 0.10
+          && objHeight > 0.10;
+    })
+    .map(obj => ({
+      minX: obj.boundingBox.min[0] - padding,
+      maxX: obj.boundingBox.max[0] + padding,
+      minZ: obj.boundingBox.min[2] - padding,
+      maxZ: obj.boundingBox.max[2] + padding,
+    }));
+}
+
+// Kiểm tra một điểm XZ có nằm trong vùng đồ vật không.
+function isInsideExclusionZone(x, z, zones) {
+  return zones.some(zone => x >= zone.minX && x <= zone.maxX && z >= zone.minZ && z <= zone.maxZ);
+}
+
+// Sinh điểm XZ ngẫu nhiên trong phòng, tránh vùng đồ vật đã biết.
+// Trả về null nếu không tìm được điểm hợp lệ sau maxTries lần thử.
+function getRandomSpawnPosition(bbox, floorHeight, ageGroup, exclusionZones, maxTries = 20) {
+  if (!bbox) return [0, floorHeight, 0];
+  const margin = ageGroup ? (ageGroup.capsuleRadius * 2) : 0.3;
+  const width  = Math.max(0, bbox.max[0] - bbox.min[0] - 2 * margin);
+  const depth  = Math.max(0, bbox.max[2] - bbox.min[2] - 2 * margin);
+
+  for (let t = 0; t < maxTries; t++) {
+    const x = bbox.min[0] + margin + Math.random() * width;
+    const z = bbox.min[2] + margin + Math.random() * depth;
+    if (!isInsideExclusionZone(x, z, exclusionZones)) {
+      return [x, floorHeight, z];
+    }
+  }
+  // Nếu tất cả lần thử đều rơi vào đồ vật, trả về null để fallback tiếp theo xử lý
+  return null;
+}
+
+// Pre-compute lưới các ô XZ đi được (không bị che bởi đồ vật).
+// Chạy 1 lần trước spawn loop. Mỗi ô được verify bằng downward raycast thật.
+function buildWalkableGrid(world, bb, floorHeight, agentHeight, capsuleRadius,
+                           handleToCollider, isFloor, rapier) {
+  const GRID_STEP  = 0.35; // độ phân giải lưới ~35cm
+  const margin     = capsuleRadius * 2;
+  const castFromY  = floorHeight + agentHeight + 0.5;
+  const walkable   = [];
+
+  for (let x = bb.min[0] + margin; x <= bb.max[0] - margin; x += GRID_STEP) {
+    for (let z = bb.min[2] + margin; z <= bb.max[2] - margin; z += GRID_STEP) {
+      const ray = new rapier.Ray({ x, y: castFromY, z }, { x: 0, y: -1, z: 0 });
+      const hit = world.castRay(ray, agentHeight + 1.5, true);
+
+      if (!hit) {
+        // Không có gì cả → sàn trống, đi được
+        walkable.push({ x, z });
+        continue;
+      }
+
+      const meta = handleToCollider.get(hit.colliderHandle);
+      const toi  = hit.toi ?? hit.timeOfImpact;
+      const hitY = castFromY - toi;
+
+      // Chỉ thêm vào walkable nếu tia chạm sàn thật (không phải mặt trên đồ vật)
+      if (isFloor(meta) || Math.abs(hitY - floorHeight) < 0.06) {
+        walkable.push({ x, z });
+      }
+    }
+  }
+
+  console.log(`[SPAWN] Walkable grid built: ${walkable.length} cells (step=${GRID_STEP}m)`);
+  return walkable;
+}
+
+// Thực hiện collision check đầy đủ tại một điểm XZ:
+//   Bước 1: Downward raycast → xác nhận bề mặt bên dưới là sàn thật
+//   Bước 2: Multi-part sweep → kiểm tra toàn thân agent không bị đồ vật xuyên qua
+//   Bước 3: Ankle-level sphere → bắt đồ vật thấp bị bước 2 bỏ sót
+// Trả về { valid: bool, actualFloorY: number }
+function checkSpawnPoint(x, z, world, floorHeight, agentHeight, capsuleRadius,
+                          ageGroup, handleToCollider, isFloor, rapier) {
+  const castFromY = floorHeight + agentHeight + 0.5;
+
+  // Bước 1: Raycast xuống kiểm tra bề mặt
+  const ray = new rapier.Ray({ x, y: castFromY, z }, { x: 0, y: -1, z: 0 });
+  const hit = world.castRay(ray, agentHeight + 1.5, true);
+  let actualFloorY = floorHeight;
+
+  if (hit) {
+    const hitMeta = handleToCollider.get(hit.colliderHandle);
+    const toi     = hit.toi ?? hit.timeOfImpact;
+    const hitY    = castFromY - toi;
+
+    if (isFloor(hitMeta) || Math.abs(hitY - floorHeight) < 0.06) {
+      actualFloorY = hitY; // sàn thật → ghi nhận Y chính xác
+    } else {
+      return { valid: false, actualFloorY: floorHeight }; // đồ vật bên trên → từ chối
+    }
+  }
+
+  // Bước 2: Multi-part body sweep
+  const spawnBodyCenterY = actualFloorY + (agentHeight / 2);
+  const spawnRot         = { w: 1.0, x: 0.0, y: 0.0, z: 0.0 };
+  const spawnShapes      = physicsEngine.getAgentSpawnShapes(agentHeight, capsuleRadius, ageGroup.anthropometry || null);
+  let isBlocked = false;
+
+  for (const part of spawnShapes) {
+    if (isBlocked) break;
+    const partCenterY    = spawnBodyCenterY + part.centerOffsetY;
+    const paddedParams   = [...part.params];
+    paddedParams[paddedParams.length - 1] *= 1.15; // inflate radius 15% để có safety margin
+    const checkPos = { x, y: partCenterY, z };
+    const shape = part.shape === rapier.Ball
+      ? new rapier.Ball(paddedParams[0])
+      : new rapier.Capsule(paddedParams[0], paddedParams[1]);
+
+    world.intersectionsWithShape(checkPos, spawnRot, shape, (handle) => {
+      const meta = handleToCollider.get(handle);
+      if (!meta || isFloor(meta) || meta.type === 'wall' || meta.id === 'boundary_wall') return true;
+      isBlocked = true;
+      return false;
+    });
+  }
+
+  // Bước 3: Ankle sphere — bắt đồ vật ngắn bị bỏ sót ở bước 2
+  if (!isBlocked) {
+    const anklePos   = { x, y: actualFloorY + capsuleRadius + 0.05, z };
+    const ankleShape = new rapier.Ball(capsuleRadius * 1.15);
+    world.intersectionsWithShape(anklePos, spawnRot, ankleShape, (handle) => {
+      const meta = handleToCollider.get(handle);
+      if (!meta || isFloor(meta) || meta.type === 'wall' || meta.id === 'boundary_wall') return true;
+      isBlocked = true;
+      return false;
+    });
+  }
+
+  return { valid: !isBlocked, actualFloorY };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -75,7 +221,7 @@ export const startSimulation = async (req, res) => {
       status: 'running', progress: 0, startedAt: new Date().toISOString(),
     });
 
-    // Safety timeout
+    // Tự động đánh dấu lỗi nếu simulation chạy quá lâu
     const safetyTimeout = setTimeout(() => {
       const entry = activeSimulations.get(simulationId);
       if (entry && entry.status === 'running') {
@@ -89,7 +235,7 @@ export const startSimulation = async (req, res) => {
       }
     }, duration * 5 * 1000);
 
-    // Run asynchronously
+    // Chạy simulation bất đồng bộ để không block HTTP response
     (async () => {
       const startTime = Date.now();
 
@@ -128,133 +274,181 @@ export const startSimulation = async (req, res) => {
         await physicsEngine.init();
         console.log(`[SIM]    ✅ Physics engine ready`);
 
-        const ageGroup  = getAgeGroup(ageGroupId);
+        const ageGroup    = getAgeGroup(ageGroupId);
         const floorHeight = (sceneData.floor && typeof sceneData.floor.height === 'number')
           ? sceneData.floor.height
           : (sceneData.boundingBox ? sceneData.boundingBox.min[1] : 0);
 
         console.log(`[SIM START] Floor Height: ${floorHeight.toFixed(4)}`);
 
+        // Xác định một collider có phải là sàn/thảm/mặt phẳng đi được không.
+        // Dùng kết hợp: type, tên object, và vị trí bounding box so với floorHeight.
         const isFloor = (c) => {
           if (!c) return false;
           if (c.type === 'floor') return true;
+
           const n = (c.name || c.id || '').toLowerCase();
-          return /floor|vloer|ground|plane|grond|surface/.test(n);
+          if (/rug|carpet|mat($|[_\s])/.test(n)) return true;
+          if (/floor|vloer|ground|plane|grond|surface/.test(n)) {
+            return !/lamp|desk|table|chair|stand|fan|mirror|shelf|cabinet|top|stool|bench|bed|sofa|couch|mattress/.test(n);
+          }
+
+          if (c.boundingBox) {
+            const objHeight = c.boundingBox.max[1] - c.boundingBox.min[1];
+            // Object có mặt trên nằm sát floorHeight → coi là sàn (kể cả sàn dày)
+            if (c.boundingBox.max[1] <= floorHeight + 0.12) return true;
+            // Thảm mỏng nằm ngay trên sàn → cũng coi là sàn
+            if (objHeight <= 0.15 && c.boundingBox.max[1] <= floorHeight + 0.25) return true;
+          }
+
+          return false;
         };
 
-        // ════════════════════════════════════════════════════════════════════
-        // SEPARATE WORLDS: Create one independent physics world per agent.
-        // Each child is simulated alone in its own copy of the room.
-        // ════════════════════════════════════════════════════════════════════
+        // Mỗi agent chạy trong một physics world riêng biệt để tránh tương tác lẫn nhau
         console.log(`[SIM] Step 3/5: Creating ${agentCount} independent worlds...`);
-        console.log(`[DEBUG] Reached just before world creation!`);
         const bb = sceneData.boundingBox;
-        const simWorlds = [];     // Array of { world, agent, colliders, handleToCollider, handleToAgent, handleToBodyPart, eventQueue }
-        const allAgents = [];     // Flat list of all agents (for behaviors, trajectories)
-
-        let sharedSpawnPos = null;
-        let sharedActualFloorY = floorHeight;
+        const simWorlds = [];
+        const allAgents = [];
 
         for (let i = 0; i < agentCount; i++) {
-          const world = physicsEngine.createWorld();
+          const world     = physicsEngine.createWorld();
           const colliders = colliderGenerator.generateCollidersFromScene(sceneData, world, physicsEngine);
+
+          // Step physics 1 lần để ổn định handle trước khi build map.
+          // deltaTime=0 gây NaN nên dùng default step.
+          physicsEngine.step(world);
+
           const handleToCollider = new Map();
           colliders.forEach(c => { if (c.collider) handleToCollider.set(c.collider.handle, c); });
 
-          // Add boundary walls
+          // Thêm tường vô hình bao quanh phòng để agent không đi ra ngoài
           if (bb) {
-            const wallHeight = 3.0;
+            const wallHeight    = 3.0;
             const wallThickness = 0.2;
-            const cx = (bb.min[0] + bb.max[0]) / 2;
-            const cz = (bb.min[2] + bb.max[2]) / 2;
-            const sx = (bb.max[0] - bb.min[0]) / 2;
-            const sz = (bb.max[2] - bb.min[2]) / 2;
+            const cx  = (bb.min[0] + bb.max[0]) / 2;
+            const cz  = (bb.min[2] + bb.max[2]) / 2;
+            const sx  = (bb.max[0] - bb.min[0]) / 2;
+            const sz  = (bb.max[2] - bb.min[2]) / 2;
             const wallY = floorHeight + wallHeight / 2;
 
             const walls = [
-              { x: bb.max[0] + wallThickness, y: wallY, z: cz, hx: wallThickness, hy: wallHeight/2, hz: sz + wallThickness },
-              { x: bb.min[0] - wallThickness, y: wallY, z: cz, hx: wallThickness, hy: wallHeight/2, hz: sz + wallThickness },
-              { x: cx, y: wallY, z: bb.max[2] + wallThickness, hx: sx + wallThickness, hy: wallHeight/2, hz: wallThickness },
-              { x: cx, y: wallY, z: bb.min[2] - wallThickness, hx: sx + wallThickness, hy: wallHeight/2, hz: wallThickness },
+              { x: bb.max[0] + wallThickness, y: wallY, z: cz,  hx: wallThickness, hy: wallHeight/2, hz: sz + wallThickness },
+              { x: bb.min[0] - wallThickness, y: wallY, z: cz,  hx: wallThickness, hy: wallHeight/2, hz: sz + wallThickness },
+              { x: cx, y: wallY, z: bb.max[2] + wallThickness,  hx: sx + wallThickness, hy: wallHeight/2, hz: wallThickness },
+              { x: cx, y: wallY, z: bb.min[2] - wallThickness,  hx: sx + wallThickness, hy: wallHeight/2, hz: wallThickness },
             ];
             for (const w of walls) {
               const desc = physicsEngine.rapier.RigidBodyDesc.fixed().setTranslation(w.x, w.y, w.z);
               const body = world.createRigidBody(desc);
-              world.createCollider(
+              const wallCollider = world.createCollider(
                 physicsEngine.rapier.ColliderDesc.cuboid(w.hx, w.hy, w.hz).setFriction(0.5),
                 body
               );
+              // Đăng ký tường vào map để spawn check không nhầm tường là obstacle
+              handleToCollider.set(wallCollider.handle, { type: 'wall', id: 'boundary_wall', name: 'wall', isSoft: false });
             }
           }
 
-          // Initialize BVH before spawning
-          // Ensure we do NOT pass 0 as deltaTime, as a 0 timestep causes Rapier to generate NaN coordinates!
-          physicsEngine.step(world);
-
-          // Spawn a single agent in this world
           const r = ageGroup.capsuleRadius || 0.15;
-          const internalHalfH = Math.max(0.01, (ageGroup.height - 2 * r) / 2);
-          const spawnShape = new physicsEngine.rapier.Capsule(internalHalfH, r);
-          const spawnRot = { w: 1.0, x: 0.0, y: 0.0, z: 0.0 };
+
+          // ── SPAWN STRATEGY ────────────────────────────────────────────────
+          // Giai đoạn 1: Pre-filter dựa trên bounding box đồ vật → random XZ nhanh
+          // Giai đoạn 2: Physics check đầy đủ tại XZ đã chọn
+          // Giai đoạn 3 (fallback): Walkable grid đã pre-compute → đảm bảo tìm được
+          // Giai đoạn 4 (last resort): Raycast tại tâm phòng → spawn trên bất kỳ bề mặt nào
+          // ─────────────────────────────────────────────────────────────────
+
+          const exclusionZones = buildFurnitureExclusionZones(
+            sceneData.objects, floorHeight, r * 0.5  // padding nhỏ hơn — physics check xử lý phần còn lại
+          );
 
           let actualFloorY = floorHeight;
-          let spawnPos;
+          let spawnPos     = null;
+          let validSpawn   = false;
 
-          // FIX: Do NOT use sharedSpawnPos. Every agent MUST calculate its own safe, 
-          // collision-free spawn point and actual Floor Y via raycast to prevent sinking into beds.
-          let validSpawn = false;
+          // Giai đoạn 1+2: 50 lần thử random với pre-filter
           let attempts = 0;
-
           while (!validSpawn && attempts < 50) {
             attempts++;
-            spawnPos = getRandomSpawnPosition(sceneData.boundingBox, floorHeight, ageGroup);
-
-            const spX = spawnPos[0], spZ = spawnPos[2];
-            const castFromY = bb ? (bb.max[1] + 0.5) : (floorHeight + 5);
-            const ray = new physicsEngine.rapier.Ray(
-              { x: spX, y: castFromY, z: spZ },
-              { x: 0, y: -1, z: 0 }
+            const candidate = getRandomSpawnPosition(
+              sceneData.boundingBox, floorHeight, ageGroup, exclusionZones
             );
-            const hit = world.castRay(ray, castFromY - floorHeight + 2, true);
+            if (!candidate) continue; // pre-filter không tìm được điểm sạch, thử lại
 
-            if (hit) {
-              const hitMeta = handleToCollider.get(hit.colliderHandle);
-              const hitY    = castFromY - hit.toi;
-              const hitIsFloor = isFloor(hitMeta);
+            const { valid, actualFloorY: floorY } = checkSpawnPoint(
+              candidate[0], candidate[2],
+              world, floorHeight, ageGroup.height, r,
+              ageGroup, handleToCollider, isFloor, physicsEngine.rapier
+            );
 
-              // Accept collision surface as new floor if it securely holds the agent
-              if (hitIsFloor || hitY < floorHeight + 1.2) {
-                actualFloorY = hitY;
-              }
+            if (valid) {
+              spawnPos     = candidate;
+              actualFloorY = floorY;
+              validSpawn   = true;
             }
-
-            const spawnCenterY = actualFloorY + (ageGroup.height / 2) + 0.02;
-            const checkPos     = { x: spX, y: spawnCenterY, z: spZ };
-            const paddedR      = r * 1.20;
-            const paddedShape  = new physicsEngine.rapier.Capsule(internalHalfH, paddedR);
-
-            let isBlocked = false;
-            world.intersectionsWithShape(checkPos, spawnRot, paddedShape, (colliderHandle) => {
-              const meta = handleToCollider.get(colliderHandle);
-              if (!meta) return true;
-              if (isFloor(meta)) return true;
-              if (meta.isSoft && !isFloor(meta)) { isBlocked = true; return false; }
-              isBlocked = true;
-              return false;
-            });
-
-            if (!isBlocked) validSpawn = true;
           }
 
+          // Giai đoạn 3: Walkable grid fallback — pre-compute toàn bộ ô đi được rồi shuffle
+          if (!validSpawn && bb) {
+            console.warn(`[SPAWN] ⚠️ Agent ${i}: 50 random attempts failed, trying walkable grid...`);
+
+            const walkableGrid = buildWalkableGrid(
+              world, bb, floorHeight, ageGroup.height, r,
+              handleToCollider, isFloor, physicsEngine.rapier
+            );
+
+            // Shuffle để không phải lúc nào cũng spawn cùng một góc phòng
+            walkableGrid.sort(() => Math.random() - 0.5);
+
+            for (const cell of walkableGrid) {
+              const { valid, actualFloorY: floorY } = checkSpawnPoint(
+                cell.x, cell.z,
+                world, floorHeight, ageGroup.height, r,
+                ageGroup, handleToCollider, isFloor, physicsEngine.rapier
+              );
+              if (valid) {
+                spawnPos     = [cell.x, floorY, cell.z];
+                actualFloorY = floorY;
+                validSpawn   = true;
+                console.log(`[SPAWN] ✅ Agent ${i}: walkable grid found clear cell at [${cell.x.toFixed(2)}, ${cell.z.toFixed(2)}]`);
+                break;
+              }
+            }
+          }
+
+          // Giai đoạn 4: Last resort — raycast tại tâm phòng, spawn trên bất kỳ bề mặt nào.
+          // Tại đây ta không còn lựa chọn nào khác, chấp nhận spawn trên đồ vật nếu cần.
+          if (!validSpawn) {
+            console.warn(`[SPAWN] ⚠️ Agent ${i}: all strategies failed, using center raycast last resort`);
+            const cx = bb ? (bb.min[0] + bb.max[0]) / 2 : 0;
+            const cz = bb ? (bb.min[2] + bb.max[2]) / 2 : 0;
+
+            // Cast từ cao hơn với max distance lớn hơn để không bỏ sót bề mặt cao
+            const highCastY  = floorHeight + 3.5;
+            const centerRay  = new physicsEngine.rapier.Ray(
+              { x: cx, y: highCastY, z: cz },
+              { x: 0, y: -1, z: 0 }
+            );
+            const centerHit = world.castRay(centerRay, 5.0, true);
+
+            if (centerHit) {
+              const toi    = centerHit.toi ?? centerHit.timeOfImpact;
+              actualFloorY = highCastY - toi;
+              console.warn(`[SPAWN] ⚠️ Agent ${i}: center ray hit surface at Y=${actualFloorY.toFixed(4)}`);
+            } else {
+              // Ray không trúng gì → dùng floorHeight nhưng offset lên cao
+              // để tránh xuyên qua đồ vật ở tâm phòng
+              actualFloorY = floorHeight + ageGroup.height * 0.5;
+              console.warn(`[SPAWN] ⚠️ Agent ${i}: center ray missed, offsetting to Y=${actualFloorY.toFixed(4)}`);
+            }
+            spawnPos = [cx, actualFloorY, cz];
+          }
+
+          // Đặt agent nhích lên 2cm so với bề mặt để tránh overlap ngay lúc spawn
           spawnPos[1] = actualFloorY + 0.02;
 
           if (i < 3) {
-            console.log(`[SPAWN DEBUG] Agent ${i} (World ${i}):`,
-              `floorHeight=${floorHeight.toFixed(4)},`,
-              `raycastFloorY=${actualFloorY.toFixed(4)},`,
-              `finalSpawnY=${spawnPos[1].toFixed(4)},`,
-              `spawnXZ=[${spawnPos[0].toFixed(2)}, ${spawnPos[2].toFixed(2)}]`
-            );
+            console.log(`[SPAWN DEBUG] Agent ${i}: floorHeight=${floorHeight.toFixed(4)}, actualFloorY=${actualFloorY.toFixed(4)}, finalY=${spawnPos[1].toFixed(4)}, XZ=[${spawnPos[0].toFixed(2)}, ${spawnPos[2].toFixed(2)}]`);
           }
 
           const agentBodyObj = physicsEngine.createAgentMultipartCollider(
@@ -262,9 +456,11 @@ export const startSimulation = async (req, res) => {
             ageGroup.anthropometry || null
           );
 
-          const agent      = new Agent(i, spawnPos, agentBodyObj.body, ageGroupId, world);
-          agent.spawnY     = actualFloorY;
-          agent.colliders  = agentBodyObj.colliders;
+          const agent     = new Agent(i, spawnPos, agentBodyObj.body, ageGroupId, world);
+          agent.spawnY    = actualFloorY;
+          agent.colliders = agentBodyObj.colliders;
+          // agent.collider (singular) dùng bởi KCC — gán tường minh để không bao giờ null
+          agent.collider  = agentBodyObj.colliders?.torso ?? agentBodyObj.colliders?.legs ?? null;
           allAgents.push(agent);
 
           const handleToAgent    = new Map();
@@ -296,55 +492,52 @@ export const startSimulation = async (req, res) => {
         let dbg_softIntersections = 0;
         const traceLog = [];
 
-        const deltaTime   = 1 / 60;
-        const totalSteps  = duration * 60;
+        const deltaTime  = 1 / 60;
+        const totalSteps = duration * 60;
 
         console.log(`[SIM] Step 5/5: Running physics loop (${totalSteps} steps × ${simWorlds.length} worlds)...`);
         const loopStartTime = Date.now();
 
         for (let step = 0; step < totalSteps; step++) {
+          // Nhường event loop mỗi 60 bước để không block Node.js
           if (step > 0 && step % 60 === 0) {
             await new Promise(r => setImmediate(r));
           }
 
-          // Step each world independently
           for (const sim of simWorlds) {
             const { world, agent, colliders, handleToCollider, handleToAgent, handleToBodyPart, eventQueue } = sim;
 
-            // §4.2 Floor enforcement
+            // Cập nhật floor Y theo vị trí hiện tại và clamp agent không bay/xuyên sàn
             if (agent.body && !agent.fallState) {
               const agentPos      = agent.getPosition();
               const currentFloorY = getCurrentFloorY(world, agentPos, floorHeight, agent.body);
               const pos           = agent.body.translation();
               const targetY       = currentFloorY + (ageGroup.height / 2) + 0.02;
-
-              // Clamp: never snap agent higher than standing height above scene floor
-              const maxFloorY = floorHeight + ageGroup.height;
+              const maxFloorY     = floorHeight + ageGroup.height;
               const clampedTargetY = Math.min(targetY, maxFloorY);
 
               if (pos.y < clampedTargetY - 0.05) {
-                agent.body.setNextKinematicTranslation({ x: pos.x, y: clampedTargetY, z: pos.z });
+                agent.setSafeTranslation({ x: pos.x, y: clampedTargetY, z: pos.z });
               }
+
               const currentAction = agent.currentBehavior?.action || '';
               const isClimbing = ['climb_on', 'climb', 'climb_approach', 'climb_reach', 'climb_pull', 'climb_mount', 'step_up'].includes(currentAction);
-              // Snap down if not climbing and above floor, or if WAY too high even during climb
+
               if (!isClimbing && pos.y > clampedTargetY + 0.05) {
-                agent.body.setNextKinematicTranslation({ x: pos.x, y: clampedTargetY, z: pos.z });
+                agent.setSafeTranslation({ x: pos.x, y: clampedTargetY, z: pos.z });
               } else if (isClimbing && pos.y > clampedTargetY + 0.5) {
-                // Safety: even climbing shouldn't put agent > 0.5m above standing height
-                agent.body.setNextKinematicTranslation({ x: pos.x, y: clampedTargetY, z: pos.z });
+                // Safety cap: kể cả đang trèo cũng không được cao quá 0.5m trên standing height
+                agent.setSafeTranslation({ x: pos.x, y: clampedTargetY, z: pos.z });
                 agent.fallState = null;
                 agent.state = 'IDLE';
                 if (agent.currentBehavior) agent.currentBehavior.completed = true;
               }
             }
 
-            // Agent update: each agent alone in its world (pass [agent] as agents array)
             agent.update(deltaTime, colliders, [agent], sceneData.boundingBox);
-
             physicsEngine.step(world, deltaTime, eventQueue);
 
-            // Warmup phase
+            // Bỏ qua 30 bước đầu (warmup) để agent ổn định vị trí trước khi ghi nhận va chạm
             if (step < 30) {
               eventQueue.drainCollisionEvents(() => {});
               if (typeof eventQueue.drainIntersectionEvents === 'function') {
@@ -353,7 +546,7 @@ export const startSimulation = async (req, res) => {
               continue;
             }
 
-            // ── drainCollisionEvents per world ───────────────────────────────
+            // Xử lý va chạm cứng (rigid body collision)
             eventQueue.drainCollisionEvents((handle1, handle2, started) => {
               try {
                 if (!started) return;
@@ -395,23 +588,24 @@ export const startSimulation = async (req, res) => {
                 if (!agentCollider) { dbg_noMatch++; return; }
 
                 const contactPointData = physicsEngine.getContactPoint(world, agentCollider, staticObj.collider);
-
                 if (!contactPointData) { dbg_noContact++; return; }
 
                 const { position: contactPoint, normal: contactNormal } = contactPointData;
-
                 if (!validateContactPoint(contactPoint, sceneData.boundingBox)) { dbg_outOfBounds++; return; }
 
                 let agentVelMagnitude = hitAgent.getVelocity();
-                // FIX: Only inflate velocity for agents actively trying to move but blocked by a wall, 
-                // NOT for idle or interacting (crying) agents.
-                if (agentVelMagnitude < 0.01 && hitAgent.state === 'MOVING') {
+
+                // Nếu agent đang di chuyển nhưng velocity vật lý gần 0 (bị KCC block),
+                // dùng intended speed để tính lực va chạm thực tế
+                if (agentVelMagnitude < 0.01 && hitAgent.state === 'MOVING'
+                    && (hitAgent.stuckCounter || 0) < 30) {
                   const intendedSpeed = hitAgent.getRealisticVelocity(
                     hitAgent.currentBehavior?.action || hitAgent.currentBehavior?.type || 'walk'
                   );
                   agentVelMagnitude = Math.max(agentVelMagnitude, intendedSpeed * 0.8);
                 }
 
+                // Scale velocity theo góc va chạm (impact perpendicular = full force, tangent = giảm)
                 if (contactNormal && agentVelMagnitude > 0) {
                   const { velocity: [vx, vy, vz] } = hitAgent;
                   const speed = Math.sqrt(vx * vx + vy * vy + vz * vz) || 1;
@@ -428,10 +622,7 @@ export const startSimulation = async (req, res) => {
                   : 1.0;
                 agentVelMagnitude *= stateMultiplier;
 
-                // FIX: Prevent KCC Jitter from registering as violent >30 severity collisions.
-                // KCC pushes agents out of tiny overlaps, creating fake high velocities.
-                // We strictly cap the collision velocity to slightly above max walking speed
-                // unless the agent is actually FALLING from a height.
+                // Cap velocity để KCC jitter không tạo ra va chạm giả với severity cao
                 if (hitAgent.state !== 'FALLING') {
                   const maxExpectedSpeed = hitAgent.getRealisticVelocity('run') * 1.5;
                   if (agentVelMagnitude > maxExpectedSpeed) {
@@ -439,81 +630,76 @@ export const startSimulation = async (req, res) => {
                   }
                 }
 
-              if (agentVelMagnitude < 0.001) { return; }
+                if (agentVelMagnitude < 0.001) return;
 
-              validContacts++;
-              traceLog.push(`VALID agent=${hitAgent.id} obj=${staticObj.id} vel=${agentVelMagnitude.toFixed(3)}`);
+                validContacts++;
+                traceLog.push(`VALID agent=${hitAgent.id} obj=${staticObj.id} vel=${agentVelMagnitude.toFixed(3)}`);
 
-              collisionEvents.push({
-                time:       step * deltaTime,
-                agentId:    hitAgent.id,
-                objectId:   staticObj.id,
-                objectName: staticObj.name || staticObj.id,
-                position:   contactPoint,
-                normal:     contactNormal,
-                velocity:   agentVelMagnitude,
-                impactSpeed: agentVelMagnitude,
-                bodyPart:   hitBodyPart,
-              });
+                collisionEvents.push({
+                  time:        step * deltaTime,
+                  agentId:     hitAgent.id,
+                  objectId:    staticObj.id,
+                  objectName:  staticObj.name || staticObj.id,
+                  position:    contactPoint,
+                  normal:      contactNormal,
+                  velocity:    agentVelMagnitude,
+                  impactSpeed: agentVelMagnitude,
+                  bodyPart:    hitBodyPart,
+                });
 
-              hitAgent.handleCollision(contactNormal, agentVelMagnitude * 15, staticObj.id);
+                hitAgent.handleCollision(contactNormal, agentVelMagnitude * 15, staticObj.id);
 
-            } catch (err) {
-              traceLog.push(`COL_ERR h1=${handle1} h2=${handle2}: ${err.message}`);
-            }
-          });
-
-          // ── §4.1 drainIntersectionEvents (sensor / soft-object contacts) ────
-          if (typeof eventQueue.drainIntersectionEvents === 'function') {
-            eventQueue.drainIntersectionEvents((handle1, handle2, intersecting) => {
-              try {
-                if (!intersecting) return;
-
-                const agent1    = handleToAgent.get(handle1);
-                const agent2    = handleToAgent.get(handle2);
-                const collider1 = handleToCollider.get(handle1);
-                const collider2 = handleToCollider.get(handle2);
-                const hitAgent  = agent1 || agent2;
-                const staticObj = collider1 || collider2;
-
-                if (!hitAgent || !staticObj) return;
-                if (!staticObj.isSoft) return;
-
-                hitAgent.handleIntersection(staticObj);
-                dbg_softIntersections++;
-
-                if (step % 30 === 0) {
-                  const agentVelMagnitude = hitAgent.getVelocity();
-                  if (agentVelMagnitude > 0.1) {
-                    validContacts++;
-                    collisionEvents.push({
-                      time:             step * deltaTime,
-                      agentId:          hitAgent.id,
-                      objectId:         staticObj.id,
-                      objectName:       staticObj.name || staticObj.id,
-                      position:         hitAgent.getPosition(),
-                      normal:           [0, 1, 0],
-                      velocity:         agentVelMagnitude,
-                      impactSpeed:      agentVelMagnitude,
-                      bodyPart:         'torso',
-                      isSoftInteraction: true,
-                      injury: {
-                        injuryScore: 0,
-                        gForce:      0,
-                        riskTier:    'safe',
-                        gForceTier:  'Observe',
-                      },
-                    });
-                  }
-                }
               } catch (err) {
-                traceLog.push(`INT_ERR h1=${handle1} h2=${handle2}: ${err.message}`);
+                traceLog.push(`COL_ERR h1=${handle1} h2=${handle2}: ${err.message}`);
               }
             });
-          }
+
+            // Xử lý va chạm mềm (sensor / soft-object intersection)
+            if (typeof eventQueue.drainIntersectionEvents === 'function') {
+              eventQueue.drainIntersectionEvents((handle1, handle2, intersecting) => {
+                try {
+                  if (!intersecting) return;
+
+                  const agent1    = handleToAgent.get(handle1);
+                  const agent2    = handleToAgent.get(handle2);
+                  const collider1 = handleToCollider.get(handle1);
+                  const collider2 = handleToCollider.get(handle2);
+                  const hitAgent  = agent1 || agent2;
+                  const staticObj = collider1 || collider2;
+
+                  if (!hitAgent || !staticObj || !staticObj.isSoft) return;
+
+                  hitAgent.handleIntersection(staticObj);
+                  dbg_softIntersections++;
+
+                  // Ghi nhận soft collision mỗi 30 bước để tránh spam event
+                  if (step % 30 === 0) {
+                    const agentVelMagnitude = hitAgent.getVelocity();
+                    if (agentVelMagnitude > 0.1) {
+                      validContacts++;
+                      collisionEvents.push({
+                        time:              step * deltaTime,
+                        agentId:           hitAgent.id,
+                        objectId:          staticObj.id,
+                        objectName:        staticObj.name || staticObj.id,
+                        position:          hitAgent.getPosition(),
+                        normal:            [0, 1, 0],
+                        velocity:          agentVelMagnitude,
+                        impactSpeed:       agentVelMagnitude,
+                        bodyPart:          'torso',
+                        isSoftInteraction: true,
+                        injury: { injuryScore: 0, gForce: 0, riskTier: 'safe', gForceTier: 'Observe' },
+                      });
+                    }
+                  }
+                } catch (err) {
+                  traceLog.push(`INT_ERR h1=${handle1} h2=${handle2}: ${err.message}`);
+                }
+              });
+            }
           } // end for (const sim of simWorlds)
 
-          // Live progress updates (outside per-world loop)
+          // Cập nhật progress và vị trí agent để frontend hiển thị live
           if (step % 10 === 0) {
             const entry = activeSimulations.get(simulationId) || {};
             if (step % 30 === 0) {
@@ -527,10 +713,8 @@ export const startSimulation = async (req, res) => {
               } else if (pos && typeof pos === 'object') {
                 posArray = [pos.x || 0, pos.y || 0, pos.z || 0];
               }
-              // FIX: Include ageGroupId so frontend Simulator can scale live agents correctly
               return { agentId: a.id, ageGroupId: a.ageGroupId, position: posArray };
             });
-            // FIX: Expose live collision count so frontend UI can update the counter real-time
             entry.collisionEventsCount = collisionEvents.length;
             entry.simTime = (step * deltaTime).toFixed(2);
             activeSimulations.set(simulationId, entry);
@@ -540,11 +724,11 @@ export const startSimulation = async (req, res) => {
         console.log(`[SIM]    ✅ Physics loop complete in ${Date.now() - loopStartTime}ms`);
         console.log(`[SIM]    Soft intersections: ${dbg_softIntersections}`);
 
-        // Injury assessment & summary
+        // Tính toán injury score và tổng hợp kết quả
         const objectsMap = {};
         sceneData.objects.forEach(obj => { objectsMap[obj.id] = obj; });
         const injuryAssessments = injuryCalculator.calculateBatchInjuries(
-          collisionEvents.filter(e => !e.isSoftInteraction),  // soft events have score=0, skip
+          collisionEvents.filter(e => !e.isSoftInteraction),
           ageGroupId,
           objectsMap
         );
@@ -566,7 +750,8 @@ export const startSimulation = async (req, res) => {
           };
         });
 
-        const hazardEvents = injuryAssessments.filter(e => 
+        // Chỉ lưu hazard events (score >= 15 hoặc velocity cao) để giảm kích thước file
+        const hazardEvents = injuryAssessments.filter(e =>
           (e.injury && e.injury.injuryScore >= 15) || e.velocity > 0.8
         );
 
@@ -581,7 +766,7 @@ export const startSimulation = async (req, res) => {
             fps: 60,
           },
           trajectories,
-          collisionEvents: hazardEvents, // Filtered: Hazard only (Score >= 15 or high impact)
+          collisionEvents: hazardEvents,
           summary,
           debugStats: {
             contactCandidates, validContacts, floorHeight,
@@ -599,7 +784,7 @@ export const startSimulation = async (req, res) => {
         const simPath = path.join(SIMULATION_DIR, `${simulationId}.json`);
         await fs.writeFile(simPath, JSON.stringify(simulationData, null, 2));
 
-        // Auto-generate text report
+        // Tự động tạo text report sau mỗi simulation
         try {
           const rsi      = injuryCalculator.calculateRoomSafetyIndex(injuryAssessments);
           const tierDist = summary.tierDistribution || {};
@@ -668,7 +853,6 @@ export const startSimulation = async (req, res) => {
           status: 'complete', progress: 100, finishedAt: new Date().toISOString(),
         });
 
-        // Cleanup all worlds
         for (const sim of simWorlds) {
           await cleanupSimulation(sim.world, [sim.agent], sim.colliders);
         }
@@ -706,15 +890,15 @@ export const getSimulationStatus = async (req, res) => {
       const entry = activeSimulations.get(simulationId) || {};
       if (entry.status !== 'complete') {
         return res.json({
-          success: true,
-          status:         entry.status || 'running',
-          progress:       typeof entry.progress === 'number' ? entry.progress : 0,
-          startedAt:      entry.startedAt || null,
-          error:          entry.error || null,
-          agentPositions: entry.agentPositions || null,
+          success:              true,
+          status:               entry.status || 'running',
+          progress:             typeof entry.progress === 'number' ? entry.progress : 0,
+          startedAt:            entry.startedAt || null,
+          error:                entry.error || null,
+          agentPositions:       entry.agentPositions || null,
           collisionEventsCount: entry.collisionEventsCount || 0,
-          simTime:        entry.simTime || null,
-          scaleFactor:    entry.scaleFactor || 1.0,
+          simTime:              entry.simTime || null,
+          scaleFactor:          entry.scaleFactor || 1.0,
         });
       }
     }
@@ -812,16 +996,15 @@ export const getSimulationHeatmap = async (req, res) => {
       const avgScore  = scores.length > 0 ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length) : 0;
       const maxGForce = Math.max(...gForces, 0);
       const avgGForce = gForces.length > 0 ? Math.round(gForces.reduce((a, b) => a + b, 0) / gForces.length * 10) / 10 : 0;
-
       const worstGForceTier = maxGForce >= 50 ? 'Serious Injury' : maxGForce >= 20 ? 'Soft Injury' : 'Observe';
 
       const bodyParts = {};
       entry.hits.forEach(h => { if (h.bodyPart) bodyParts[h.bodyPart] = (bodyParts[h.bodyPart] || 0) + 1; });
       const primaryBodyPart = Object.entries(bodyParts).sort((a, b) => b[1] - a[1])[0]?.[0] || 'unknown';
 
-      const intensity  = Math.max(0, Math.min(1.0, maxScore / 80));
-      const heatColor  = scoreToRGB(maxScore) || [0, 1, 0];
-      const sceneObj   = sceneObjects[objId];
+      const intensity   = Math.max(0, Math.min(1.0, maxScore / 80));
+      const heatColor   = scoreToRGB(maxScore) || [0, 1, 0];
+      const sceneObj    = sceneObjects[objId];
       const boundingBox = sceneObj?.boundingBox || null;
 
       const recommendations = injuryCalculator.generateSafetyRecommendations(
@@ -856,15 +1039,15 @@ export const getSimulationHeatmap = async (req, res) => {
     } catch (_) {}
 
     res.json({
-      success:        true,
+      success:          true,
       simulationId,
-      heatmap:        objectHeatmap,
-      roomSafetyIndex: rsi,
+      heatmap:          objectHeatmap,
+      roomSafetyIndex:  rsi,
       zoneAnalysis,
       stats: {
-        totalEvents:     events.length,
+        totalEvents:      events.length,
         uniqueObjectsHit: objectMap.size,
-        duration:        simulationData.config?.duration || 10,
+        duration:         simulationData.config?.duration || 10,
       },
       pointHeatmap: events.map(evt => ({
         position:    evt.position,
@@ -908,7 +1091,7 @@ export const getSimulationReport = async (req, res) => {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ZONE ANALYSIS
+// ZONE ANALYSIS — Chia phòng thành lưới 8x8, phân loại mức độ nguy hiểm từng ô
 // ─────────────────────────────────────────────────────────────────────────────
 function analyzeZones(events, sceneBounds) {
   const GRID_SIZE = 8;
@@ -962,17 +1145,17 @@ function analyzeZones(events, sceneBounds) {
   });
 
   const summary = {
-    safe:    zones.filter(z => z.classification === 'safe').length,
-    caution: zones.filter(z => z.classification === 'caution').length,
-    hazard:  zones.filter(z => z.classification === 'hazard').length,
-    danger:  zones.filter(z => z.classification === 'danger').length,
+    safe:     zones.filter(z => z.classification === 'safe').length,
+    caution:  zones.filter(z => z.classification === 'caution').length,
+    hazard:   zones.filter(z => z.classification === 'hazard').length,
+    danger:   zones.filter(z => z.classification === 'danger').length,
     gridSize: GRID_SIZE,
   };
 
   return { zones, summary };
 }
 
-// Score → RGB (green → yellow → orange → red)
+// Chuyển injury score (0-100) thành màu RGB: xanh → vàng → cam → đỏ
 function scoreToRGB(score) {
   try {
     if (typeof score !== 'number' || isNaN(score)) score = 0;
@@ -993,6 +1176,7 @@ function scoreToRGB(score) {
   }
 }
 
+// Kiểm tra contact point có nằm trong phạm vi scene hợp lệ không (tránh NaN/infinity)
 function validateContactPoint(point, sceneBounds) {
   if (!point || !Array.isArray(point) || point.length !== 3) return false;
   if (point.some(v => !Number.isFinite(v))) return false;
@@ -1004,18 +1188,7 @@ function validateContactPoint(point, sceneBounds) {
   return true;
 }
 
-function getRandomSpawnPosition(bbox, floorHeight, ageGroup = null) {
-  if (!bbox) return [0, floorHeight, 0];
-  const margin = ageGroup ? (ageGroup.capsuleRadius * 2) : 0.3;
-  const width = Math.max(0, bbox.max[0] - bbox.min[0] - 2 * margin);
-  const depth = Math.max(0, bbox.max[2] - bbox.min[2] - 2 * margin);
-  return [
-    bbox.min[0] + margin + Math.random() * width,
-    floorHeight,
-    bbox.min[2] + margin + Math.random() * depth,
-  ];
-}
-
+// Giải phóng toàn bộ physics resources sau khi simulation kết thúc
 async function cleanupSimulation(world, agents, colliders) {
   console.log('🧹 Starting physics cleanup...');
   try {
