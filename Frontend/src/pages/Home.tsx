@@ -310,25 +310,27 @@ const Home = () => {
         />
       </div>
 
-      {/* ── Parallax 3D Assets Background ── */}
+      {/* ── Parallax 3D Assets Background — z-0, behind all content ── */}
+      {/* FIX: old z-30 caused assets to sit in front of header clicks.
+          Reduced sizes and lowered z-index to 0 so content (z-10+) is always above. */}
       <DraggableAsset
         src="/glass_sphere.png"
-        className="blur-[3px] opacity-75 top-[8%] -left-[8%]"
-        width="420px"
+        className="blur-[4px] opacity-40 top-[6%] -left-[5%] !z-0"
+        width="220px"
         offset={0}
         speed={0.8}
       />
       <DraggableAsset
         src="/abstract_shapes.png"
-        className="blur-[5px] opacity-55 top-[35%] -right-[12%]"
-        width="520px"
+        className="blur-[6px] opacity-30 top-[32%] -right-[8%] !z-0"
+        width="280px"
         offset={0}
         speed={1.2}
       />
       <DraggableAsset
         src="/glass_sphere.png"
-        className="blur-[2px] opacity-65 top-[78%] left-[4%]"
-        width="260px"
+        className="blur-[3px] opacity-35 top-[75%] left-[3%] !z-0"
+        width="140px"
         offset={0}
         speed={0.4}
       />
@@ -359,7 +361,7 @@ const Home = () => {
 
             <motion.h1
               variants={fadeIn}
-              className="text-5xl md:text-6xl xl:text-7xl font-extrabold leading-[1.1] mb-6 tracking-tight text-slate-900"
+              className="text-4xl md:text-5xl xl:text-6xl font-extrabold leading-[1.1] mb-5 tracking-tight text-slate-900"
             >
               See hidden dangers
               <br />
@@ -370,7 +372,7 @@ const Home = () => {
 
             <motion.p
               variants={fadeIn}
-              className="text-lg md:text-xl text-slate-500 font-medium mb-10 max-w-lg mx-auto lg:mx-0 leading-relaxed"
+              className="text-base md:text-lg text-slate-500 font-medium mb-8 max-w-lg mx-auto lg:mx-0 leading-relaxed"
             >
               Upload your 3D room model. Our AI agents simulate real toddler
               movement physics to detect sharp edges, falls, and hazards
@@ -383,7 +385,7 @@ const Home = () => {
             >
               <button
                 onClick={() => navigate("/simulator")}
-                className="bubble-btn px-8 py-4 bg-slate-900 text-white font-semibold rounded-2xl shadow-xl shadow-slate-900/20 transition-all hover:shadow-slate-900/40 text-lg flex items-center justify-center gap-2 group"
+                className="bubble-btn px-7 py-3.5 bg-slate-900 text-white font-semibold rounded-2xl shadow-xl shadow-slate-900/20 transition-all hover:shadow-slate-900/40 text-base flex items-center justify-center gap-2 group"
               >
                 Launch Simulator
                 <svg
@@ -400,12 +402,15 @@ const Home = () => {
                   <path d="M5 12h14M12 5l7 7-7 7" />
                 </svg>
               </button>
-              <a
-                href="#how-it-works"
-                className="px-8 py-4 bg-white/50 text-slate-700 font-semibold rounded-2xl border border-white shadow-sm hover:bg-white transition-all text-lg text-center backdrop-blur-md flex items-center justify-center"
+              <button
+                onClick={() => {
+                  const el = document.getElementById("how-it-works");
+                  if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+                }}
+                className="px-7 py-3.5 bg-white/50 text-slate-700 font-semibold rounded-2xl border border-white shadow-sm hover:bg-white transition-all text-base text-center backdrop-blur-md flex items-center justify-center cursor-pointer"
               >
                 How It Works
-              </a>
+              </button>
             </motion.div>
           </motion.div>
 
@@ -482,7 +487,7 @@ const Home = () => {
                 className="relative glass-panel p-8 text-center group overflow-hidden"
               >
                 <div className="absolute inset-0 bg-gradient-to-r from-pink-500/10 to-violet-500/10 opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
-                <div className="relative z-10 text-5xl md:text-6xl font-black text-transparent bg-clip-text bg-gradient-to-br from-slate-900 via-slate-700 to-slate-500 font-serif drop-shadow-sm mb-2">
+                <div className="relative z-10 text-4xl md:text-5xl font-black text-transparent bg-clip-text bg-gradient-to-br from-slate-900 via-slate-700 to-slate-500 font-serif drop-shadow-sm mb-2">
                   {stat.value}
                 </div>
                 <div className="relative z-10 text-sm font-bold text-pink-500 mt-2 uppercase tracking-widest">
@@ -507,11 +512,11 @@ const Home = () => {
       <section className="relative z-20 py-24 px-6 bg-white/50 backdrop-blur-3xl border-b border-white">
         <div className="max-w-7xl mx-auto">
           <div className="text-center mb-16">
-            <h2 className="text-3xl md:text-4xl lg:text-5xl font-extrabold text-slate-900 tracking-tight">
+            <h2 className="text-2xl md:text-3xl lg:text-4xl font-extrabold text-slate-900 tracking-tight">
               A home shouldn&apos;t be a{" "}
               <span className="text-pink-500">hazard zone.</span>
             </h2>
-            <p className="text-slate-500 mt-4 max-w-2xl mx-auto text-lg font-medium">
+            <p className="text-slate-500 mt-3 max-w-2xl mx-auto text-base font-medium">
               We identify everyday objects that pose hidden threats to toddlers,
               mapping their interactions before your child does.
             </p>
@@ -553,7 +558,9 @@ const Home = () => {
       {/* ════════════════════════════════════════════════════════════════════
           HOW IT WORKS (Horizontal Scroll)
       ════════════════════════════════════════════════════════════════════ */}
-      <HorizontalScrollSteps />
+      <div id="how-it-works">
+        <HorizontalScrollSteps />
+      </div>
 
       {/* ════════════════════════════════════════════════════════════════════
           CTA SECTION
@@ -595,10 +602,10 @@ const Home = () => {
               }}
             />
 
-            <h2 className="text-4xl md:text-5xl font-extrabold text-slate-900 mb-6 tracking-tight relative z-10">
+            <h2 className="text-3xl md:text-4xl font-extrabold text-slate-900 mb-4 tracking-tight relative z-10">
               Ready to secure your space?
             </h2>
-            <p className="text-lg md:text-xl text-slate-600 mb-10 max-w-2xl mx-auto font-medium relative z-10">
+            <p className="text-base md:text-lg text-slate-600 mb-8 max-w-2xl mx-auto font-medium relative z-10">
               Transform your 3D models into actionable safety insights in
               seconds. No setup required.
             </p>
@@ -606,7 +613,7 @@ const Home = () => {
               onClick={() => navigate("/simulator")}
               whileHover={{ scale: 1.05 }}
               whileTap={{ scale: 0.97 }}
-              className="bubble-btn px-10 py-5 bg-slate-900 text-white font-extrabold rounded-2xl shadow-xl transition-all text-lg inline-flex items-center gap-2 relative z-10"
+              className="bubble-btn px-8 py-4 bg-slate-900 text-white font-extrabold rounded-2xl shadow-xl transition-all text-base inline-flex items-center gap-2 relative z-10"
             >
               Start Free Simulation
               <svg

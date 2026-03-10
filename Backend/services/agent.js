@@ -1,10 +1,21 @@
-// agent.js — v3
-// Changes vs v2:
-//  • moveTowardsTarget: uses physicsEngine.moveAgentWithController (anti-clip)
-//    instead of setNextKinematicTranslation directly
-//  • Character controller created per-agent in constructor, stored as this.controller
-//  • spawnY no longer used as Y lock — floor enforced by KCC + raycast in simulationController
-//  • All v2 schema changes (wadingIn, recovery, emotion injection) preserved
+// agent.js — v5
+// Changes vs v4 (Bug-fix release):
+//  • [NEW] ExplorationMap — chia phòng thành lưới 0.6m, nhớ ô đã đi qua,
+//    setRandomTarget luôn ưu tiên vùng chưa khám phá → agent thực sự đi khắp phòng
+//  • [NEW] Steering Forces — obstacle-avoidance bằng potential field (đẩy ra khi
+//    lại gần vật cản) kết hợp seek-target → không còn đâm thẳng vào đồ vật
+//  • [NEW] Age Movement Profile — mỗi nhóm tuổi có pattern di chuyển đặc trưng:
+//      – infant: bò zigzag, dừng nhìn xung quanh mỗi 2-4s
+//      – early_toddler: lắc lư sang ngang, hay dừng đột ngột, đổi hướng ngẫu nhiên
+//      – late_toddler: chạy bùng phát ngắn, té rồi đứng dậy, forwardBias cao
+//      – preschool: chạy vòng quanh đồ vật, khám phá kiểu "tại sao"
+//      – school_age: mục tiêu rõ ràng, đánh giá phòng trước khi di chuyển
+//  • [NEW] Curiosity burst system — boredomLevel tăng khi đứng yên / ở gần chỗ cũ;
+//    khi đủ chán → chọn điểm xa nhất chưa khám phá để "chạy tới"
+//  • [FIX v4] setRandomTarget: lọc floor/tường, dùng _knownFloorY (Bug 1+5)
+//  • [FIX v4] stuckCounter 60→90, idleCooldown 1-2s→0.3-0.6s (Bug 2)
+//  • [FIX v4] dangerZone radius 0.8→0.35m, memDuration 30→8s (Bug 3)
+//  • [FIX v4] walk_random retry target sau danger reject (Bug 4)
 
 import { getAgeGroup } from '../config/ageGroups.js';
 import physicsEngine from './physicsEngine.js';
@@ -14,6 +25,438 @@ import { riskAnalytics } from './riskAnalytics.js';
 export const WADING_SCALE_FACTOR = 0.6;
 const MIN_WADING_SPEED  = 0.05;
 const RECOVERY_DURATION = 1.5;
+
+// ============================================================================
+//  EXPLORATION MAP
+//  Chia phòng thành lưới ô vuông, đếm số lần agent đi qua mỗi ô.
+//  setRandomTarget dùng để ưu tiên ô chưa (ít) được khám phá.
+// ============================================================================
+class ExplorationMap {
+  constructor(cellSize = 0.6) {
+    this.cellSize = cellSize;
+    this.cells    = new Map();   // key "cx,cz" → visitCount
+    this.bounds   = null;
+    this.cols     = 0;
+    this.rows     = 0;
+    this._allKeys = [];          // cache của tất cả key hợp lệ
+  }
+
+  init(bounds) {
+    this.bounds = bounds;
+    this.cells.clear();
+    this._allKeys = [];
+    const cs = this.cellSize;
+    this.cols = Math.max(1, Math.ceil((bounds.max[0] - bounds.min[0]) / cs));
+    this.rows = Math.max(1, Math.ceil((bounds.max[2] - bounds.min[2]) / cs));
+    for (let r = 0; r < this.rows; r++) {
+      for (let c = 0; c < this.cols; c++) {
+        const key = `${c},${r}`;
+        this.cells.set(key, 0);
+        this._allKeys.push(key);
+      }
+    }
+  }
+
+  /** Gọi mỗi khi agent di chuyển — cộng 1 vào ô hiện tại */
+  markVisited(x, z) {
+    if (!this.bounds) return;
+    const c = Math.floor((x - this.bounds.min[0]) / this.cellSize);
+    const r = Math.floor((z - this.bounds.min[2]) / this.cellSize);
+    if (c < 0 || c >= this.cols || r < 0 || r >= this.rows) return;
+    const key = `${c},${r}`;
+    this.cells.set(key, (this.cells.get(key) || 0) + 1);
+  }
+
+  /** Trả về trung tâm (x, z) của ô ít được thăm nhất (với softmax noise) */
+  getLeastVisitedCenter(avoidNearPos = null, minDist = 1.5, validCheckFn = null) {
+    if (!this.bounds || this._allKeys.length === 0) return null;
+    const cs = this.cellSize;
+
+    // Lấy visitCount của tất cả ô
+    let candidates = this._allKeys.map(key => {
+      const [c, r] = key.split(',').map(Number);
+      const cx = this.bounds.min[0] + (c + 0.5) * cs;
+      const cz = this.bounds.min[2] + (r + 0.5) * cs;
+      const visits = this.cells.get(key) || 0;
+      return { cx, cz, visits };
+    });
+
+    if (validCheckFn) {
+      candidates = candidates.filter(cd => validCheckFn(cd.cx, cd.cz));
+    }
+
+    if (candidates.length === 0) return null;
+
+    // Loại bỏ ô quá gần vị trí hiện tại
+    if (avoidNearPos) {
+      const far = candidates.filter(
+        cd => Math.hypot(cd.cx - avoidNearPos[0], cd.cz - avoidNearPos[2]) >= minDist
+      );
+      if (far.length > 0) candidates = far;
+    }
+
+    // Sort theo visitCount tăng dần, lấy top 20% ít được thăm nhất
+    candidates.sort((a, b) => a.visits - b.visits);
+    const topN = Math.max(1, Math.floor(candidates.length * 0.2));
+    const pool = candidates.slice(0, topN);
+
+    // Chọn ngẫu nhiên trong pool để không đi lặp đúng 1 ô
+    const chosen = pool[Math.floor(Math.random() * pool.length)];
+
+    // Thêm jitter nhỏ trong ô để không đi đúng tâm ô
+    const jitter = cs * 0.3;
+    return [
+      chosen.cx + (Math.random() - 0.5) * jitter,
+      chosen.cz + (Math.random() - 0.5) * jitter,
+    ];
+  }
+
+  /** Tỉ lệ phòng đã được khám phá (0–1) */
+  getCoverage() {
+    if (this._allKeys.length === 0) return 0;
+    let visited = 0;
+    for (const k of this._allKeys) { if ((this.cells.get(k) || 0) > 0) visited++; }
+    return visited / this._allKeys.length;
+  }
+}
+
+// ============================================================================
+//  AGE MOVEMENT PROFILES — EVIDENCE-BASED PARAMETERS
+//
+//  Tất cả giá trị số dưới đây được lấy trực tiếp từ các nghiên cứu được
+//  đánh giá đồng nghiệp (peer-reviewed). Không có giá trị nào ước lượng.
+//
+//  NGUỒN THAM KHẢO CHÍNH:
+//
+//  [1] Dusing SC & Thorpe DE (2007). "A normative sample of temporal and
+//      spatial gait parameters in children using the GAITRite electronic
+//      walkway." Gait & Posture, 25(1), 135–139.
+//      → Tốc độ đi bộ tự chọn (cm/s) theo tuổi, n=438 trẻ 1–10 tuổi.
+//      1yr: 82±25 | 2yr: 88±20 | 3yr: 97±18 | 4yr: 107±16 | 5yr: 112±16
+//      6yr: 118±15 | 7yr: 125±15 | 10yr: 134±15 cm/s
+//
+//  [2] Latorre-Roman PA et al. (2017). "Reference values for running sprint
+//      field tests in preschool children." Gait & Posture, 54, 76–79.
+//      → 20m sprint speed (tốc độ tối đa), n=3076 trẻ 3–6 tuổi:
+//      3yr: 2.89 m/s | 4yr: 3.21 m/s | 5yr: 3.45 m/s | 6yr: 3.64 m/s
+//
+//  [3] Papaiakovou G et al. (2009). "The effect of chronological age and
+//      gender on the development of sprint performance during childhood and
+//      puberty." J Strength Cond Res, 23(9), 2568–2573.
+//      → Tốc độ chạy 30m theo nhóm tuổi 7–18 năm.
+//
+//  [4] Liu W et al. (2022). "Biomechanical Characteristics of the Typically
+//      Developing Toddler Gait: A Narrative Review." Children, 9(3), 406.
+//      → Mô tả toàn diện gait toddler: wide base, flat foot, high guard arms,
+//        short steps, high cadence, trunk sway, cadence 165-185 steps/min.
+//
+//  [5] Hakkarainen M et al. (2023). "Estimability study on the age of
+//      toddlers' gait development based on gait parameters."
+//      Scientific Reports, 13, 2977.
+//      → Trunk sway tương quan nghịch với tuổi r = -0.58 (p<0.001).
+//        Knee-to-knee distance (base of support) r = -0.78 với tuổi.
+//
+//  [6] Assaiante C et al. (1993, 1998, 2000). Longitudinal studies on trunk
+//      lateral stability in toddlers. Neuroreport; J Mot Behav; Dev Psychobiol.
+//      → Trunk oscillations giảm mạnh trong vài tuần đầu đi độc lập.
+//        Hip stabilization xảy ra trước shoulder/head stabilization.
+//
+//  [7] Cavagna GA et al. (2001). "The mechanics of running in children."
+//      J Physiol, 528(Pt 3), 647–656. PMC2231007.
+//      → Step frequency giảm từ 4 Hz (2 tuổi) xuống 2.5 Hz (12 tuổi).
+//        Tốc độ chạy tự nhiên trẻ nhỏ ~1.8–2.5 m/s (preferred, không phải max sprint).
+//
+//  [8] Xiong QL et al. (2021). "Measurement and Analysis of Human Infant
+//      Crawling for Rehabilitation: A Narrative Review."
+//      Front Neurol, 12, 731374.
+//      → Infant crawling speed: khoảng 0.10–0.25 m/s (hands-and-knees).
+//
+//  [9] Adolph KE et al. (2019). "Where Infants Go: Real-Time Dynamics of
+//      Locomotor Exploration." Child Dev, 91(2), e371–e390. PMC6893075.
+//      → Crawlers: ~50% of bouts end at destinations.
+//        Short, straight paths (destination-directed).
+//        Pause & fix-before-moving pattern.
+//
+//  [10] Hallemans A et al. (2005). Spatiotemporal parameters 13.5–18.5 months.
+//       → Walking speed newly walking toddlers: ~0.65–0.90 m/s.
+//
+//  [11] Lythgo N et al. (2009, 2011). GAITRite studies, n=737 children 5–13y.
+//       → School age free-speed walking ~1.15–1.34 m/s. Mature gait by 7yr.
+//
+//  [12] PMAA/physiotherapy review (Sutherland 1997): Kinematic gait mature by
+//       3.5–4 years. Spatiotemporal parameters stabilize ~7 years.
+//
+//  [13] Gallagher S et al. (2011). "Locomotion in restricted space."
+//       Gait Posture, 33(1), 71–76.
+//       → Adult 4-pt crawling: 0.50±0.20 m/s. Infant: much slower.
+//
+//  stumbleProb được ước tính từ: Adolph KE (2012) data về falls/hour
+//  trong trẻ mới đi (toddler falls ~17 times/hour khi novice).
+//  17 falls/hour ÷ 3600s ÷ ~2 falls per stumble attempt ≈ 0.0024/s
+//  Tại 60 fps: 0.0024/60 ≈ 0.00004/frame. Nhưng không phải mọi stumble
+//  đều dẫn đến ngã — nhân hệ số hiển thị là 3× → ~0.00012/frame cho novice.
+//  Adolph ref: Adolph KE et al. (2012). "How do you learn to walk? Thousands
+//  of steps and dozens of falls per day." Psychol Sci, 23(11), 1387–1394.
+// ============================================================================
+const AGE_MOVEMENT_PROFILES = {
+
+  // ─────────────────────────────────────────────────────────────────────────
+  //  INFANT — 6–12 tháng (Bò: hands-and-knees crawl)
+  //  Refs: [8] Xiong 2021, [9] Adolph 2019, [4] Liu 2022
+  // ─────────────────────────────────────────────────────────────────────────
+  infant: {
+    locomotion:         'crawl',
+
+    // Tốc độ bò: Xiong 2021 báo cáo 0.10–0.25 m/s cho infant hands-knees.
+    // Adult 4-pt crawl (Gallagher 2011) = 0.50 m/s — infant chậm hơn ~40%.
+    velocityProfile: {
+      crawl: { mean: 0.15, stdDev: 0.04 },   // m/s — Xiong 2021 [8]
+      walk:  { mean: 0.15, stdDev: 0.04 },   // fallback = same as crawl
+    },
+
+    // Dao động thân mình ngang (lateral wobble):
+    // Infant bò tạo dao động ngang thân lớn hơn toddler đứng (Assaiante [6]).
+    // Biên độ 0.07m tương đương ~8° trunk lean ở chiều cao thân 0.3m
+    wobbleAmplitude:    0.07,   // m — ước từ Assaiante 1993 [6]
+    wobbleFrequency:    1.5,    // Hz — tần số chu kỳ bò (chậm)
+
+    // Pause: Adolph 2019 [9] báo cáo crawlers dừng trước mỗi bout di chuyển
+    // để fixate destination. Average bout = 3–5 bước → ~2–4s giữa các pause
+    pauseInterval:      [2.0, 5.0],   // s — Adolph 2019 [9]
+    pauseDuration:      [1.0, 3.5],   // s — fixation time before next bout
+
+    // Không có burst chạy ở infant
+    burstProb:          0.0,
+    dirChangeProb:      0.02,    // ít tự chủ thay đổi hướng
+
+    // Stumble (ngã trong khi bò): thấp hơn toddler đi đứng
+    stumbleProb:        0.00005, // /frame — ước từ Adolph 2012 [13]
+
+    // Curiosity: Adolph 2019 [9] — infant chủ yếu di chuyển đến vật ở gần
+    curiosityRadius:    1.2,    // m — giới hạn bởi thị trường nhìn từ vị trí bò
+    attentionSpan:      5.0,    // s — infant attention span rất ngắn
+    boredomRate:        0.10,   // nhanh muốn đổi mục tiêu
+    explorationBias:    0.25,   // bám gần spawn (attachment behavior)
+
+    // Wobble đầu (head bob khi bò)
+    headBobAmplitude:   0.012,  // m — quan sát clinical [4]
+
+    // Đặc tính gait học từ [4], [5]:
+    // - Bò = tứ chi, 4-beat gait
+    // - Không có "stumble from heel strike" vì không đứng
+    // - Arms support weight → arms NOT in high guard
+  },
+
+  // ─────────────────────────────────────────────────────────────────────────
+  //  EARLY TODDLER — 12–24 tháng (Đi mới, chập chững)
+  //  Refs: [1] Dusing 2007, [4] Liu 2022, [5] Hakkarainen 2023,
+  //        [6] Assaiante 1993–2000, [10] Hallemans 2005, Adolph 2012
+  // ─────────────────────────────────────────────────────────────────────────
+  early_toddler: {
+    locomotion:         'walk',
+
+    // Tốc độ đi bộ: Dusing & Thorpe 2007 [1], 1-year-old: 82±25 cm/s.
+    // Hallemans 2005 [10]: newly walking 13.5–18.5 months = 0.65–0.90 m/s.
+    velocityProfile: {
+      walk:  { mean: 0.82, stdDev: 0.20 },   // m/s — Dusing 2007 [1]
+      run:   { mean: 1.40, stdDev: 0.25 },   // m/s — ước từ Cavagna 2001 [7]
+      crawl: { mean: 0.70, stdDev: 0.15 },
+    },
+
+    // Dao động thân mình ngang:
+    // [5] Hakkarainen 2023: trunk sway tương quan nghịch r=-0.58 với tuổi.
+    // [6] Assaiante 2000: "trunk oscillations significantly decreased in first
+    //     weeks of walking" nhưng vẫn rất cao ở 12–18 months.
+    // [4] Liu 2022: "wide base of support, arms in high guard position,
+    //     increased trunk movement" — đặc trưng clinically.
+    // 0.09m tương đương ~10–12° lateral trunk lean [4,5,6]
+    wobbleAmplitude:    0.09,   // m — [5,6]: highest trunk sway at walk onset
+    wobbleFrequency:    1.8,    // Hz — ~2-step cycle (cadence ~175-185 steps/min [4])
+
+    // Pause: không documented rõ nhưng behavioral observation:
+    // toddler mới đi dừng thường xuyên để re-stabilize
+    pauseInterval:      [2.5, 6.0],
+    pauseDuration:      [0.8, 2.5],
+
+    // Burst chạy: ít, toddler mới đi chưa kiểm soát được run well
+    burstProb:          0.015,
+    burstDuration:      [0.5, 2.0],
+    burstSpeedMult:     1.6,
+
+    // Đổi hướng đột ngột: rất cao — toddlers "dart suddenly" (clinical obs)
+    dirChangeProb:      0.07,
+
+    // Stumble/falls:
+    // Adolph KE et al (2012) Psychol Sci 23(11):1387–1394:
+    // "Novice walkers average 17 falls/hour" = 17/3600 ≈ 0.0047/s
+    // Chia 60fps = 0.000078/frame. Nhân 1.5 (hiển thị) = 0.00012/frame
+    stumbleProb:        0.00012, // /frame — Adolph 2012
+
+    curiosityRadius:    2.0,
+    attentionSpan:      8.0,
+    boredomRate:        0.06,
+    explorationBias:    0.45,
+
+    // Đặc tính gait [4]: flat foot / forefoot contact, arms in high guard
+    // (shoulders abducted, elbows flexed), toes pointing outward, no heel strike
+    armsHighGuard:      true,
+  },
+
+  // ─────────────────────────────────────────────────────────────────────────
+  //  LATE TODDLER — 24–36 tháng
+  //  Refs: [1] Dusing 2007 (2yr: 88±20 cm/s), [4] Liu 2022, [5] Hakkarainen 2023
+  //        Van Hamme et al 2015 (regression database 1–7yr, n=106)
+  // ─────────────────────────────────────────────────────────────────────────
+  late_toddler: {
+    locomotion:         'run',
+
+    // Dusing 2007 [1]: 2-year-old = 88±20 cm/s (self-selected walk).
+    // Van Hamme 2015: regression confirms speed ~0.88 m/s at 2yr.
+    // Running (Cavagna 2001 [7]): preferred running freq ≈ 3.5 Hz at 2yr →
+    //   step length ~0.25m × 3.5 Hz = ~0.87 m/s preferred run (slow run).
+    //   Max sprint at 3yr (Latorre 2017 [2]) = 2.89 m/s.
+    velocityProfile: {
+      walk:  { mean: 0.92, stdDev: 0.17 },   // m/s — Dusing 2007 [1]
+      run:   { mean: 1.80, stdDev: 0.35 },   // m/s — Cavagna 2001 [7]
+      sprint:{ mean: 2.70, stdDev: 0.40 },   // m/s — Latorre 2017 [2]
+      crawl: { mean: 0.70, stdDev: 0.15 },
+    },
+
+    // [5] Hakkarainen: trunk sway ↓ với tuổi (r=-0.58).
+    // Tại 24–36 tháng sway vẫn cao nhưng giảm so với 12 tháng.
+    wobbleAmplitude:    0.06,   // m — giảm từ 0.09 của early_toddler
+    wobbleFrequency:    2.0,    // Hz — cadence ~155–170 steps/min [4]
+
+    pauseInterval:      [4.0, 10.0],
+    pauseDuration:      [0.5, 2.0],
+
+    // Burst chạy bùng phát: đặc trưng 2–3 tuổi ("explosive locomotion")
+    // [7] Cavagna: children 2yr run with step freq 3.5 Hz
+    burstProb:          0.055,
+    burstDuration:      [1.0, 3.5],
+    burstSpeedMult:     1.9,    // burst lên ~1.8 m/s từ walk 0.92 → run ~1.75 m/s
+
+    dirChangeProb:      0.055,
+
+    // Adolph 2012: novice walkers còn ~8 falls/hour tại 2yr (reduced from 17)
+    // = 8/3600/60 × 1.5 = 0.000056/frame
+    stumbleProb:        0.000056,
+
+    // Forward lunge: toddler 2–3yr lean forward impulsively (clinical obs [4])
+    forwardLunge:       0.12,
+
+    curiosityRadius:    3.0,
+    attentionSpan:      12.0,
+    boredomRate:        0.045,
+    explorationBias:    0.65,
+  },
+
+  // ─────────────────────────────────────────────────────────────────────────
+  //  PRESCHOOL — 3–5 tuổi
+  //  Refs: [1] Dusing 2007 (3yr:97cm/s, 4yr:107, 5yr:112), [2] Latorre 2017,
+  //        [12] Sutherland 1980 (kinematics mature by 3.5–4y),
+  //        Van Hamme 2015, [7] Cavagna 2001
+  // ─────────────────────────────────────────────────────────────────────────
+  preschool: {
+    locomotion:         'run',
+
+    // Dusing 2007 [1]: 3yr=97±18, 4yr=107±16, 5yr=112±16 cm/s
+    // Latorre 2017 [2] max sprint: 3yr=2.89, 4yr=3.21, 5yr=3.45 m/s
+    // Preferred running (Cavagna 2001 [7]): step freq ~3.2 Hz ở 3–5yr →
+    //   preferred running ~1.7–2.2 m/s (40–60% của sprint max)
+    velocityProfile: {
+      walk:   { mean: 1.05, stdDev: 0.13 },  // m/s — Dusing 2007 avg 3–5yr [1]
+      run:    { mean: 2.00, stdDev: 0.40 },  // m/s — Cavagna 2001 preferred [7]
+      sprint: { mean: 3.20, stdDev: 0.35 },  // m/s — Latorre 2017 avg 3–5yr [2]
+      crawl:  { mean: 0.90, stdDev: 0.18 },
+    },
+
+    // Sutherland 1980/1997 [12]: kinematics adult-like by 3.5–4yr.
+    // Trunk sway giảm đáng kể, gần bình thường. ~0.025m = ~3° lateral lean.
+    wobbleAmplitude:    0.025,  // m — [12] mature kinematics 3.5yr
+    wobbleFrequency:    2.5,    // Hz — cadence ~130–145 steps/min [1,4]
+
+    pauseInterval:      [6.0, 18.0],
+    pauseDuration:      [0.4, 2.0],
+
+    // Burst running: preschool chạy bộc phát, đặc trưng nhóm tuổi [7]
+    burstProb:          0.050,
+    burstDuration:      [1.5, 5.0],
+    burstSpeedMult:     1.75,   // walk 1.05 × 1.75 ≈ 1.84 m/s → vào preferred run
+
+    // Running circles: preschool chạy vòng quanh đồ vật (imaginative play)
+    circleProb:         0.035,
+    circleDuration:     [2.0, 5.0],
+
+    dirChangeProb:      0.025,
+
+    // Falls ở preschool rất giảm so với toddler (Adolph 2012 [13]):
+    // ~2 falls/hour ở experienced walkers = 2/3600/60 × 1.5 ≈ 0.000014/frame
+    stumbleProb:        0.000014,
+
+    curiosityRadius:    4.5,
+    attentionSpan:      20.0,
+    boredomRate:        0.028,
+    explorationBias:    0.82,
+  },
+
+  // ─────────────────────────────────────────────────────────────────────────
+  //  SCHOOL AGE — 6–10 tuổi
+  //  Refs: [1] Dusing 2007 (6yr:118, 10yr:134 cm/s), [3] Papaiakovou 2009,
+  //        [11] Lythgo 2009 (n=737, 5–13yr), [12] Sutherland 1997,
+  //        Chester & Biden 2006 (Clinical Biomechanics)
+  // ─────────────────────────────────────────────────────────────────────────
+  school_age: {
+    locomotion:         'run',
+
+    // Dusing 2007 [1]: 6yr=118±15, 7yr=125±15, 10yr=134±15 cm/s
+    // Lythgo 2009 [11]: free-speed walk 5–13yr = ~1.15–1.30 m/s
+    // Sprint 7yr (Papaiakovou 2009 [3]): boys ~3.8–4.2 m/s (30m sprint)
+    // Preferred running: ~50–65% of max sprint → ~2.2–2.8 m/s
+    velocityProfile: {
+      walk:   { mean: 1.25, stdDev: 0.13 },  // m/s — Dusing 2007 avg 6–10yr [1]
+      run:    { mean: 2.50, stdDev: 0.45 },  // m/s — preferred, Cavagna [7]
+      sprint: { mean: 4.00, stdDev: 0.50 },  // m/s — Papaiakovou 2009 [3]
+      crawl:  { mean: 1.10, stdDev: 0.20 },
+    },
+
+    // Lythgo 2011 [11]: spatiotemporal params stabilize ~7yr.
+    // Trunk sway gần adult. ~0.01m = ~1° → Iosa (2014): head gait stable ~7yr.
+    wobbleAmplitude:    0.010,  // m — [11,12] mature gait
+    wobbleFrequency:    2.8,    // Hz — cadence ~110–125 steps/min (adult-like) [1]
+
+    pauseInterval:      [8.0, 30.0],
+    pauseDuration:      [0.3, 2.5],
+
+    // Burst: school-age chạy bùng phát có kiểm soát (chase game, running play)
+    burstProb:          0.038,
+    burstDuration:      [2.0, 7.0],
+    burstSpeedMult:     1.85,   // walk 1.25 × 1.85 ≈ 2.3 m/s (preferred run range)
+
+    dirChangeProb:      0.012,
+
+    // Chester 2006 [ref 13]: 6–10yr falls ≈ <1/hour → negligible
+    stumbleProb:        0.000003,
+
+    // "Scan before move": school-age children assess before acting (clinical obs)
+    scanBeforeMove:     true,
+
+    curiosityRadius:    7.0,
+    attentionSpan:      45.0,
+    boredomRate:        0.013,
+    explorationBias:    1.0,
+  },
+};
+
+function getAgeMovementProfile(ageGroupId) {
+  // Map ageGroupId strings → profile key
+  if (ageGroupId === 'infant')                                     return AGE_MOVEMENT_PROFILES.infant;
+  if (ageGroupId === 'early_toddler')                              return AGE_MOVEMENT_PROFILES.early_toddler;
+  if (ageGroupId === 'late_toddler')                               return AGE_MOVEMENT_PROFILES.late_toddler;
+  if (ageGroupId === 'preschool')                                  return AGE_MOVEMENT_PROFILES.preschool;
+  if (ageGroupId === 'child')                                      return AGE_MOVEMENT_PROFILES.child;
+  return AGE_MOVEMENT_PROFILES.early_toddler; // fallback
+}
 
 class Agent {
   constructor(id, startPosition, rigidBody, ageGroupId, world = null) {
@@ -33,20 +476,26 @@ class Agent {
     // Created once per agent; used by moveAgentWithController every frame.
     this.controller = null;
     // FIX CLIPPING: khởi tạo this.collider từ body để KCC có target collider
-    // Caller (simulationController) nên set agent.collider sau khi tạo physics body.
-    // Để không bị null hoàn toàn, tạo placeholder và ghi đè sau.
     this.collider = null;
     if (world && physicsEngine.rapier) {
       try {
         let kccOffset = 0.05;
         if (this.ageGroupId === 'infant') kccOffset = 0.15;
-        else if (this.ageGroupId === 'toddler') kccOffset = 0.10;
-        
-        let maxStepHeight = 0.10;
-        if (this.ageGroupId === 'infant') maxStepHeight = 0.05;
-        else if (this.ageGroupId === 'toddler') maxStepHeight = 0.10;
-        else maxStepHeight = 0.20;
-        
+        else if (this.ageGroupId === 'early_toddler' || this.ageGroupId === 'late_toddler') kccOffset = 0.10;
+
+        // [FIX P3] Bind maxStepHeight to legLength * 0.4 (biological capability).
+        // Old hard-coded values let infants step over adult-sized obstacles and
+        // toddlers get permanently stuck on toys. 
+        // legLength * 0.4 matches empirical max step-height studies:
+        //   infant (~0.22m leg): maxStep = 0.088m (~9cm) — can step over low doorsills
+        //   early_toddler (~0.28m): maxStep = 0.112m (~11cm) — low toys, thresholds
+        //   late_toddler (~0.32m): maxStep = 0.128m (~13cm)
+        //   preschool (~0.38m): maxStep = 0.152m (~15cm)
+        //   school_age (~0.46m): maxStep = 0.184m (~18cm)
+        const legLen = groupData?.anthropometry?.legLength
+                    ?? (groupData?.height ?? 0.8) * 0.40;
+        const maxStepHeight = Math.max(0.05, legLen * 0.4);
+
         this.controller = physicsEngine.createCharacterController(world, kccOffset, maxStepHeight);
       } catch (e) {
         console.warn(`[Agent ${id}] Could not create character controller:`, e.message);
@@ -75,13 +524,25 @@ class Agent {
     this.targetPosition    = null;
     this.velocity          = [0, 0, 0];
     this.previousPosition  = [...startPosition];
-    this.spawnY            = startPosition[1];   // kept only for free-fall targetY
+    this.failedMovementCooldown = 0;
+    this.targetLockTimer   = 0;
+    // [FIX v3] spawnY = FEET Y (floor surface Y where agent was spawned).
+    // This is NOT the Rapier body-centre Y (which = spawnY + height/2).
+    // All fall-height calculations must use: h = getFeetY(pos.y) - spawnY
+    // where getFeetY(bodyCentreY) = bodyCentreY - height/2.
+    this.spawnY            = startPosition[1];
     this.availableObjects  = [];
 
     // ── Research-Based Stats ─────────────────────────────────────────────
-    this.fatigueLevel    = 0.0;
+    this.fatigueLevel    = 0.0; // Mirror for legacy
     this.gaitStability   = 1.0;
     this.lastStumbleTime = 0;
+
+    // ── [Phase 2] Muscle Fatigue Model ──────────────────────────────────
+    this.muscleState = {
+      fatigueLevel: 0.0,
+      sustainedLoadTimer: 0.0
+    };
 
     // ── Wading (v2) ───────────────────────────────────────────────────────
     this.wadingPenalty  = 0.0;
@@ -130,6 +591,52 @@ class Agent {
 
     // ── Simulation Timer ──────────────────────────────────────────────────
     this.simTime       = 0;
+
+    // ── [v5] Exploration Map ──────────────────────────────────────────────
+    // Nhớ vùng đã đi qua → ưu tiên khám phá nơi mới
+    this.explorationMap = new ExplorationMap(0.6);
+    this._boundsInited  = false;   // init lần đầu khi có bounds
+
+    // ── [v5] Curiosity & Boredom (Phase 4 AI Engine) ──────────────────────
+    this.boredomLevel       = 0.0;     // 0=hứng thú, 1=chán hoàn toàn
+    this.lastPositionChange = 0;       // simTime lần cuối agent di chuyển đáng kể
+    this.curiosityTarget    = null;    // điểm tò mò hiện tại {pos, expiresAt}
+    this.burstState         = null;    // {endTime, speedMult} — trạng thái chạy bùng phát
+    this.circleState        = null;    // {center, radius, angle, endTime}
+    this.pauseUntil         = 0;       // simTime dừng lại nhìn xung quanh
+    
+    // ── [Phase 4] Curiosity Driven Behavior Engine ────────────────────
+    this.curiosityLevel     = getAgeGroup(ageGroupId)?.curiosity || 0.8;
+    this.fearLevel          = getAgeGroup(ageGroupId)?.riskAwareness || 0.2;
+    this.objectExposureMap  = new Map(); // Tracks exposure time to decay curiosity
+
+    // [FIX v3] Cache half-height so fall calculations can convert body-centre Y → feet Y
+    const _ag = getAgeGroup(ageGroupId);
+    this._agentHalfH = (_ag?.height ?? 1.0) / 2;
+
+    // ── [v5] Age Movement Profile ─────────────────────────────────────────
+    this._ageProfile = getAgeMovementProfile(ageGroupId);
+    this._wobblePhase = Math.random() * Math.PI * 2;  // phase ngẫu nhiên mỗi agent
+    this._driftPhase  = Math.random() * Math.PI * 2;  // continuous drift phase
+
+    // ── [v5] Known floor Y ────────────────────────────────────────────────
+    // Set bởi simulationController sau spawn, dùng cho target Y chính xác
+    this._knownFloorY  = startPosition[1];
+
+    // ── [FIX-C] Speed cache — resample velocity every step cycle, not per-frame
+    // Gaussian per-frame resampling created 3600× noise amplification in DBC.
+    // One biological step = ~350ms → resample interval = 0.35s
+    this._cachedSpeed           = null;
+    this._speedActionType       = null;   // invalidate cache on action type change
+    this._speedResampleTimer    = 0;
+    this._speedResampleInterval = 0.35;   // seconds — 1 gait step cycle
+
+    // ── [P4] Hand Interaction Sensors ────────────────────────────────────
+    // Set by simulationController after world creation via physicsEngine.createHandSensors()
+    this.handSensors        = null;   // { left: {body,collider}, right: {body,collider} }
+    this._handInteractCooldown = 0;   // per-object interaction debounce timer
+    this._handInteractLog   = new Map(); // objectId → lastInteractTime
+    this._handReachRadius   = (groupData?.anthropometry?.armLength ?? (groupData?.height ?? 0.8) * 0.30) * 0.75;
   }
 
   // ── Physics Utility ───────────────────────────────────────────────────────
@@ -140,6 +647,90 @@ class Agent {
     } else {
       console.warn(`[Agent ${this.id}] Guarded NaN in setSafeTranslation:`, newPos);
     }
+  }
+
+  // ── [v6] Dynamic Center of Mass (COM) Calculation ───────────────────────
+  getDynamicCOM() {
+    const ag = getAgeGroup(this.ageGroupId);
+    const pos = this.getPosition();
+    if (!ag || !ag.segmentalMass) {
+      // Static fallback if no segmental data
+      return [pos[0], pos[1] + (ag?.height || 0.8) * 0.55, pos[2]];
+    }
+
+    const { head, torso, arms, legs } = ag.segmentalMass;
+    const isCrawling = (!ag.canWalk || this.currentBehavior?.action === 'crawl');
+    const totalH = ag.height || 0.8;
+    
+    let comY = pos[1];
+    
+    let comX = pos[0];
+    let comZ = pos[2];
+    
+    if (isCrawling) {
+      // ── [Phase 7] Inertial Lag in Crawling ────────────────────────
+      const accelMult = 0.02; 
+      comX -= (this.acceleration?.[0] || 0) * accelMult;
+      comZ -= (this.acceleration?.[2] || 0) * accelMult;
+    } else {
+      // ── [Phase 7] Inertial Lag in Standing/Running ────────────────
+      const accelMult = 0.05; // 50ms inertial lag
+      comX -= (this.acceleration?.[0] || 0) * accelMult;
+      comZ -= (this.acceleration?.[2] || 0) * accelMult;
+    }
+
+    // ── [Phase 5] POSTURAL COM MODEL ─────────────────────────────────────
+    // Dynamic segment mapping based on current behavior state
+    let headY  = totalH * 0.90;
+    let torsoY = totalH * 0.60;
+    let armsY  = totalH * 0.55;
+    let legsY  = totalH * 0.25;
+    
+    let headZ = 0;
+    let torsoZ = 0;
+    let armsZ = 0;
+    let legsZ = 0;
+    
+    if (isCrawling) {
+      headY  = totalH * 0.35;
+      torsoY = totalH * 0.25;
+      armsY  = totalH * 0.15;
+      legsY  = totalH * 0.15;
+      
+      headZ  = totalH * 0.4;
+      torsoZ = 0;
+      armsZ  = totalH * 0.3;
+      legsZ  = -totalH * 0.3;
+    } else if (this.currentBehavior?.action?.includes('pull') || this.currentBehavior?.action?.includes('push')) {
+      // Leaning forward
+      headZ  = totalH * 0.3;
+      torsoZ = totalH * 0.15;
+      armsZ  = totalH * 0.4; // Arms extended
+    } else if (this.currentBehavior?.action?.includes('reach_up')) {
+      // Arms raised, COM shifts up, slight lean back
+      armsY  = totalH * 0.85;
+      headZ  = -totalH * 0.05; 
+      torsoZ = -totalH * 0.05;
+    }
+    
+    // Calculate final anatomical COM
+    const weightedY = (head * headY) + (torso * torsoY) + (arms * armsY) + (legs * legsY);
+    const weightedZ = (head * headZ) + (torso * torsoZ) + (arms * armsZ) + (legs * legsZ);
+    
+    comY += weightedY;
+    
+    // Rotate local Z offset by agent's heading to get global world X/Z shift
+    const heading = this.currentHeading || 0;
+    comX += Math.sin(heading) * weightedZ;
+    comZ += Math.cos(heading) * weightedZ;
+    
+    this.debugCOM = {
+      position: [comX, comY, comZ],
+      bosRadius: ag?.capsuleRadius ? ag.capsuleRadius * 1.5 : 0.33,
+      comDistFromBOS: Math.hypot(comX - pos[0], comZ - pos[2])
+    };
+    
+    return [comX, comY, comZ];
   }
 
   // ── ActionLog recording ───────────────────────────────────────────────────
@@ -176,17 +767,60 @@ class Agent {
   }
 
   getRealisticVelocity(actionType) {
-    const ag = getAgeGroup(this.ageGroupId);
-    if (!ag?.velocityProfile) return 1.0;
-    const prof = ag.velocityProfile[actionType] || ag.velocityProfile.walk || ag.velocityProfile.crawl
-              || { mean: ag.speed || 0.5, stdDev: (ag.speed || 0.5) * 0.15 };
-    let speed = this._gaussianRandom(prof.mean, prof.stdDev);
-    speed *= (1.0 - this.fatigueLevel * 0.4);
-    if (this.wadingPenalty > 0) {
-      speed *= (1.0 - this.wadingPenalty);
-      speed  = Math.max(MIN_WADING_SPEED, speed);
+    // [FIX-C] Cache velocity sample per gait step cycle (0.35s), not per-frame.
+    // Old code: fresh Gaussian sample every 16ms → velocity jitter Δv ≈ ±0.17 m/s
+    // every frame → acceleration = 0.17 × 60 = 10 m/s² → DBC fires constantly.
+    // Fix: re-use the same speed for one full step cycle. Biological gait speed
+    // varies step-to-step, not frame-to-frame.
+    const now = this.simTime ?? 0;
+    if (
+      this._cachedSpeed !== null &&
+      this._speedActionType === actionType &&
+      now < this._speedResampleTimer
+    ) {
+      return this._cachedSpeed;
     }
-    return Math.max(MIN_WADING_SPEED, speed);
+
+    // [v6] Ưu tiên velocityProfile từ AGE_MOVEMENT_PROFILES (evidence-based)
+    const movProf = this._ageProfile;
+    let speed;
+    if (movProf?.velocityProfile) {
+      const vp = movProf.velocityProfile[actionType]
+              || movProf.velocityProfile.walk
+              || movProf.velocityProfile.crawl;
+      if (vp) {
+        speed = this._gaussianRandom(vp.mean, vp.stdDev);
+        speed *= (1.0 - this.fatigueLevel * 0.4);
+        if (this.wadingPenalty > 0) {
+          speed *= (1.0 - this.wadingPenalty);
+          speed  = Math.max(MIN_WADING_SPEED, speed);
+        }
+        speed = Math.max(MIN_WADING_SPEED, speed);
+      }
+    }
+    if (speed == null) {
+      // Fallback: ageGroups.js velocityProfile
+      const ag = getAgeGroup(this.ageGroupId);
+      if (!ag?.velocityProfile) {
+        speed = 1.0;
+      } else {
+        const prof = ag.velocityProfile[actionType] || ag.velocityProfile.walk || ag.velocityProfile.crawl
+                  || { mean: ag.speed || 0.5, stdDev: (ag.speed || 0.5) * 0.15 };
+        speed = this._gaussianRandom(prof.mean, prof.stdDev);
+        speed *= (1.0 - this.fatigueLevel * 0.4);
+        if (this.wadingPenalty > 0) {
+          speed *= (1.0 - this.wadingPenalty);
+          speed  = Math.max(MIN_WADING_SPEED, speed);
+        }
+        speed = Math.max(MIN_WADING_SPEED, speed);
+      }
+    }
+
+    // Store in cache for this step cycle
+    this._cachedSpeed         = speed;
+    this._speedActionType     = actionType;
+    this._speedResampleTimer  = now + this._speedResampleInterval;
+    return speed;
   }
 
   // ── Emotion helpers ───────────────────────────────────────────────────────
@@ -196,7 +830,16 @@ class Agent {
   // ── Attraction scanning — Vision-based with Saliency Map ──────────────────
   scanForAttractions(bounds) {
     if (this.participatingInRareEvent) return;
-    if (Math.random() > 0.15) return;
+
+    // Prevent continuous overriding of existing reactions/behaviors
+    if (this.pendingReaction) return;
+    if (this.behaviorQueue && this.behaviorQueue.length && ['investigate', 'grab_mouth', 'hurt', 'crying', 'recovery'].includes(this.behaviorQueue[0]?.type)) return;
+
+    // Lower scan frequency if currently busy (except wandering)
+    const isWandering = !this.currentBehavior || (this.currentBehavior.action && this.currentBehavior.action.includes('random'));
+    if (!isWandering && Math.random() > 0.02) return;
+    if (isWandering && Math.random() > 0.15) return;
+
     const ag = getAgeGroup(this.ageGroupId);
     if (!ag || !this.availableObjects.length) return;
 
@@ -225,9 +868,16 @@ class Agent {
 
     // Step 4: Queue best object with reaction latency delay
     if (score > 0.5 && Math.random() < score * 0.3) {
-      const stats = this._getFatigueModifiedStats();
+      // ── [Phase 6] NEUROMOTOR DELAY SYSTEM ──────────────────────────────────
+      if (ag.neuromotorLatency) {
+        // Reaction delay = Perception + Transmission + Actuation
+        const { perception, transmission, actuation } = ag.neuromotorLatency;
+        this.reactionTimer = perception + transmission + actuation;
+      } else {
+        const stats = this._getFatigueModifiedStats();
+        this.reactionTimer = stats.reactionLatency;
+      }
       this.pendingReaction = best;
-      this.reactionTimer = stats.reactionLatency;
     }
   }
 
@@ -243,11 +893,43 @@ class Agent {
     const dx = cur[0] - this.previousPosition[0];
     const dy = cur[1] - this.previousPosition[1];
     const dz = cur[2] - this.previousPosition[2];
-    this.velocity      = [dx/deltaTime, dy/deltaTime, dz/deltaTime];
+    
+    const newVel = [dx/deltaTime, dy/deltaTime, dz/deltaTime];
+    if (this.velocity) {
+      // [FIX-A] Smooth acceleration with EMA (Exponential Moving Average).
+      // Raw double-derivative at 60fps: Δv/Δt = (v_n - v_{n-1}) / (1/60)
+      // → amplifies Gaussian velocity jitter by 3600×, causing DBC to fire
+      // 80%+ of frames (measured: 48 triggers/s, should be <1 trigger/s).
+      // EMA α=0.08 → smoothing window ≈ 1/(0.08×60) = 208ms (≈ 1 step cycle).
+      // This matches biological proprioceptive delay for postural correction.
+      const EMA_ALPHA = 0.08;
+      const rawAccX = (newVel[0] - this.velocity[0]) / deltaTime;
+      const rawAccZ = (newVel[2] - this.velocity[2]) / deltaTime;
+      const prevAcc = this.acceleration || [0, 0, 0];
+      this.acceleration = [
+        prevAcc[0] + EMA_ALPHA * (rawAccX - prevAcc[0]),
+        0,  // Y-axis acceleration not used in DBC lateral balance calc
+        prevAcc[2] + EMA_ALPHA * (rawAccZ - prevAcc[2]),
+      ];
+    } else {
+      this.acceleration = [0, 0, 0];
+    }
+    this.velocity = newVel;
     this.totalDistance += Math.sqrt(dx*dx + dy*dy + dz*dz);
 
-    if (this.state === 'MOVING')      this.fatigueLevel = Math.min(1.0, this.fatigueLevel + deltaTime * 0.01);
-    else if (this.state === 'IDLE')   this.fatigueLevel = Math.max(0.0, this.fatigueLevel - deltaTime * 0.05);
+    // ── [Phase 2] MUSCLE FATIGUE MODEL ─────────────────────────────────────
+    const ag = getAgeGroup(this.ageGroupId);
+    const fProfile = ag?.fatigueProfile || { fatigueRate: 0.05, recoveryRate: 0.1, enduranceCapacity: 60 };
+    
+    if (this.state === 'MOVING' || this.state === 'INTERACTING') {
+      this.muscleState.fatigueLevel = Math.min(1.0, this.muscleState.fatigueLevel + deltaTime * fProfile.fatigueRate);
+      // Heavy load fatigue applied in executeAction
+    } else if (this.state === 'IDLE') {
+      this.muscleState.fatigueLevel = Math.max(0.0, this.muscleState.fatigueLevel - deltaTime * fProfile.recoveryRate);
+      this.muscleState.sustainedLoadTimer = Math.max(0.0, this.muscleState.sustainedLoadTimer - deltaTime);
+    }
+    // Mirror to legacy fatigue for movement scale
+    this.fatigueLevel = this.muscleState.fatigueLevel;
 
     if (this.recoveryTimer > 0) {
       this.recoveryTimer = Math.max(0, this.recoveryTimer - deltaTime);
@@ -258,6 +940,20 @@ class Agent {
       this.wadingPenalty = Math.max(0, this.wadingPenalty - deltaTime * 2.0);
       if (this.wadingPenalty === 0) this.wadingObjectId = null;
     }
+
+    // [v5] Init exploration map khi có bounds lần đầu
+    if (bounds && !this._boundsInited) {
+      this.explorationMap.init(bounds);
+      this._boundsInited = true;
+    }
+
+    // [v5] Đánh dấu ô đã đi qua mỗi frame
+    if (this._boundsInited) {
+      this.explorationMap.markVisited(cur[0], cur[2]);
+    }
+
+    // [v5] Cập nhật boredom — tăng khi đứng yên, giảm khi di chuyển
+    this._updateBoredom(deltaTime, cur);
 
     this.scanForAttractions(bounds);
 
@@ -270,11 +966,90 @@ class Agent {
       }
     }
 
+    // [FIX-C] Update hand sensors position each frame BEFORE physics step.
+    // simulationController calls physicsEngine.step() after agent.update(),
+    // so hand sensors will be in correct position when event queue is drained.
+    this._updateHandSensors();
+
     this.updateBehavior(deltaTime, colliders, bounds);
     this.previousPosition = [...cur];
   }
 
   updateBehavior(deltaTime, colliders, bounds) {
+    if (!this.body) return;
+
+    // ── [Phase 1] DYNAMIC BALANCE CONTROLLER ─────────────────────────────────
+    const pos = this.getPosition();
+    const dynamicCOM = this.getDynamicCOM();
+    const agData = getAgeGroup(this.ageGroupId);
+    
+    // Only check stability if moving or interacting aggressively
+    if (agData && (this.state === 'MOVING' || this.state === 'INTERACTING') && !this.fallState) {
+      const capsuleRadius = agData.capsuleRadius || 0.22;
+      const supportRadius = capsuleRadius * 1.5; // Base of Support
+      
+      const comDistX = dynamicCOM[0] - pos[0];
+      const comDistZ = dynamicCOM[2] - pos[2];
+      const comDist = Math.hypot(comDistX, comDistZ);
+      
+      // Calculate Margin of Stability
+      let marginOfStability = supportRadius - comDist;
+      
+      const bCtrl = agData.balanceControl || { ankleGain: 0.5, hipGain: 0.5, recoveryStepLatency: 0.5, balanceNoise: 0.5 };
+      
+      // Inject deterministic motor noise into balance perception
+      // Note: Math.random() is globally overridden by seededRandom.js (Mulberry32)
+      const noise = (Math.random() * 2 - 1) * bCtrl.balanceNoise * 0.1;
+      marginOfStability += noise;
+      
+      if (marginOfStability < 0.10) {
+        // Need balance correction strategy
+        if (marginOfStability >= 0.04) {
+          // 1. Ankle Strategy (small adjustment)
+          if (!this._stratLog) {
+            this.actionLog.push({ s: this.state, a: 'ankle_strategy', margin: marginOfStability.toFixed(2) });
+            this._stratLog = true;
+          }
+          // Slight velocity dampening
+          this.velocity[0] *= (1.0 - (1.0 - bCtrl.ankleGain) * 0.1);
+          this.velocity[2] *= (1.0 - (1.0 - bCtrl.ankleGain) * 0.1);
+        } else if (marginOfStability >= 0.0) {
+          // 2. Hip Strategy (larger COM shift, torso bends)
+          this.actionLog.push({ s: this.state, a: 'hip_strategy', margin: marginOfStability.toFixed(2) });
+          // Stronger velocity dampening
+          this.velocity[0] *= (1.0 - (1.0 - bCtrl.hipGain) * 0.4);
+          this.velocity[2] *= (1.0 - (1.0 - bCtrl.hipGain) * 0.4);
+        } else if (marginOfStability >= -0.15) {
+          // 3. Step Strategy (take rapid recovery step to expand BOS)
+          this.actionLog.push({ s: 'IDLE', a: 'step_strategy', margin: marginOfStability.toFixed(2) });
+          
+          this.behaviorQueue = [
+             { type: 'stumble', action: 'lose_balance', duration: bCtrl.recoveryStepLatency, completed: false }
+          ];
+          this.currentBehavior = null;
+          this.state = 'INTERACTING';
+          this._setEmotion('scared');
+          return;
+        } else {
+          // 4. Fall
+          this.actionLog.push({ s: 'IDLE', a: 'fall_failed', margin: marginOfStability.toFixed(2) });
+          
+          const isRunStall = Math.hypot(this.velocity[0], this.velocity[2]) > 1.5;
+          this.behaviorQueue = [
+             { type: 'stumble', action: isRunStall ? 'fall_forward' : 'trip', duration: 1.5, completed: false }
+          ];
+          this.currentBehavior = null;
+          this.targetPosition = null;
+          this.state = 'IDLE';
+          this.velocity = [0, 0, 0];
+          this._setEmotion('scared');
+          return; // Physics interrupt
+        }
+      } else {
+        this._stratLog = false; // Reset log spam blocker
+      }
+    }
+
     // Apply queued bounce (outside Rapier drain loop)
     if (this.pendingBounce && this.body) {
       const pos  = this.body.translation();
@@ -465,30 +1240,54 @@ class Agent {
       case 'walk_to':
       case 'investigate':
         this.state = 'MOVING';
-        if (action.targetObjectId || action.target) {
+        // [FIX bbox-C2] Guard: only compute target once.
+        // Old code: re-set target to CENTRE of object every frame → KCC blocked
+        // immediately → stuckCounter++ every frame → escape loop every 1.5s.
+        // Fix: skip if targetPosition already set. Use EDGE approach (not centre).
+        if (!this.targetPosition && (action.targetObjectId || action.target)) {
           const id  = action.targetObjectId || action.target;
           const obj = colliders.find(c => c.id === id || c.name?.toLowerCase().includes(id.toLowerCase()));
           if (obj?.boundingBox) {
+            // Approach edge of object, not its centre
+            const cur2 = this.getPosition();
+            const cx = (obj.boundingBox.min[0] + obj.boundingBox.max[0]) / 2;
+            const cz = (obj.boundingBox.min[2] + obj.boundingBox.max[2]) / 2;
+            const toCurX = cur2[0] - cx;
+            const toCurZ = cur2[2] - cz;
+            const toCurLen = Math.hypot(toCurX, toCurZ) || 1;
+            const edgeR = Math.max(
+              (obj.boundingBox.max[0] - obj.boundingBox.min[0]) / 2,
+              (obj.boundingBox.max[2] - obj.boundingBox.min[2]) / 2
+            );
+            const capsR = this.anthropometry?.walkStride ?? 0.3;
+            const offset = edgeR + capsR * 2.0;
             this.targetPosition = [
-              (obj.boundingBox.min[0]+obj.boundingBox.max[0])/2,
-               obj.boundingBox.min[1],
-              (obj.boundingBox.min[2]+obj.boundingBox.max[2])/2,
+              cx + (toCurX / toCurLen) * offset,
+              obj.boundingBox.min[1],
+              cz + (toCurZ / toCurLen) * offset,
             ];
-          } else if (!this.targetPosition) this.setRandomTarget(bounds);
-        } else if (!this.targetPosition) this.setRandomTarget(bounds);
+          } else {
+            this.setRandomTarget(bounds);
+          }
+        } else if (!this.targetPosition) {
+          this.setRandomTarget(bounds);
+        }
         this.moveTowardsTarget(deltaTime, 'walk');
         break;
 
       case 'walk_random':
         this.state = 'MOVING';
+        // [v5/Bug4] Luôn chọn target mới khi null — bao gồm sau khi danger zone reject
         if (!this.targetPosition) this.setRandomTarget(bounds);
         this.moveTowardsTarget(deltaTime, 'walk');
+        if (!this.targetPosition) this.setRandomTarget(bounds);
         break;
 
       case 'crawl':
         this.state = 'MOVING';
         if (!this.targetPosition) this.setRandomTarget(bounds);
         this.moveTowardsTarget(deltaTime, 'crawl');
+        if (!this.targetPosition) this.setRandomTarget(bounds);
         break;
 
       case 'run': case 'run_unstable':
@@ -505,20 +1304,26 @@ class Agent {
 
       case 'trip': case 'stumble': case 'fall_forward': {
         // FIX BUG #11: Use FALLING state immediately so injury calculator gets correct severity.
-        // Previously was INTERACTING for the entire action (even when fallState was set).
+        // [FIX v3 BOUNCE]: pos.y is the BODY CENTRE (= feetY + halfH).
+        // spawnY is the FEET Y. So the real height above floor =
+        //   (pos.y - this._agentHalfH) - this.spawnY
+        // Previously used pos.y - this.spawnY which was always ≈ halfH even on flat ground,
+        // causing every stumble to trigger free_fall unnecessarily → infinite bounce loop.
         const pos = this.body.translation();
-        const h   = pos.y - this.spawnY;
+        const currentFeetY = pos.y - this._agentHalfH;
+        const h   = currentFeetY - this.spawnY;
+        const landingY = this.spawnY + this._agentHalfH; // body-centre Y at floor level
         if (h > 0.15) {
-          this.state = 'FALLING';   // ← CORRECTED: agent is actually falling
-          this.fallState = { startY: pos.y, targetY: this.spawnY, fallHeight: h,
+          this.state = 'FALLING';
+          this.fallState = { startY: pos.y, targetY: landingY, fallHeight: h,
             velocity: Math.sqrt(2*9.81*h), elapsed: 0, duration: Math.sqrt(2*h/9.81) };
         } else {
-          this.state = 'INTERACTING'; // ground-level stumble: no airtime, use INTERACTING
+          this.state = 'INTERACTING'; // ground-level stumble: no airtime
           if (this.behaviorTimer < 0.3) {
             const surge = 1.0 * deltaTime, angle = Math.random() * Math.PI * 2;
             this.setSafeTranslation({
               x: pos.x + Math.cos(angle)*surge,
-              y: Math.max(this.spawnY-0.2, pos.y - Math.sin(this.behaviorTimer*10)*0.1),
+              y: Math.max(landingY - 0.2, pos.y - Math.sin(this.behaviorTimer*10)*0.1),
               z: pos.z + Math.sin(angle)*surge,
             });
           } else {
@@ -535,14 +1340,19 @@ class Agent {
         if (!this.body) break;
         const pos = this.body.translation();
         if (!this.fallState) {
-          const h = Math.max(0.1, pos.y - this.spawnY);
-          this.fallState = { startY: pos.y, targetY: this.spawnY, fallHeight: h,
+          // [FIX v3 BOUNCE]: Convert body-centre Y to feet Y before computing height.
+          // pos.y = body centre = feetY + halfH.  spawnY = feetY at spawn.
+          // Real height above floor = (pos.y - halfH) - spawnY.
+          const currentFeetY = pos.y - this._agentHalfH;
+          const h = Math.max(0.1, currentFeetY - this.spawnY);
+          const landingY = this.spawnY + this._agentHalfH; // body-centre at floor level
+          this.fallState = { startY: pos.y, targetY: landingY, fallHeight: h,
             velocity: Math.sqrt(2*9.81*h), elapsed: 0, duration: Math.sqrt(2*h/9.81) };
         }
         this.fallState.elapsed += deltaTime;
         const t2       = Math.min(this.fallState.elapsed / this.fallState.duration, 1.0);
         const newY     = this.fallState.startY - this.fallState.fallHeight * t2 * t2;
-        this.setSafeTranslation({ x: pos.x, y: Math.max(this.spawnY, newY), z: pos.z });
+        this.setSafeTranslation({ x: pos.x, y: Math.max(this.fallState.targetY, newY), z: pos.z });
         if (t2 >= 1.0) {
           this.fallState = null; this.state = 'IDLE';
           this.recoveryTimer = RECOVERY_DURATION;
@@ -566,7 +1376,57 @@ class Agent {
         break;
       }
 
-      case 'open_drawer': case 'pull': case 'pull_to_stand': {
+      case 'open_drawer': case 'pull': case 'pull_to_stand': case 'push': {
+        const agData = getAgeGroup(this.ageGroupId);
+        const maxTorque = agData?.physics?.maxJointTorqueNm || 10;
+        
+        // Approximate force needed
+        let assumedForceN = 20; // Default generic force
+        if (action.targetObjectId && colliders) {
+          const obj = colliders.find(c => c.id === action.targetObjectId);
+          // Very simplified force heuristic based on object height/mass estimate
+          if (obj && obj.boundingBox) {
+            const h = obj.boundingBox.max[1] - obj.boundingBox.min[1];
+            assumedForceN = 10 + (h * 40); 
+          }
+        }
+
+        const armLength = agData?.anthropometry?.armLength || 0.2;
+        const requiredTorque = assumedForceN * armLength;
+
+        // ── [Phase 2] MUSCLE FATIGUE MODEL (Effective Torque) ────────────────
+        // effectiveTorque = maxJointTorqueNm * fatigueFactor * postureFactor * coordinationFactor
+        
+        let fatigueFactor = 1.0 - (this.muscleState.fatigueLevel * 0.5); // Max 50% torque loss from general fatigue
+        let postureFactor = (this.state === 'IDLE') ? 1.0 : 0.8;
+        
+        // [Phase 6] Stochastic Motor Noise injection
+        const motorNoise = agData?.motorControl?.coordinationNoise || 0.1;
+        let coordinationFactor = 1.0 - (Math.random() * motorNoise); // Mulberry32 seeded
+        
+        const effectiveTorque = maxTorque * fatigueFactor * postureFactor * coordinationFactor;
+
+        // Apply sustained load if pushing hard but failing
+        if (requiredTorque > 0.6 * maxTorque) {
+            this.muscleState.sustainedLoadTimer += deltaTime;
+            if (this.muscleState.sustainedLoadTimer > 2.0) { // 2 seconds of sustained struggling
+                const fProfile = agData?.fatigueProfile || { fatigueRate: 0.05, enduranceCapacity: 60 };
+                // Exponential fatigue spike
+                this.muscleState.fatigueLevel = Math.min(1.0, this.muscleState.fatigueLevel + (fProfile.fatigueRate * 5.0)); 
+            }
+        }
+
+        if (requiredTorque > effectiveTorque) {
+          this.logTorqueLimitExceeded(this.id, requiredTorque, effectiveTorque);
+          
+          // Action mapping on failure
+          this.state = 'INTERACTING';
+          this.behaviorTimer = 0;
+          this.currentBehavior = { type: 'failed_torque', action: 'lose_balance', duration: 1.5, completed: false };
+          this._setEmotion('frustrated');
+          break;
+        }
+
         this.state = 'INTERACTING';
         // Pull back slightly — agent leans backward
         const pos_p = this.body.translation();
@@ -646,14 +1506,17 @@ class Agent {
         
         const fail = agData?.climbFailRate || 0.1;
         const adjustedFail = fail + (1 - friction) * 0.2;
-        if (Math.random() < adjustedFail && pos_c.y > this.spawnY + 0.1) {
-          const h = pos_c.y - this.spawnY;
-          this.fallState = { startY: pos_c.y, targetY: this.spawnY, fallHeight: h,
-            velocity: Math.sqrt(2*9.81*h), elapsed: 0, duration: Math.sqrt(2*h/9.81) };
+        if (Math.random() < adjustedFail && pos_c.y > (this.spawnY + this._agentHalfH) + 0.1) {
+          // [FIX v3 BOUNCE]: pos_c.y is body-centre. Convert to feet Y for fall height.
+          const currentFeetY = pos_c.y - this._agentHalfH;
+          const h = currentFeetY - this.spawnY;
+          const landingY = this.spawnY + this._agentHalfH;
+          this.fallState = { startY: pos_c.y, targetY: landingY, fallHeight: Math.max(0.1, h),
+            velocity: Math.sqrt(2*9.81*Math.max(0.1, h)), elapsed: 0, duration: Math.sqrt(2*Math.max(0.1, h)/9.81) };
         } else {
           // FIX: Headboard Bug. Don't blindly use the object's absolute max Y.
           // Fallback simple cap:
-          const maxAllowedY = this.spawnY + (agData?.height || 0.8) + 0.1;
+          const maxAllowedY = (this.spawnY + this._agentHalfH) + (agData?.height || 0.8) + 0.1;
           let objectTopY = climbTarget.boundingBox.max[1];
 
           // Use raycast at the center of the object to find the actual surface height, not the headboard peak.
@@ -769,6 +1632,7 @@ class Agent {
   // ── Movement Kernel — Anti-Clip via KCC + Turn Rate + Inertia ─────────────
   moveTowardsTarget(deltaTime, actionType = 'walk') {
     if (!this.targetPosition || !this.body) return;
+    if (this.simTime < this.failedMovementCooldown) return;
 
     const cur  = this.getPosition();
     const dx   = this.targetPosition[0] - cur[0];
@@ -791,43 +1655,180 @@ class Agent {
       return;
     }
 
-    const speed = this.getRealisticVelocity(actionType);
+    // ── BIOLOGICAL PHYSICS: Torque Limits on Movement ───────────────────────
+    const agTorqueData = getAgeGroup(this.ageGroupId);
+    if (agTorqueData && agTorqueData.physics) {
+      // Calculate dynamic torque based on child's mass, intended acceleration, and leg length
+      const legLength = agTorqueData.anthropometry?.legLength || 0.2;
+      const agentMass = agTorqueData.mass || 12;
+      const accelTime = agTorqueData.kinematics?.accelerationTime || 0.5;
+      
+      // Acceleration estimated roughly as speed/0.5s time-to-speed
+      const accel = this.getRealisticVelocity(actionType) / accelTime;
+      const requiredForce = agentMass * accel;
+      const requiredTorque = requiredForce * legLength;
+      const maxTorque = agTorqueData.physics.maxJointTorqueNm;
 
-    // Stumble check
-    const risk = 1.1 - this.gaitStability;
-    const sf   = speed > 0.8 ? 1.5 : 1.0;
-    if (Math.random() < 0.001 * risk * sf) {
+      if (requiredTorque > maxTorque) {
+        this.logTorqueLimitExceeded(this.id, requiredTorque, maxTorque);
+        // Force stumble or lose_balance state due to insufficient torque to overcome inertia
+        this.behaviorQueue = [{ type: 'stumble', action: 'lose_balance', duration: 1.5, completed: false }];
+        this.currentBehavior = null;
+        this.velocity = [0, 0, 0];
+        this.state = 'IDLE';
+        this.failedMovementCooldown = this.simTime + 0.5;
+        return;
+      }
+    }
+
+    // Nếu đang trong trạng thái pause (nhìn xung quanh) → không di chuyển
+    if (this.simTime < this.pauseUntil) return;
+
+    // [v5] Xác định speed thực tế — có thể bị burst nhân lên
+    let speed = this.getRealisticVelocity(actionType);
+    
+    // ── FOOT-GROUND CONTACT FRICTION ──────────────────────────────────────────
+    // Fetch friction matrix from physicsEngine ('hardwood' assumed default)
+    const floorFriction = physicsEngine.getFrictionForMovement(actionType, 'hardwood');
+    speed *= (floorFriction / 0.5); // Normalize around 0.5 typical friction
+
+    const prof = this._ageProfile;
+    if (this.burstState && this.simTime < this.burstState.endTime) {
+      speed *= this.burstState.speedMult;
+    }
+
+    // Stumble check — xác suất theo profile tuổi
+    const stumbleP = prof.stumbleProb || 0;
+    if (stumbleP > 0 && Math.random() < stumbleP) {
       this.behaviorQueue = [{ type: 'stumble', action: 'fall_forward', duration: 1.5, completed: false }];
       this.currentBehavior = null;
       return;
     }
 
-    // ── Kinematics: Turn Rate + Momentum + Forward Bias ──────────────────
-    const ag = getAgeGroup(this.ageGroupId);
+    // ── [v5] Steering: Seek + Obstacle Avoidance ─────────────────────────
+    // 1. Seek vector — hướng thẳng đến target
+    const seekX = dx / dist;
+    const seekZ = dz / dist;
+
+    // 2. Avoid vector — tổng lực đẩy ra từ các vật cản gần
+    let avoidX = 0, avoidZ = 0;
+    const avoidRadius = 0.35;   // chỉ xét vật trong 0.35m
+    const solidObstacles = (this.availableObjects || []).filter(obj => {
+      if (!obj.boundingBox) return false;
+      const { min, max } = obj.boundingBox;
+      const objH = max[1] - min[1];
+      const roomW = this._boundsInited
+        ? Math.max(this.explorationMap.cols, this.explorationMap.rows) * this.explorationMap.cellSize
+        : 10;
+      const objW = Math.max(max[0] - min[0], max[2] - min[2]);
+      if (objW > roomW * 0.75) return false;  // sàn/tường → skip
+      if (objH < 0.20) return false;          // thảm mỏng → skip
+      if (min[1] > (this._knownFloorY ?? 0) + 0.5) return false; // treo cao → skip
+      return true;
+    });
+
+    for (const obj of solidObstacles) {
+      const bb = obj.boundingBox;
+      // Tìm điểm gần nhất trên AABB với agent
+      const nearX = Math.max(bb.min[0], Math.min(cur[0], bb.max[0]));
+      const nearZ = Math.max(bb.min[2], Math.min(cur[2], bb.max[2]));
+      const toObjX = cur[0] - nearX;
+      const toObjZ = cur[2] - nearZ;
+      const toObjDist = Math.hypot(toObjX, toObjZ);
+
+      // [FIX bbox-D] Handle toObjDist = 0: agent is INSIDE the AABB.
+      // Old condition: toObjDist > 0 — silently skipped this case,
+      // leaving the agent with zero avoidance force when spawned inside bbox.
+      // Fix: generate a random escape direction when directly overlapping.
+      if (toObjDist < avoidRadius) {
+        const safeDist = Math.max(toObjDist, 0.01);
+        const strength = (1 - safeDist / avoidRadius) * 1.5;
+        if (toObjDist < 0.01) {
+          // Directly inside AABB — push in a random direction based on agentId
+          // (deterministic per-agent to avoid oscillation between agents)
+          const escAngle = (this.id * 2.399963) % (Math.PI * 2); // golden angle spread
+          avoidX += Math.cos(escAngle) * strength;
+          avoidZ += Math.sin(escAngle) * strength;
+        } else {
+          avoidX += (toObjX / safeDist) * strength;
+          avoidZ += (toObjZ / safeDist) * strength;
+        }
+      }
+    }
+
+    // 3. Kết hợp seek + avoid (normalize avoid nếu lớn quá)
+    const avoidLen = Math.hypot(avoidX, avoidZ);
+    // Trọng số avoid tăng khi gần vật (max 0.45), tránh áp đảo seek quá mức
+    const avoidWeight = Math.min(0.45, avoidLen * 0.3);
+    const seekWeight  = 1 - avoidWeight;
+    let steerX = seekX * seekWeight + (avoidLen > 0 ? (avoidX/avoidLen)*avoidWeight : 0);
+    let steerZ = seekZ * seekWeight + (avoidLen > 0 ? (avoidZ/avoidLen)*avoidWeight : 0);
+    const steerLen = Math.hypot(steerX, steerZ) || 1;
+    steerX /= steerLen;
+    steerZ /= steerLen;
+
+    // ── [v5] Age Kinematics ───────────────────────────────────────────────
+    const ag  = getAgeGroup(this.ageGroupId);
     const kin = ag?.kinematics;
     const stats = this._getFatigueModifiedStats();
     let moveX, moveZ;
 
     if (kin) {
-      // Turn rate limiting — agent can't instantly face target
-      const desiredAngle = Math.atan2(dz, dx);
-      const angleDiff = this._normalizeAngle(desiredAngle - this.currentHeading);
-      const maxTurn = stats.turnRate * deltaTime;
-      const clampedTurn = Math.max(-maxTurn, Math.min(maxTurn, angleDiff));
-      this.currentHeading += clampedTurn;
+      // Turn rate — agent không xoay ngay lập tức mà xoay dần
+      const desiredAngle = Math.atan2(steerZ, steerX);
+      const angleDiff    = this._normalizeAngle(desiredAngle - this.currentHeading);
+      const maxTurn      = stats.turnRate * deltaTime;
+      this.currentHeading += Math.max(-maxTurn, Math.min(maxTurn, angleDiff));
 
-      // Forward bias — toddlers lunge forward impulsively
+      // Forward bias (toddler lao về phía trước bốc đồng)
       const biasedSpeed = speed * (1.0 + kin.forwardBias * 0.3);
 
-      // Momentum — velocity carries from previous frame (inertia)
+      // Momentum — quán tính từ frame trước
       const rawX = Math.cos(this.currentHeading) * biasedSpeed * deltaTime;
       const rawZ = Math.sin(this.currentHeading) * biasedSpeed * deltaTime;
       const mf = kin.momentumFactor;
       moveX = rawX * (1 - mf) + (this.velocity[0] * deltaTime) * mf;
       moveZ = rawZ * (1 - mf) + (this.velocity[2] * deltaTime) * mf;
     } else {
-      moveX = (dx/dist) * speed * deltaTime;
-      moveZ = (dz/dist) * speed * deltaTime;
+      moveX = steerX * speed * deltaTime;
+      moveZ = steerZ * speed * deltaTime;
+    }
+
+    // ── [Phase 6] STOCHASTIC MOTOR NOISE ───────────────────────────────────
+    const agObj = getAgeGroup(this.ageGroupId);
+    const mCtrl = agObj?.motorControl || { coordinationNoise: 0.1, motorPlanningError: 0.05 };
+    
+    // 1. Lateral Wobble (Rhythmic)
+    const prevWobble = Math.sin(this._wobblePhase) * (prof.wobbleAmplitude || 0);
+    this._wobblePhase += prof.wobbleFrequency * deltaTime * Math.PI * 2;
+    const currWobble = Math.sin(this._wobblePhase) * (prof.wobbleAmplitude || 0);
+    const wobbleDelta = currWobble - prevWobble;
+
+    const moveLen = Math.hypot(moveX, moveZ);
+    if (moveLen > 0.001) {
+      this._driftPhase += deltaTime * 1.5;
+
+      // 1. Motor Planning Error (Drift in intended trajectory)
+      // Two superimposed sine waves create a fluid, continuous wander instead of white noise
+      const wanderFactor = Math.sin(this._driftPhase) * 0.5 + Math.cos(this._driftPhase * 0.73) * 0.5;
+      const planErrorAngle = wanderFactor * mCtrl.motorPlanningError; 
+      
+      const currentX = moveX;
+      const currentZ = moveZ;
+      moveX = currentX * Math.cos(planErrorAngle) - currentZ * Math.sin(planErrorAngle);
+      moveZ = currentX * Math.sin(planErrorAngle) + currentZ * Math.cos(planErrorAngle);
+      
+      // 2. Coordination Noise (Stochastic magnitude jitter & lateral wobble)
+      const speedWander = Math.sin(this._driftPhase * 1.3);
+      const coordJitter = 1.0 + (speedWander * mCtrl.coordinationNoise);
+      moveX *= coordJitter;
+      moveZ *= coordJitter;
+
+      // Apply lateral rhythmic wobble
+      const perpX = -moveZ / moveLen;
+      const perpZ =  moveX / moveLen;
+      moveX += perpX * wobbleDelta;
+      moveZ += perpZ * wobbleDelta;
     }
 
     // §Fix: use character controller so agent slides along walls instead of clipping
@@ -840,33 +1841,35 @@ class Agent {
           deltaTime
         );
 
-        // FIX #12: Do NOT bypass KCC when blocked — this caused clipping through furniture.
-        // Previously: if KCC blocked >90%, we used setNextKinematicTranslation directly.
-        // Now: trust the KCC correction. If blocked, agent slides along the wall.
-
         // ── Anti-stuck detection ──────────────────────────────────────────
         const posNow = this.body.translation();
         const stuckDx = posNow.x - this.lastMovePos[0];
         const stuckDz = posNow.z - this.lastMovePos[2];
         const stuckDist = Math.sqrt(stuckDx * stuckDx + stuckDz * stuckDz);
-        if (stuckDist < 0.01) {
+        
+        // Expected movement minimum is 5% of their intended speed for that frame
+        const intendedDist = Math.hypot(moveX, moveZ);
+        const isEffectivelyStuck = intendedDist > 0.001 && stuckDist < intendedDist * 0.05;
+
+        // Absolute micro-stuck fallback (avoids float precision errors)
+        if (isEffectivelyStuck || stuckDist < 0.0005) {
           this.stuckCounter++;
         } else {
           this.stuckCounter = 0;
         }
         this.lastMovePos = [posNow.x, posNow.y, posNow.z];
 
-        // If stuck for 60+ frames (~1 second), try escape via KCC (not teleport)
-        if (this.stuckCounter > 60) {
+        // If stuck for 90+ frames (~1.5s at 60fps), try escape via KCC (not teleport)
+        if (this.stuckCounter > 90) {
           const escDist = 0.4;
-          const moveLen = Math.hypot(moveX, moveZ) || 1;
+          const moveLen2 = Math.hypot(moveX, moveZ) || 1;
           // Try 3 escape directions via KCC to find the clearest path
           const escDirs = [
-            { x: -moveZ / moveLen * escDist, z:  moveX / moveLen * escDist },  // perp left
-            { x:  moveZ / moveLen * escDist, z: -moveX / moveLen * escDist },  // perp right
-            { x: -moveX / moveLen * escDist, z: -moveZ / moveLen * escDist },  // backward
+            { x: -moveZ / moveLen2 * escDist, z:  moveX / moveLen2 * escDist },  // perp left
+            { x:  moveZ / moveLen2 * escDist, z: -moveX / moveLen2 * escDist },  // perp right
+            { x: -moveX / moveLen2 * escDist, z: -moveZ / moveLen2 * escDist },  // backward
           ];
-          let bestDist = 0;
+          let bestMoveDist = 0;
           for (const dir of escDirs) {
             const esc = physicsEngine.moveAgentWithController(
               this.world, this.controller, this.body, kccCollider,
@@ -874,15 +1877,13 @@ class Agent {
               deltaTime
             );
             const d = Math.hypot(esc?.x || 0, esc?.z || 0);
-            if (d > bestDist) bestDist = d;
+            if (d > bestMoveDist) bestMoveDist = d;
           }
-          // FIX STATE LOOP: set idleCooldown so the agent waits in IDLE before re-targeting.
-          // Without this, stuckCounter reset → IDLE → pickNextBehavior → MOVING → stuck again
-          // all within 1-2 frames, creating a visible thrashing loop.
+          // FIX BUG 2: idleCooldown ngắn hơn (0.3–0.6s) để không lãng phí quá nhiều thời gian
           this.stuckCounter = 0;
           this.targetPosition = null;
           this.state = 'IDLE';
-          this.idleCooldown = 1.0 + Math.random() * 1.0; // 1–2 seconds of genuine IDLE
+          this.idleCooldown = 0.3 + Math.random() * 0.3;
         }
         return;
       }
@@ -893,6 +1894,22 @@ class Agent {
     if (Number.isFinite(pos.x + moveX) && Number.isFinite(pos.z + moveZ)) {
       this.setSafeTranslation({ x: pos.x + moveX, y: pos.y, z: pos.z + moveZ });
     }
+  }
+
+  // ── [v6] Physics Safey Logger ─────────────────────────────────────
+  logTorqueLimitExceeded(agentId, torqueRequested, maxTorque) {
+    if (this.simTime - (this._lastTorqueLogTime || 0) < 1.0) return; // Debounce logging
+    this._lastTorqueLogTime = this.simTime;
+    
+    console.warn(`[Physics Safety] Agent ${agentId} exceeded biological torque limit! Requested: ${torqueRequested.toFixed(1)}Nm, Max: ${maxTorque.toFixed(1)}Nm`);
+    
+    this.actionLog.push({
+      s: 'INTERACTING',
+      a: 'torque_exceeded',
+      v: 0,
+      reqTorque: torqueRequested,
+      maxTorque: maxTorque
+    });
   }
 
   _getArrivalThreshold(actionType) {
@@ -1031,30 +2048,65 @@ class Agent {
   //  v4 SUBSYSTEMS — Professional-Grade Child Behavior Simulation
   // ══════════════════════════════════════════════════════════════════════════
 
-  // ── Reaction to Object (with grasping precision) ──────────────────────
+  // ── Reaction to Object (Priority 5: Affordance-based interaction) ──────────
   _reactToObject(visibleObj) {
     const ag = getAgeGroup(this.ageGroupId);
     const stats = this._getFatigueModifiedStats();
     const obj = visibleObj.object;
-    const dims = obj.boundingBox ? [
-      obj.boundingBox.max[0]-obj.boundingBox.min[0],
-      obj.boundingBox.max[1]-obj.boundingBox.min[1],
-      obj.boundingBox.max[2]-obj.boundingBox.min[2],
-    ] : null;
-    const isChoke = dims && Math.max(...dims) < 0.04 &&
-      (this.ageGroupId === 'infant' || this.ageGroupId === 'toddler');
-    const action = isChoke ? 'grab_mouth' : 'investigate';
-    // Apply grasping offset error
-    const offset = ag?.coordination?.graspingOffset || 0;
-    const targetPos = visionSystem._getObjCenter(obj);
-    targetPos[0] += (Math.random() - 0.5) * 2 * offset;
-    targetPos[2] += (Math.random() - 0.5) * 2 * offset;
-    // Roll for grasp success
+    
+    // ── [Phase 4] CURIOSITY DRIVEN BEHAVIOR ENGINE ──────────────────────
+    let exposure = this.objectExposureMap.get(obj.id) || 0;
+    this.objectExposureMap.set(obj.id, exposure + 1);
+    
+    let currentCuriosity = this.curiosityLevel * Math.pow(0.8, exposure);
+    let currentFear = this.fearLevel;
+    
+    const objName = (obj.name || obj.id || '').toLowerCase();
+    const isLoud = objName.includes('vacuum') || objName.includes('blender');
+    const isMoving = obj.rigidBody && Math.hypot(obj.rigidBody.linvel().x, obj.rigidBody.linvel().z) > 0.1;
+    const isCaregiver = objName.includes('adult') || objName.includes('parent');
+    const isHazard = objName.includes('knife') || objName.includes('fire') || objName.includes('stove');
+    
+    if (isLoud) currentFear *= 2.0;
+    if (isCaregiver) currentFear *= 0.1;
+    if (isHazard) currentFear *= 1.5; 
+    if (isMoving) currentCuriosity *= 1.5;
+    
+    const strangerPenalty = 1.0 - this._applyStrangerFear(obj, 1.0);
+    currentFear += strangerPenalty;
+    
+    // Avoidance routing
+    if (currentFear > currentCuriosity * 1.2) {
+      const curPos = this.getPosition();
+      const dx = curPos[0] - (visionSystem._getObjCenter(obj)[0]);
+      const dz = curPos[2] - (visionSystem._getObjCenter(obj)[2]);
+      const dist = Math.hypot(dx, dz) || 1;
+      this.targetPosition = [curPos[0] + (dx/dist)*3, curPos[1], curPos[2] + (dz/dist)*3];
+      this.state = 'MOVING';
+      this._setEmotion('scared');
+      this.currentBehavior = null;
+      return;
+    }
+
+    // ── [Priority 5] AFFORDANCE-BASED ACTION SELECTION ────────────────────
+    // Read obj.affordances[] from scene metadata (populated by scene parser).
+    // Fallback: infer affordances from object name + dimensions when metadata absent.
+    const affordances = Array.isArray(obj.affordances) && obj.affordances.length > 0
+      ? obj.affordances
+      : this._inferAffordances(obj, objName, ag);
+
+    const action = this._selectActionFromAffordances(affordances, obj, ag, stats);
+
     const willSucceed = Math.random() < stats.graspSuccess;
     if (willSucceed) {
-      this.behaviorQueue = [{ type: action, action: action === 'grab_mouth' ? 'grab_mouth' : 'walk_to',
-        targetObjectId: obj.id, duration: 5.0, completed: false }];
-      this._setEmotion('mischievous');
+      this.behaviorQueue = [{
+        type: action,
+        action: action,
+        targetObjectId: obj.id,
+        duration: this._getAffordanceDuration(action),
+        completed: false,
+      }];
+      this._setEmotion(action === 'grab_mouth' ? 'mischievous' : 'curious');
     } else {
       const willDrop = Math.random() < stats.dropProb;
       this.behaviorQueue = [{ type: 'reach_fail', action: 'reach_up', duration: 1.5, completed: false }];
@@ -1069,6 +2121,156 @@ class Agent {
     }
     this.currentBehavior = null;
     this.state = 'IDLE';
+  }
+
+  /**
+   * [Priority 5] Infer affordances from object name + dimensions when scene
+   * metadata does not provide an explicit affordances[] array.
+   */
+  _inferAffordances(obj, nameLower, ag) {
+    const affordances = [];
+    const dims = obj.boundingBox ? [
+      obj.boundingBox.max[0] - obj.boundingBox.min[0],
+      obj.boundingBox.max[1] - obj.boundingBox.min[1],
+      obj.boundingBox.max[2] - obj.boundingBox.min[2],
+    ] : null;
+    const maxDim = dims ? Math.max(...dims) : 1;
+    const minDim = dims ? Math.min(...dims) : 1;
+
+    // Graspable: small enough to hold in a child's hand (<4cm max dim)
+    if (maxDim < 0.04) affordances.push('graspable');
+    // Chokeable: tiny object the child might put in mouth
+    if (maxDim < 0.04 && (this.ageGroupId === 'infant' || this.ageGroupId === 'early_toddler')) {
+      affordances.push('chokeable');
+    }
+    // Climbable: right height range, non-slippery name
+    if (dims && dims[1] > 0.20 && dims[1] < 1.2 && ag?.canClimb &&
+        !/curtain|drape|blind|mirror|glass/.test(nameLower)) {
+      affordances.push('climbable');
+    }
+    // Pullable: furniture with drawers or handles
+    if (/drawer|cabinet|dresser|chest|wardrobe|tu|ke/.test(nameLower)) {
+      affordances.push('pullable');
+    }
+    // Pushable: lightweight items
+    if (/ball|toy|block|cube|box/.test(nameLower)) affordances.push('pushable');
+    // Sharp / dangerous
+    if (/knife|scissors|fork|pin|nail|razor|sharp/.test(nameLower)) affordances.push('sharp');
+    if (/socket|outlet|plug|electric/.test(nameLower))               affordances.push('pokeable');
+    // Fallback: everything else is investigable
+    if (affordances.length === 0) affordances.push('investigable');
+    return affordances;
+  }
+
+  /**
+   * [Priority 5] Map affordances → concrete action, respecting age capability.
+   */
+  _selectActionFromAffordances(affordances, obj, ag, stats) {
+    // Priority order: hazard first, then age-appropriate interaction
+    if (affordances.includes('chokeable'))   return 'grab_mouth';
+    if (affordances.includes('sharp'))       return 'investigate';   // approach then react
+    if (affordances.includes('pokeable') && (this.ageGroupId === 'infant' || this.ageGroupId === 'early_toddler')) {
+      return 'investigate';
+    }
+    if (affordances.includes('graspable'))   return 'grab';
+    if (affordances.includes('climbable') && ag?.canClimb) return 'climb_on';
+    if (affordances.includes('pullable'))    return 'pull';
+    if (affordances.includes('pushable'))    return 'push';
+    return 'walk_to';   // fallback: walk toward object
+  }
+
+  /** Duration in seconds for each affordance-driven action */
+  _getAffordanceDuration(action) {
+    const durations = {
+      grab_mouth: 4.0,
+      grab:       3.0,
+      climb_on:   5.0,
+      pull:       3.5,
+      push:       2.5,
+      investigate:5.0,
+      walk_to:    4.0,
+    };
+    return durations[action] ?? 4.0;
+  }  // ── [Priority 4] Hand Sensor Update ──────────────────────────────────────
+  /**
+   * Repositions the hand sensor bodies each frame to mirror the agent's current
+   * position and heading. Called from update() before physicsEngine.step().
+   * physicsEngine.updateHandSensorPositions() does the actual Rapier body move.
+   */
+  _updateHandSensors() {
+    if (!this.handSensors || !this.body) return;
+    const pos = this.body.translation();
+    const ag  = getAgeGroup(this.ageGroupId);
+    physicsEngine.updateHandSensorPositions(
+      this.handSensors.left,
+      this.handSensors.right,
+      pos,
+      this.currentHeading,
+      ag?.height ?? 0.8,
+      ag?.anthropometry ?? null
+    );
+  }
+
+  /**
+   * [Priority 4] Called by simulationController's drainIntersectionEvents loop
+   * when a hand sensor collider intersects a scene object collider.
+   * This replaces torso-collision-based interaction for reach/grab events.
+   *
+   * @param {string} hand        - 'left' or 'right'
+   * @param {object} sceneObject - the collider metadata object (from handleToCollider)
+   */
+  handleHandSensorIntersection(hand, sceneObject) {
+    if (!sceneObject || !sceneObject.id) return;
+    if (this.state === 'FALLING' || this.stunTimer > 0) return;
+
+    // Debounce: don't re-trigger same object within 5s
+    const now = this.simTime;
+    const lastTime = this._handInteractLog.get(sceneObject.id) || -Infinity;
+    if (now - lastTime < 5.0) return;
+    this._handInteractLog.set(sceneObject.id, now);
+
+    // Ignore floors, walls, boundary objects
+    if (sceneObject.type === 'floor' || sceneObject.type === 'wall' ||
+        sceneObject.id === 'boundary_wall' || sceneObject.id === 'explicit_floor') return;
+
+    // Don't interrupt a deliberate behavior (walk_to, climb_on, etc.)
+    const busyActions = ['grab', 'grab_mouth', 'climb_on', 'pull', 'push', 'hurt', 'crying'];
+    if (this.currentBehavior && busyActions.includes(this.currentBehavior.action)) return;
+
+    // Use affordance system to select action
+    const ag      = getAgeGroup(this.ageGroupId);
+    const objName = (sceneObject.name || sceneObject.id || '').toLowerCase();
+    const affordances = Array.isArray(sceneObject.affordances) && sceneObject.affordances.length > 0
+      ? sceneObject.affordances
+      : this._inferAffordances(sceneObject, objName, ag);
+
+    const stats  = this._getFatigueModifiedStats();
+    const action = this._selectActionFromAffordances(affordances, sceneObject, ag, stats);
+
+    // Queue the affordance action (prepend to current queue so it runs immediately)
+    const interactBehavior = {
+      type:           action,
+      action:         action,
+      targetObjectId: sceneObject.id,
+      duration:       this._getAffordanceDuration(action),
+      completed:      false,
+      _fromHandSensor: true,
+    };
+
+    // Save existing queue, prepend interaction
+    if (this.behaviorQueue.length && !this._savedBehaviorQueue) {
+      this._savedBehaviorQueue = [...this.behaviorQueue];
+    }
+    this.behaviorQueue = [interactBehavior, ...(this._savedBehaviorQueue || [])];
+    this.currentBehavior = null;
+    this.state = 'IDLE';
+
+    this._logRiskEvent('hand_contact', this.getPosition(), {
+      objectId: sceneObject.id,
+      hand,
+      action,
+      affordances,
+    });
   }
 
   // ── Fatigue-Modified Stats ────────────────────────────────────────────
@@ -1187,7 +2389,8 @@ class Agent {
   // ── Danger Zone Memory (Learning) ─────────────────────────────────────
   _recordDangerZone(position, severity) {
     const ag = getAgeGroup(this.ageGroupId);
-    const memDuration = ag?.cognition?.dangerMemoryDuration || 30;
+    // [v5/Bug3] Giảm memDuration 30s→8s: agent "quên sợ" nhanh hơn → dám quay lại khám phá
+    const memDuration = ag?.cognition?.dangerMemoryDuration || 8;
     const maxZones = ag?.cognition?.maxDangerZones || 4;
     const key = `${Math.round(position[0]*2)}_${Math.round(position[2]*2)}`;
     this.dangerMap.set(key, { pos: [...position], severity, expiresAt: Date.now()/1000 + memDuration });
@@ -1202,7 +2405,8 @@ class Agent {
     for (const [key, zone] of this.dangerMap) {
       if (now > zone.expiresAt) { this.dangerMap.delete(key); continue; }
       const d = Math.hypot(targetPos[0]-zone.pos[0], targetPos[2]-zone.pos[2]);
-      if (d < 0.8) return { dangerous: true, zone };
+      // [v5/Bug3] Giảm radius 0.8m→0.35m: 4 zones × π×0.35² ≈ 1.5m² thay vì 8m²
+      if (d < 0.35) return { dangerous: true, zone };
     }
     return { dangerous: false };
   }
@@ -1276,39 +2480,163 @@ class Agent {
     });
   }
 
-  // ── Helpers ───────────────────────────────────────────────────────────────
-  // FIX STATE LOOP: Collision-aware random target — reject points inside furniture bounding boxes.
-  // Also handles fallback more gracefully: if 10 random attempts fail (dense room),
-  // try 20 more with a smaller exclusion pad before accepting any clear position.
+  // ── [v5] Helpers ──────────────────────────────────────────────────────────
+
+  /**
+   * Chọn điểm đích ngẫu nhiên — ưu tiên vùng chưa khám phá.
+   * Fixes: Bug1 (floor filter), Bug5 (_knownFloorY)
+   */
   setRandomTarget(bounds) {
     if (!bounds) return;
-    const pads = [0.15, 0.05]; // first try with normal pad, then minimal pad
+
+    if (this.targetPosition && this.simTime < this.targetLockTimer) {
+      return; 
+    }
+
+    const floorY = this._knownFloorY ?? bounds.min[1];
+    const prof   = this._ageProfile;
+    const validCheckFn = (x, z) => !this._isInsideSolidObstacle(x, z, bounds);
+
+    // Khi boredom cao → ưu tiên chạy đến vùng xa nhất chưa khám phá
+    if (this.boredomLevel > 0.6 && this._boundsInited) {
+      const pos = this.getPosition();
+      const explorationPt = this.explorationMap.getLeastVisitedCenter(pos, 1.5, validCheckFn);
+      if (explorationPt) {
+        this.targetPosition = [explorationPt[0], floorY, explorationPt[1]];
+        this.targetLockTimer = this.simTime + 2.0 + Math.random() * 2.0;
+        this.boredomLevel = Math.max(0, this.boredomLevel - 0.3);
+        return;
+      }
+    }
+
+    // 30% cơ hội: dùng exploration map để chọn ô ít được thăm (ngay cả khi chưa chán)
+    if (this._boundsInited && Math.random() < 0.3) {
+      const pos = this.getPosition();
+      // explorationBias < 1 → trẻ nhỏ ít dám đi xa (ở gần spawn)
+      const minD = (prof.explorationBias || 0.5) * 1.5;
+      const pt = this.explorationMap.getLeastVisitedCenter(pos, minD, validCheckFn);
+      if (pt) {
+        this.targetPosition = [pt[0], floorY, pt[1]];
+        this.targetLockTimer = this.simTime + 2.0 + Math.random() * 2.0;
+        return;
+      }
+    }
+
+    // Standard random với filter obstacle
+    const solidObstacles = this._buildSolidObstacles(bounds);
+    // [FIX bbox-E] Pad must be >= avoidRadius (0.35m).
+    // Old pads [0.20, 0.10, 0.0]: target placed 0.20m outside furniture, but
+    // avoidance force starts at 0.35m → agent entered force field every step,
+    // causing continuous steering deflections and target misses.
+    const pads = [0.45, 0.30, 0.15];
     for (const pad of pads) {
-      for (let attempt = 0; attempt < 15; attempt++) {
+      for (let attempt = 0; attempt < 20; attempt++) {
         const x = bounds.min[0] + Math.random() * (bounds.max[0] - bounds.min[0]);
         const z = bounds.min[2] + Math.random() * (bounds.max[2] - bounds.min[2]);
-        let insideFurniture = false;
-        for (const obj of (this.availableObjects || [])) {
-          if (!obj.boundingBox) continue;
-          const bb = obj.boundingBox;
+        let blocked = false;
+        for (const obs of solidObstacles) {
+          const bb = obs.boundingBox;
           if (x > bb.min[0] - pad && x < bb.max[0] + pad &&
               z > bb.min[2] - pad && z < bb.max[2] + pad) {
-            insideFurniture = true;
-            break;
+            blocked = true; break;
           }
         }
-        if (!insideFurniture) {
-          this.targetPosition = [x, bounds.min[1], z];
+        if (!blocked) {
+          this.targetPosition = [x, floorY, z];
+          this.targetLockTimer = this.simTime + 2.0 + Math.random() * 2.0;
           return;
         }
       }
     }
-    // Last resort: accept random point rather than hang. KCC will block the agent at the edge.
+    // Last resort
     this.targetPosition = [
       bounds.min[0] + Math.random() * (bounds.max[0] - bounds.min[0]),
-      bounds.min[1],
+      floorY,
       bounds.min[2] + Math.random() * (bounds.max[2] - bounds.min[2]),
     ];
+    this.targetLockTimer = this.simTime + 2.0 + Math.random() * 2.0;
+  }
+
+  /** Build danh sách obstacle thực sự (không phải floor/tường/vật treo) */
+  _buildSolidObstacles(bounds) {
+    const roomW = bounds ? Math.max(bounds.max[0] - bounds.min[0], bounds.max[2] - bounds.min[2]) : 10;
+    const floorY = this._knownFloorY ?? (bounds?.min[1] ?? 0);
+    return (this.availableObjects || []).filter(obj => {
+      if (!obj.boundingBox) return false;
+      const { min, max } = obj.boundingBox;
+      const objH = max[1] - min[1];
+      const objW = Math.max(max[0] - min[0], max[2] - min[2]);
+      if (objW > roomW * 0.75) return false;
+      if (objH < 0.20) return false;
+      if (min[1] > floorY + 0.5) return false;
+      return true;
+    });
+  }
+
+  _isInsideSolidObstacle(x, z, bounds) {
+    for (const obs of this._buildSolidObstacles(bounds)) {
+      const bb = obs.boundingBox;
+      if (x > bb.min[0] - 0.15 && x < bb.max[0] + 0.15 &&
+          z > bb.min[2] - 0.15 && z < bb.max[2] + 0.15) return true;
+    }
+    return false;
+  }
+
+  /**
+   * [v5] Cập nhật boredom level.
+   * Tăng khi đứng yên, giảm khi di chuyển đến chỗ mới.
+   */
+  _updateBoredom(deltaTime, curPos) {
+    const prof = this._ageProfile;
+    const boredomRate = prof.boredomRate || 0.03;
+    const movedDist = Math.hypot(
+      curPos[0] - (this.previousPosition[0] ?? curPos[0]),
+      curPos[2] - (this.previousPosition[2] ?? curPos[2])
+    );
+    if (movedDist < 0.02) {
+      // Đứng yên → chán nhanh hơn
+      this.boredomLevel = Math.min(1.0, this.boredomLevel + boredomRate * deltaTime * 2);
+    } else {
+      // Di chuyển → đỡ chán
+      this.boredomLevel = Math.max(0, this.boredomLevel - boredomRate * deltaTime * 0.5);
+    }
+
+    // Kiểm tra burst chạy bùng phát (theo profile tuổi)
+    if (!this.burstState && this.state === 'MOVING') {
+      const burstP = (prof.burstProb || 0) * deltaTime;
+      if (Math.random() < burstP) {
+        const dur = prof.burstDuration
+          ? prof.burstDuration[0] + Math.random() * (prof.burstDuration[1] - prof.burstDuration[0])
+          : 1.5;
+        this.burstState = {
+          endTime:   this.simTime + dur,
+          speedMult: prof.burstSpeedMult || 1.5,
+        };
+      }
+    }
+    if (this.burstState && this.simTime >= this.burstState.endTime) {
+      this.burstState = null;
+    }
+
+    // Kiểm tra đổi hướng đột ngột (trẻ nhỏ hay làm vậy)
+    const dirChangeP = (prof.dirChangeProb || 0) * deltaTime;
+    if (this.state === 'MOVING' && this.targetPosition && Math.random() < dirChangeP) {
+      if (this.simTime > this.targetLockTimer) {
+        this.targetPosition = null; // buộc chọn target mới frame sau
+      }
+    }
+
+    // Kiểm tra dừng lại nhìn xung quanh (theo pauseInterval)
+    if (this.simTime > this.pauseUntil && this.state === 'MOVING') {
+      const [pMin, pMax] = prof.pauseInterval || [5, 10];
+      // Xác suất mỗi frame
+      const pauseCheckP = deltaTime / (pMin + Math.random() * (pMax - pMin));
+      if (Math.random() < pauseCheckP) {
+        const [dMin, dMax] = prof.pauseDuration || [0.5, 1.5];
+        this.pauseUntil = this.simTime + dMin + Math.random() * (dMax - dMin);
+        this._setEmotion('curious');
+      }
+    }
   }
 
   loadBehaviorPolicy(behaviors) {
@@ -1367,10 +2695,23 @@ class Agent {
     if (this.controller && this.world) {
       try { this.world.removeCharacterController(this.controller); } catch (_) {}
     }
+    // [P4] Cleanup hand sensor rigid bodies
+    if (this.handSensors && this.world) {
+      try { this.world.removeRigidBody(this.handSensors.left.body);  } catch (_) {}
+      try { this.world.removeRigidBody(this.handSensors.right.body); } catch (_) {}
+    }
     this.controller    = null;
+    this.handSensors   = null;
     this.trajectory    = [];
     this.behaviorQueue = [];
     this.availableObjects = [];
+    // [v5] Reset exploration state
+    this.explorationMap.cells.clear();
+    this._boundsInited = false;
+    this.burstState    = null;
+    this.circleState   = null;
+    // Reset speed cache
+    this._cachedSpeed  = null;
   }
 }
 

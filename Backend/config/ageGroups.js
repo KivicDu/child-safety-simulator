@@ -1,490 +1,356 @@
 /**
- * Age Group Configuration
+ * Age Group Configuration — RESEARCH GRADE REFACTOR
  * 
  * Defines physical attributes, movement capabilities, and injury thresholds for different age groups.
  * Data derived from NIH, NHTSA, CDC, and IRCOBI pediatric studies.
+ * 
+ * CORE REFINE: 
+ * - Adult-like 'preteen' group removed. 
+ * - 'Toddler' split into Early (1-2y) and Late (2-3y) to capture rapid CNS myelination.
+ * - Static COM removed. Segmental mass arrays added for dynamic COM calculation.
+ * - Biological Torque limits (Nm) and Physis Yield limits added for realistic physics constraints.
+ * - Neuromotor Delay timers added (Perception + Transmission + Actuation).
  */
 
 const ageGroups = {
   infant: {
     id: 'infant',
     name: 'Infant',
-    ageRange: '0-12 months',
-    mass: 8,            // kg (average 8-10 kg)
-    height: 0.7,        // m  (sitting/crawling height ~70cm)
-    reachHeight: 0.2,   // m  (can reach ~20cm from floor)
+    ageRange: '0-1 years',
+    mass: 8,            // kg
+    height: 0.7,        // m  
+    reachHeight: 0.2,   // m  
     capsuleRadius: 0.20,
-    boneDensityFactor: 1.475, // 1.5 - (0.5 * 0.05)
-    surfaceAreaFactor: 2.5,   // Proportional head impact area
-    // Research-based anthropometry — WHO Child Growth Standards, CDC, NIH PMC
-    // All values are 50th-percentile medians for the age range
+    boneDensityFactor: 1.475,
+    surfaceAreaFactor: 2.5,
+    
+    // ANTHROPOMETRY & SEGMENTAL MASS (Dynamic COM foundation)
     anthropometry: {
-      headRadius: 0.12,         // Scaled up to match frontend dummy.glb (base ~0.08 * 1.575)
-      headHeightRatio: 0.25,    // Montreal Children's Hospital: head = 25% of body height
-      torsoLength: 0.28,        // Adjusted to match Scaled dummy.glb spine
-      torsoRadius: 0.07,        // proportional to body width
-      armLength: 0.16,          // ~23% of height (short baby arms)
-      armSpan: 0.64,            // CDC: slightly less than height at this age
-      legLength: 0.18,          // Scaled down to match dummy.glb limbs (base ~0.3 * 0.6)
-      hipWidth: 0.08,           // distance between leg attachment points
-      shoulderWidth: 0.12,      // biacromial width
-      walkStride: 0,            // infants cannot walk
-      runStride: 0,             // infants cannot run
-      crawlReach: 0.10,         // NIH PMC6723980: forward hand reach per crawl cycle
-      crawlHandKneeDist: 0.22,  // distance from hands to knees during crawling
+      headRadius: 0.12,
+      torsoLength: 0.28,
+      armLength: 0.16,
+      legLength: 0.18,
     },
-    // Movement capabilities
+    segmentalMass: {
+      head: 0.25,   // 25% of systemic mass
+      torso: 0.35,  // 35% of systemic mass
+      arms: 0.10,   // 10% (5% each arm)
+      legs: 0.30,   // 30% (15% each leg)
+    },
+    
+    // BIOLOGICAL PHYSICS CONSTRAINTS
+    physics: {
+      jointLaxity: 'extreme',
+      maxJointTorqueNm: 6,      // Extremely weak muscle output
+      physisYieldLimitNm: 15,   // Growth plates shear easily
+    },
+
+    // NEUROMOTOR DELAY (Total: 800ms)
+    neuromotorLatency: {
+      perception: 0.300,
+      transmission: 0.200,
+      actuation: 0.300
+    },
+
+    // MOVEMENT KINEMATICS
     canWalk: false,
     canCrawl: true,
     canClimb: false,
     canRun: false,
     canJump: false,
-    // Research-based velocity profiles (m/s) — NIH PMC: infant crawl avg 0.13 m/s
+    kinematics: { turnRate: 1.0, forwardBias: 0.1, momentumFactor: 0.1, maxAcceleration: 0.5, accelerationTime: 2.0 },
+    
+    // AI ENGINE PARAMETERS
+    balanceControl: { ankleGain: 0.1, hipGain: 0.1, recoveryStepLatency: 0.8, balanceNoise: 0.8 },
+    fatigueProfile: { fatigueRate: 0.08, recoveryRate: 0.05, enduranceCapacity: 10 },
+    attentionProfile: { focusDuration: 3, distractibility: 0.9, noveltyBias: 1.0, hazardAwareness: 0.0 },
+    motorControl: { coordinationNoise: 0.8, motorPlanningError: 0.5 },
+    
     velocityProfile: {
-      crawl:   { mean: 0.13, stdDev: 0.03 },  // 0.10–0.16 m/s measured
-      lunge:   { mean: 0.25, stdDev: 0.08 },  // reaching/grabbing burst
-      roll:    { mean: 0.10, stdDev: 0.03 },  // rolling over
-      fall:    { mean: 0.80, stdDev: 0.20 },  // falling from sitting
+      crawl:   { mean: 0.13, stdDev: 0.03 },
+      fall:    { mean: 0.80, stdDev: 0.20 },
     },
-    speed: 0.13, // legacy fallback
-    gaitStability: 0.3,    // very unstable (0=unstable, 1=stable)
-    stumbleProbability: 0.05, // 5% per step cycle when standing
+    speed: 0.13,
+    gaitStability: 0.0, // Quadrupedal
+    stumbleProbability: 0.05,
+    
+    // BEHAVIORAL & RISK
     curiosity: 0.8,
-    riskAwareness: 0.1,
-    headMassRatio: 0.25,   // head = 25% of body mass (unlike adult 8%)
+    riskAwareness: 0.05,
     headSensitivity: 2.0,
     fallDamageMultiplier: 1.5,
-    // NHTSA/IRCOBI scaled HIC₁₅ thresholds
     hicThreshold: { safe: 200, warning: 390, critical: 600, dangerous: 800 },
-    // Behavioral preferences
-    attractedTo: ['bright_colors', 'shiny', 'small_graspable', 'cords', 'faces'],
-    preferredColors: ['red', 'yellow', 'blue'],
     explorationMode: 'mouth_first',
-    // ── Vision System — AAP/AAO developmental ophthalmology ────────────────
-    vision: {
-      eyeLevel: { crawling: 0.34, standing: 0.65 },
-      fovHorizontal: 60,        // degrees — narrow infant focus
-      fovVertical: 40,
-      depthPerception: 0.3,     // 0-1 — poor binocular depth
-      peripheralVision: 0.2,
-      maxScanDistance: 1.5,     // meters — can focus 8-15 inches primarily
-      focusMode: 'floor',       // floor-locked gaze pattern
-      colorSensitivity: 0.3,    // R,Y,B only; limited color discrimination
-      contrastSensitivity: 0.01,// ARVO: ~100x worse than adult at birth
-    },
-    // ── Movement Kinematics — NIH gait studies ────────────────────────────
-    kinematics: {
-      turnRate: 0.8,            // rad/s — very slow turning
-      forwardBias: 0.2,         // low — mostly stationary/crawling
-      dirChangeCooldown: 3.0,   // seconds before direction change
-      momentumFactor: 0.3,      // low inertia
-    },
-    // ── Hand-Eye Coordination — NIH motor development ────────────────────
-    coordination: {
-      reactionLatency: 0.800,   // seconds — NIH gaze RT ~400ms + motor ~400ms
-      graspingOffset: 0.08,     // meters — large spatial error
-      graspSuccessRate: 0.50,   // 50% success rate
-      dropProbability: 0.30,    // 30% chance of dropping
-    },
-    // ── Spatial Cognition — Piaget sensorimotor stage ─────────────────────
-    cognition: {
-      objectPermanence: 0.3,    // partial (4-8mo Piaget)
-      hiddenObjectMemory: 2,    // seconds
-      depthErrorMargin: 0.15,   // meters — large edge misjudging
-      edgeAwareness: 0.1,       // Gibson visual cliff: very low
-      dangerMemoryDuration: 10, // seconds — forgets fast
-      maxDangerZones: 2,
-      failBeforeStrategyChange: Infinity, // no strategy change
-      strategyChangeType: null,
-    },
-    // ── Fear & Caution — Moro reflex, stranger anxiety ───────────────────
-    fear: {
-      startleSensitivity: 1.0,     // Moro reflex fully active
-      startleFreezeDuration: 1.5,  // seconds
-      heightFearThreshold: 0.3,    // meters
-      heightFearResponse: 'cry',
-      strangerFear: 0.7,           // high stranger/large-object avoidance
-    },
   },
 
-  toddler: {
-    id: 'toddler',
-    name: 'Toddler',
-    ageRange: '1-3 years',
-    mass: 13,           // kg (average 10-15 kg)
-    height: 0.9,        // m
-    reachHeight: 0.5,   // m
+  early_toddler: {
+    id: 'early_toddler',
+    name: 'Early Toddler',
+    ageRange: '1-2 years',
+    mass: 12,
+    height: 0.82,
+    reachHeight: 0.45,
     capsuleRadius: 0.22,
-    boneDensityFactor: 1.40,  // 1.5 - (2.0 * 0.05)
-    surfaceAreaFactor: 1.8,
-    // CDC growth charts + NIH gait studies — 50th percentile at ~2 years
+    boneDensityFactor: 1.42,
+    surfaceAreaFactor: 2.0,
+    
     anthropometry: {
-      headRadius: 0.11,         // Math sync with dummy.glb scale (~0.08 * 1.5)
-      headHeightRatio: 0.22,    // head = 22% of body height
-      torsoLength: 0.30,        // Match spine scale
-      torsoRadius: 0.08,
-      armLength: 0.24,          // ~27% of height
-      armSpan: 0.88,            // CDC: arm span ~98% of height at 2y
-      legLength: 0.28,          // Match limb scale
-      hipWidth: 0.10,
-      shoulderWidth: 0.16,
-      walkStride: 0.30,         // NIH: stride length ~0.30m at 18mo, ~0.38m at 3y
-      runStride: 0.50,          // short burst running strides
-      crawlReach: 0.14,         // slightly longer reach than infant
-      crawlHandKneeDist: 0.30,  // torso length + arm reach
+      headRadius: 0.11,
+      torsoLength: 0.30,
+      armLength: 0.22,
+      legLength: 0.26,
     },
+    segmentalMass: {
+      head: 0.22,
+      torso: 0.36,
+      arms: 0.12,
+      legs: 0.30,
+    },
+    
+    physics: {
+      jointLaxity: 'high',
+      maxJointTorqueNm: 12,
+      physisYieldLimitNm: 25,
+    },
+    
+    // NEUROMOTOR DELAY (Total: 500ms)
+    neuromotorLatency: {
+      perception: 0.200,
+      transmission: 0.150,
+      actuation: 0.150
+    },
+
     canWalk: true,
     canCrawl: true,
     canClimb: true,
-    canRun: true,
+    canRun: false,
     canJump: false,
-    // Velocity profiles — NIH: toddler optimal walk 0.56 m/s at 2yo
+    kinematics: { turnRate: 1.5, forwardBias: 0.2, momentumFactor: 0.2, maxAcceleration: 1.0, accelerationTime: 1.6 },
+    
+    // AI ENGINE PARAMETERS
+    balanceControl: { ankleGain: 0.4, hipGain: 0.3, recoveryStepLatency: 0.4, balanceNoise: 0.6 },
+    fatigueProfile: { fatigueRate: 0.05, recoveryRate: 0.06, enduranceCapacity: 60 },
+    attentionProfile: { focusDuration: 10, distractibility: 0.8, noveltyBias: 0.9, hazardAwareness: 0.05 },
+    motorControl: { coordinationNoise: 0.5, motorPlanningError: 0.3 },
+    
     velocityProfile: {
-      crawl:   { mean: 0.17, stdDev: 0.04 },  // faster crawl than infant
-      walk:    { mean: 0.50, stdDev: 0.10 },  // 0.40–0.60 m/s (unstable)
-      run:     { mean: 0.90, stdDev: 0.15 },  // short bursts, unstable
-      lunge:   { mean: 0.70, stdDev: 0.20 },  // reaching/grabbing
-      climb:   { mean: 0.20, stdDev: 0.05 },  // slow climbing
-      fall:    { mean: 1.50, stdDev: 0.40 },  // falling from furniture ~0.6m
+      walk:    { mean: 0.45, stdDev: 0.12 }, // Extremely unstable, high stdDev
+      crawl:   { mean: 0.17, stdDev: 0.04 },
+      fall:    { mean: 1.20, stdDev: 0.30 },
     },
-    speed: 0.50, // legacy fallback
-    gaitStability: 0.55,
-    stumbleProbability: 0.15, // 15% — newly walking, frequent stumbles
+    speed: 0.45,
+    gaitStability: 0.3, // "High Guard" arm position
+    stumbleProbability: 0.20, // Toddlers fall 17 times/hour (Adolph 2012)
+    
     curiosity: 1.0,
-    riskAwareness: 0.2,
-    headMassRatio: 0.20,
+    riskAwareness: 0.1,
     headSensitivity: 1.8,
     fallDamageMultiplier: 1.4,
     hicThreshold: { safe: 300, warning: 570, critical: 800, dangerous: 1100 },
-    attractedTo: ['bright_colors', 'shiny', 'moving', 'buttons', 'drawers', 'cords'],
-    preferredColors: ['red', 'yellow', 'blue', 'green'],
     explorationMode: 'touch_everything',
-    // ── Vision System ─────────────────────────────────────────────────────
-    vision: {
-      eyeLevel: { crawling: 0.38, standing: 0.75 },
-      fovHorizontal: 90,
-      fovVertical: 50,
-      depthPerception: 0.6,
-      peripheralVision: 0.4,
-      maxScanDistance: 3.0,
-      focusMode: 'near',
-      colorSensitivity: 0.7,
-      contrastSensitivity: 0.3,
+  },
+
+  late_toddler: {
+    id: 'late_toddler',
+    name: 'Late Toddler',
+    ageRange: '2-3 years',
+    mass: 14,
+    height: 0.94,
+    reachHeight: 0.55,
+    capsuleRadius: 0.23,
+    boneDensityFactor: 1.35,
+    surfaceAreaFactor: 1.6,
+    
+    anthropometry: {
+      headRadius: 0.10,
+      torsoLength: 0.32,
+      armLength: 0.26,
+      legLength: 0.30,
     },
-    kinematics: {
-      turnRate: 1.2,
-      forwardBias: 0.7,         // high — lunges forward impulsively
-      dirChangeCooldown: 1.5,
-      momentumFactor: 0.5,
+    segmentalMass: {
+      head: 0.20,
+      torso: 0.38,
+      arms: 0.12,
+      legs: 0.30,
     },
-    coordination: {
-      reactionLatency: 0.600,
-      graspingOffset: 0.05,
-      graspSuccessRate: 0.70,
-      dropProbability: 0.15,
+    
+    physics: {
+      jointLaxity: 'high',
+      maxJointTorqueNm: 20,
+      physisYieldLimitNm: 35,
     },
-    cognition: {
-      objectPermanence: 0.7,    // A-not-B error still possible
-      hiddenObjectMemory: 8,
-      depthErrorMargin: 0.08,
-      edgeAwareness: 0.3,
-      dangerMemoryDuration: 30,
-      maxDangerZones: 4,
-      failBeforeStrategyChange: 3,
-      strategyChangeType: 'random_alt',
+
+    // NEUROMOTOR DELAY (Total: 400ms)
+    neuromotorLatency: {
+      perception: 0.150,
+      transmission: 0.100,
+      actuation: 0.150
     },
-    fear: {
-      startleSensitivity: 0.8,
-      startleFreezeDuration: 1.0,
-      heightFearThreshold: 0.5,
-      heightFearResponse: 'hesitate',
-      strangerFear: 0.5,
+
+    canWalk: true,
+    canCrawl: false,
+    canClimb: true,
+    canRun: true,
+    canJump: false,
+    kinematics: { turnRate: 2.5, forwardBias: 0.4, momentumFactor: 0.3, maxAcceleration: 1.5, accelerationTime: 1.4 },
+    
+    // AI ENGINE PARAMETERS
+    balanceControl: { ankleGain: 0.6, hipGain: 0.5, recoveryStepLatency: 0.3, balanceNoise: 0.4 },
+    fatigueProfile: { fatigueRate: 0.04, recoveryRate: 0.08, enduranceCapacity: 120 },
+    attentionProfile: { focusDuration: 20, distractibility: 0.7, noveltyBias: 0.8, hazardAwareness: 0.15 },
+    motorControl: { coordinationNoise: 0.3, motorPlanningError: 0.2 },
+    
+    velocityProfile: {
+      walk:    { mean: 0.60, stdDev: 0.10 },
+      run:     { mean: 1.10, stdDev: 0.20 }, // Stiff running
+      fall:    { mean: 1.60, stdDev: 0.40 },
     },
+    speed: 0.60,
+    gaitStability: 0.55,
+    stumbleProbability: 0.12,
+    
+    curiosity: 0.9,
+    riskAwareness: 0.2,
+    headSensitivity: 1.7,
+    fallDamageMultiplier: 1.35,
+    hicThreshold: { safe: 350, warning: 620, critical: 900, dangerous: 1200 },
+    explorationMode: 'touch_everything',
   },
 
   preschool: {
     id: 'preschool',
     name: 'Preschool',
-    ageRange: '3-6 years',
-    mass: 18,           // kg
-    height: 1.1,        // m
-    reachHeight: 0.8,   // m
+    ageRange: '3-5 years',
+    mass: 18,
+    height: 1.1,
+    reachHeight: 0.8,
     capsuleRadius: 0.25,
-    boneDensityFactor: 1.25,  // 1.5 - (4.5 * 0.05)
+    boneDensityFactor: 1.25,
     surfaceAreaFactor: 1.4,
-    // CDC + NIH gait analysis — 50th percentile at ~4.5 years
+    
     anthropometry: {
-      headRadius: 0.09,         // dummy.glb (1.6 - 4.5*0.05)
-      headHeightRatio: 0.18,    // head = 18% of body height
+      headRadius: 0.09,
       torsoLength: 0.34,
-      torsoRadius: 0.09,
-      armLength: 0.32,          // ~29% of height
-      armSpan: 1.10,            // CDC: arm span ≈ height by ~4 years
-      legLength: 0.38,          // dummy.glb (0.65 + 4.5*0.07 = 0.96 scale)
-      hipWidth: 0.12,
-      shoulderWidth: 0.20,
-      walkStride: 0.50,         // NIH: stride ~0.50m at 4-5y
-      runStride: 0.80,          // measured running stride
-      crawlReach: 0,            // preschoolers rarely crawl
-      crawlHandKneeDist: 0,
+      armLength: 0.32,
+      legLength: 0.38,
     },
+    segmentalMass: {
+      head: 0.16,
+      torso: 0.40,
+      arms: 0.12,
+      legs: 0.32,
+    },
+    
+    physics: {
+      jointLaxity: 'moderate',
+      maxJointTorqueNm: 35,
+      physisYieldLimitNm: 50,
+    },
+
+    // NEUROMOTOR DELAY (Total: 350ms)
+    neuromotorLatency: {
+      perception: 0.120,
+      transmission: 0.080,
+      actuation: 0.150
+    },
+
     canWalk: true,
     canCrawl: false,
     canClimb: true,
     canRun: true,
     canJump: true,
-    // Velocity profiles — NIH: preschool walk 0.8-1.1 m/s, 20m sprint ~3.5 m/s
+    kinematics: { turnRate: 3.5, forwardBias: 0.5, momentumFactor: 0.4, maxAcceleration: 2.0, accelerationTime: 1.2 },
+    
+    // AI ENGINE PARAMETERS
+    balanceControl: { ankleGain: 0.8, hipGain: 0.7, recoveryStepLatency: 0.2, balanceNoise: 0.2 },
+    fatigueProfile: { fatigueRate: 0.03, recoveryRate: 0.10, enduranceCapacity: 300 },
+    attentionProfile: { focusDuration: 45, distractibility: 0.5, noveltyBias: 0.6, hazardAwareness: 0.4 },
+    motorControl: { coordinationNoise: 0.15, motorPlanningError: 0.1 },
+
     velocityProfile: {
-      walk:    { mean: 0.95, stdDev: 0.15 },  // 0.80–1.10 m/s
-      run:     { mean: 1.50, stdDev: 0.25 },  // 1.20–1.80 m/s
-      sprint:  { mean: 2.20, stdDev: 0.30 },  // 2.00–2.50 m/s (short burst)
-      climb:   { mean: 0.30, stdDev: 0.08 },
-      jump:    { mean: 1.00, stdDev: 0.20 },  // takeoff velocity
-      fall:    { mean: 2.20, stdDev: 0.50 },  // falling from ~1.0m
+      walk:    { mean: 0.95, stdDev: 0.15 },
+      run:     { mean: 1.50, stdDev: 0.25 },
+      sprint:  { mean: 2.20, stdDev: 0.30 },
+      fall:    { mean: 2.20, stdDev: 0.50 },
     },
-    speed: 0.95, // legacy fallback
+    speed: 0.95,
     gaitStability: 0.75,
     stumbleProbability: 0.08,
+    
     curiosity: 0.95,
     riskAwareness: 0.3,
-    headMassRatio: 0.15,
     headSensitivity: 1.5,
     fallDamageMultiplier: 1.3,
     hicThreshold: { safe: 400, warning: 700, critical: 1000, dangerous: 1400 },
-    attractedTo: ['imaginative_play', 'high_places', 'tools', 'colorful'],
-    preferredColors: ['red', 'pink', 'blue', 'purple'],
     explorationMode: 'imaginative_play',
-    // ── Vision System ─────────────────────────────────────────────────────
-    vision: {
-      eyeLevel: { crawling: null, standing: 0.92 },
-      fovHorizontal: 120,
-      fovVertical: 60,
-      depthPerception: 0.85,
-      peripheralVision: 0.7,
-      maxScanDistance: 5.0,
-      focusMode: 'mid',
-      colorSensitivity: 0.9,
-      contrastSensitivity: 0.7,
-    },
-    kinematics: {
-      turnRate: 2.5,
-      forwardBias: 0.5,
-      dirChangeCooldown: 0.8,
-      momentumFactor: 0.7,
-    },
-    coordination: {
-      reactionLatency: 0.450,
-      graspingOffset: 0.02,
-      graspSuccessRate: 0.88,
-      dropProbability: 0.05,
-    },
-    cognition: {
-      objectPermanence: 1.0,
-      hiddenObjectMemory: 30,
-      depthErrorMargin: 0.03,
-      edgeAwareness: 0.6,
-      dangerMemoryDuration: 60,
-      maxDangerZones: 6,
-      failBeforeStrategyChange: 2,
-      strategyChangeType: 'use_tool', // finds stepping stool
-    },
-    fear: {
-      startleSensitivity: 0.5,
-      startleFreezeDuration: 0.5,
-      heightFearThreshold: 0.8,
-      heightFearResponse: 'cautious',
-      strangerFear: 0.3,
-    },
   },
 
-  school: {
-    id: 'school',
-    name: 'School Age',
+  child: {
+    id: 'child',
+    name: 'Child',
     ageRange: '6-10 years',
-    mass: 28,           // kg
-    height: 1.3,        // m
-    reachHeight: 1.0,   // m
+    mass: 28,
+    height: 1.3,
+    reachHeight: 1.0,
     capsuleRadius: 0.28,
-    boneDensityFactor: 1.10,  // 1.5 - (8.0 * 0.05)
+    boneDensityFactor: 1.10,
     surfaceAreaFactor: 1.1,
-    // CDC + ResearchGate gait data — 50th percentile at ~8 years
+    
     anthropometry: {
-      headRadius: 0.07,         // Near adult base scale
-      headHeightRatio: 0.15,    // head = 15% of body height
+      headRadius: 0.07,
       torsoLength: 0.40,
-      torsoRadius: 0.10,
-      armLength: 0.40,          // ~31% of height
-      armSpan: 1.32,            // CDC: arm span ≈ 1.01× height
-      legLength: 0.50,          // dummy.glb scale aligned
-      hipWidth: 0.14,
-      shoulderWidth: 0.24,
-      walkStride: 0.72,         // ResearchGate: stride ~0.72m at 8y
-      runStride: 1.10,          // measured running stride
-      crawlReach: 0,            // school-age children don't crawl
-      crawlHandKneeDist: 0,
+      armLength: 0.40,
+      legLength: 0.50,
     },
+    segmentalMass: {
+      head: 0.14,
+      torso: 0.42,
+      arms: 0.12,
+      legs: 0.32,
+    },
+    
+    physics: {
+      jointLaxity: 'low',
+      maxJointTorqueNm: 80,
+      physisYieldLimitNm: 90,
+    },
+
+    // NEUROMOTOR DELAY (Total: 250ms) // Adult-like transmission speed
+    neuromotorLatency: {
+      perception: 0.100,
+      transmission: 0.050,
+      actuation: 0.100
+    },
+
     canWalk: true,
     canCrawl: false,
     canClimb: true,
     canRun: true,
     canJump: true,
-    // Velocity profiles — ResearchGate: 7-10yo walk 1.24 m/s, run ~3.0 m/s
+    kinematics: { turnRate: 4.5, forwardBias: 0.6, momentumFactor: 0.5, maxAcceleration: 3.0, accelerationTime: 1.0 },
+    
+    // AI ENGINE PARAMETERS
+    balanceControl: { ankleGain: 1.0, hipGain: 0.9, recoveryStepLatency: 0.15, balanceNoise: 0.05 },
+    fatigueProfile: { fatigueRate: 0.015, recoveryRate: 0.15, enduranceCapacity: 900 },
+    attentionProfile: { focusDuration: 120, distractibility: 0.3, noveltyBias: 0.4, hazardAwareness: 0.7 },
+    motorControl: { coordinationNoise: 0.05, motorPlanningError: 0.02 },
+
     velocityProfile: {
-      walk:    { mean: 1.24, stdDev: 0.19 },  // 1.10–1.30 m/s
-      run:     { mean: 2.40, stdDev: 0.40 },  // 2.00–2.80 m/s
-      sprint:  { mean: 3.50, stdDev: 0.50 },  // 3.00–4.00 m/s
-      climb:   { mean: 0.45, stdDev: 0.10 },
-      jump:    { mean: 1.50, stdDev: 0.30 },
-      fall:    { mean: 3.00, stdDev: 0.60 },  // falling from ~1.5m
+      walk:    { mean: 1.24, stdDev: 0.19 },
+      run:     { mean: 2.40, stdDev: 0.40 },
+      sprint:  { mean: 3.50, stdDev: 0.50 },
+      fall:    { mean: 3.00, stdDev: 0.60 },
     },
-    speed: 1.24, // legacy fallback
+    speed: 1.24,
     gaitStability: 0.85,
     stumbleProbability: 0.04,
+    
     curiosity: 0.85,
-    riskAwareness: 0.5,
-    headMassRatio: 0.12,
+    riskAwareness: 0.6, // Higher risk awareness
     headSensitivity: 1.2,
     fallDamageMultiplier: 1.2,
     hicThreshold: { safe: 500, warning: 850, critical: 1200, dangerous: 1600 },
-    attractedTo: ['sports_equipment', 'tools', 'high_places', 'competition'],
-    preferredColors: [],
     explorationMode: 'active_play',
-    // ── Vision System ─────────────────────────────────────────────────────
-    vision: {
-      eyeLevel: { crawling: null, standing: 1.12 },
-      fovHorizontal: 150,
-      fovVertical: 70,
-      depthPerception: 0.95,
-      peripheralVision: 0.9,
-      maxScanDistance: 8.0,
-      focusMode: 'full',
-      colorSensitivity: 1.0,
-      contrastSensitivity: 0.9,
-    },
-    kinematics: {
-      turnRate: 3.5,
-      forwardBias: 0.3,
-      dirChangeCooldown: 0.4,
-      momentumFactor: 0.85,
-    },
-    coordination: {
-      reactionLatency: 0.350,
-      graspingOffset: 0.01,
-      graspSuccessRate: 0.95,
-      dropProbability: 0.02,
-    },
-    cognition: {
-      objectPermanence: 1.0,
-      hiddenObjectMemory: 60,
-      depthErrorMargin: 0.01,
-      edgeAwareness: 0.85,
-      dangerMemoryDuration: 120,
-      maxDangerZones: 8,
-      failBeforeStrategyChange: 2,
-      strategyChangeType: 'plan',
-    },
-    fear: {
-      startleSensitivity: 0.3,
-      startleFreezeDuration: 0.3,
-      heightFearThreshold: 1.2,
-      heightFearResponse: 'aware',
-      strangerFear: 0.1,
-    },
-  },
-
-  preteen: {
-    id: 'preteen',
-    name: 'Preteen',
-    ageRange: '10-14 years',
-    mass: 45,           // kg
-    height: 1.5,        // m
-    reachHeight: 1.2,   // m
-    capsuleRadius: 0.30,
-    boneDensityFactor: 0.9,   // 1.5 - (12.0 * 0.05)
-    surfaceAreaFactor: 1.0,   // Standard Baseline
-    // CDC + NIH — 50th percentile at ~12 years, near-adult proportions
-    anthropometry: {
-      headRadius: 0.065,        // adult-like head size
-      headHeightRatio: 0.14,    // head = 14% of body height
-      torsoLength: 0.46,
-      torsoRadius: 0.11,
-      armLength: 0.48,          // ~32% of height
-      armSpan: 1.52,            // CDC: arm span ≈ 1.01× height
-      legLength: 0.65,          // dummy.glb (0.65 + 12.0*0.07 > 1.0 -> 1.0 scale)
-      hipWidth: 0.16,
-      shoulderWidth: 0.28,
-      walkStride: 0.90,         // near-adult stride length
-      runStride: 1.40,          // NIH: running stride ~1.4m at 12y
-      crawlReach: 0,            // preteens don't crawl
-      crawlHandKneeDist: 0,
-    },
-    canWalk: true,
-    canCrawl: false,
-    canClimb: true,
-    canRun: true,
-    canJump: true,
-    // Velocity profiles — ResearchGate: 10-14yo sprint up to 5.5 m/s
-    velocityProfile: {
-      walk:    { mean: 1.35, stdDev: 0.22 },  // 1.20–1.40 m/s
-      run:     { mean: 3.00, stdDev: 0.50 },  // 2.50–3.50 m/s
-      sprint:  { mean: 4.70, stdDev: 0.80 },  // 4.00–5.50 m/s
-      climb:   { mean: 0.60, stdDev: 0.15 },
-      jump:    { mean: 2.00, stdDev: 0.40 },
-      fall:    { mean: 3.50, stdDev: 0.70 },  // falling from ~2.0m
-    },
-    speed: 1.35, // legacy fallback
-    gaitStability: 0.90,
-    stumbleProbability: 0.02,
-    curiosity: 0.7,
-    riskAwareness: 0.6,
-    headMassRatio: 0.10,
-    headSensitivity: 1.0,
-    fallDamageMultiplier: 1.0,
-    hicThreshold: { safe: 600, warning: 900, critical: 1400, dangerous: 1800 },
-    attractedTo: ['thrill_seeking', 'high_places', 'heavy_objects', 'electronics'],
-    preferredColors: [],
-    explorationMode: 'thrill_seeking',
-    // ── Vision System ─────────────────────────────────────────────────────
-    vision: {
-      eyeLevel: { crawling: null, standing: 1.31 },
-      fovHorizontal: 170,
-      fovVertical: 75,
-      depthPerception: 1.0,
-      peripheralVision: 1.0,
-      maxScanDistance: 10.0,
-      focusMode: 'full',
-      colorSensitivity: 1.0,
-      contrastSensitivity: 1.0,
-    },
-    kinematics: {
-      turnRate: 4.0,
-      forwardBias: 0.2,
-      dirChangeCooldown: 0.3,
-      momentumFactor: 0.9,
-    },
-    coordination: {
-      reactionLatency: 0.300,
-      graspingOffset: 0.005,
-      graspSuccessRate: 0.98,
-      dropProbability: 0.01,
-    },
-    cognition: {
-      objectPermanence: 1.0,
-      hiddenObjectMemory: 120,
-      depthErrorMargin: 0.005,
-      edgeAwareness: 0.95,
-      dangerMemoryDuration: 180,
-      maxDangerZones: 10,
-      failBeforeStrategyChange: 1,
-      strategyChangeType: 'plan',
-    },
-    fear: {
-      startleSensitivity: 0.2,
-      startleFreezeDuration: 0.2,
-      heightFearThreshold: 1.5,
-      heightFearResponse: 'rational',
-      strangerFear: 0.05,
-    },
   }
 };
 
@@ -511,7 +377,6 @@ export function getRealisticVelocity(ageGroupId, actionType, elapsedRatio = 0) {
   const fatigueFactor = 1.0 - elapsedRatio * (0.05 + Math.random() * 0.10);
   velocity *= fatigueFactor;
 
-  // Clamp to reasonable range (never negative, never > 2x mean)
   return Math.max(0.05, Math.min(velocity, actionProfile.mean * 2.5));
 }
 
@@ -526,4 +391,36 @@ export function calculateAgeAdjustedInjury(baseInjury, ageGroupId, bodyPart) {
   if (bodyPart === 'fall') adjusted *= group.fallDamageMultiplier;
   return adjusted;
 }
+
+export function validateAgeProfile(profile) {
+  const errors = [];
+  
+  if (profile.segmentalMass) {
+    const sum = (profile.segmentalMass.head || 0) + 
+                (profile.segmentalMass.torso || 0) + 
+                (profile.segmentalMass.arms || 0) + 
+                (profile.segmentalMass.legs || 0);
+    if (Math.abs(sum - 1.0) > 0.01) errors.push(`Segmental masses sum to ${sum.toFixed(2)}, expected 1.0`);
+  } else {
+    errors.push('Missing segmentalMass profiles');
+  }
+
+  if (profile.physics && profile.physics.maxJointTorqueNm <= 0) {
+    errors.push('maxJointTorqueNm must be strictly positive');
+  } else if (!profile.physics || profile.physics.maxJointTorqueNm === undefined) {
+    errors.push('Missing maxJointTorqueNm');
+  }
+
+  if (profile.neuromotorLatency) {
+    const { perception, transmission, actuation } = profile.neuromotorLatency;
+    if (perception < 0.05 || perception > 1.0) errors.push('perceptionDelay out of biological bounds [0.05-1.0s]');
+    if (transmission < 0.01 || transmission > 0.5) errors.push('transmissionDelay out of biological bounds [0.01-0.5s]');
+    if (actuation < 0.05 || actuation > 1.0) errors.push('actuationDelay out of biological bounds [0.05-1.0s]');
+  } else {
+    errors.push('Missing neuromotorLatency configuration');
+  }
+
+  return { valid: errors.length === 0, errors };
+}
+
 export default ageGroups;

@@ -10,9 +10,14 @@ import { fileURLToPath } from "url";
 import uploadRoutes from "./routes/upload.js";
 import simulationRoutes from "./routes/simulation.js";
 import authRoutes from "./routes/auth.js";
+import connectDB from "./config/db.js";
+import mongoose from "mongoose";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+// Connect to Database
+connectDB();
 
 const app = express();
 
@@ -102,12 +107,20 @@ server.setTimeout(5 * 60 * 1000); // 5 minutes timeout
 process.on('exit', (code) => {
   console.log(`🛑 Process exiting with code: ${code}`);
 });
-process.on('SIGINT', () => {
+process.on('SIGINT', async () => {
   console.log('🛑 Received SIGINT. Shutting down...');
+  if (mongoose.connection.readyState !== 0) {
+    await mongoose.connection.close();
+    console.log('📦 MongoDB connection closed.');
+  }
   process.exit(0);
 });
-process.on('SIGTERM', () => {
+process.on('SIGTERM', async () => {
   console.log('🛑 Received SIGTERM. Shutting down...');
+  if (mongoose.connection.readyState !== 0) {
+    await mongoose.connection.close();
+    console.log('📦 MongoDB connection closed.');
+  }
   process.exit(0);
 });
 process.on('uncaughtException', (err) => {

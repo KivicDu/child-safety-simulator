@@ -18,10 +18,10 @@ const DEG2RAD = Math.PI / 180;
 // Research: ARVO contrast sensitivity, AAO color development, APA curiosity studies
 const SALIENCY_BOOSTS = {
   infant:   { highContrast: 3.0, primaryColor: 2.5, luminous: 3.0, reflective: 2.0, moving: 2.0, smallGraspable: 2.5, dangling: 2.0 },
-  toddler:  { highContrast: 1.5, primaryColor: 2.0, luminous: 2.5, reflective: 2.0, moving: 2.5, smallGraspable: 1.5, dangling: 2.0 },
+  early_toddler:  { highContrast: 1.5, primaryColor: 2.0, luminous: 2.5, reflective: 2.0, moving: 2.5, smallGraspable: 1.5, dangling: 2.0 },
+  late_toddler:  { highContrast: 1.2, primaryColor: 1.8, luminous: 2.2, reflective: 1.8, moving: 2.2, smallGraspable: 1.2, dangling: 1.5 },
   preschool:{ highContrast: 1.0, primaryColor: 1.5, luminous: 2.0, reflective: 1.5, moving: 2.0, smallGraspable: 1.0, dangling: 1.0 },
-  school:   { highContrast: 1.0, primaryColor: 1.0, luminous: 1.5, reflective: 1.0, moving: 1.5, smallGraspable: 1.0, dangling: 1.0 },
-  preteen:  { highContrast: 1.0, primaryColor: 1.0, luminous: 1.2, reflective: 1.0, moving: 1.2, smallGraspable: 1.0, dangling: 1.0 },
+  child:   { highContrast: 1.0, primaryColor: 1.0, luminous: 1.5, reflective: 1.0, moving: 1.5, smallGraspable: 1.0, dangling: 1.0 },
 };
 
 class VisionSystem {
@@ -68,9 +68,12 @@ class VisionSystem {
   scanVisibleObjects(agent, objects) {
     if (!objects || !objects.length) return [];
     const results = [];
+    const ag = getAgeGroup(agent.ageGroupId);
+    const attentionThreshold = ag?.attentionProfile ? (1.0 - ag.attentionProfile.distractibility) : 0.2;
+    
     for (const obj of objects) {
       const check = this.canSeeObject(agent, obj);
-      if (check.visible && check.score > 0) {
+      if (check.visible && check.score > attentionThreshold) {
         results.push({ object: obj, score: check.score });
       }
     }
@@ -82,16 +85,38 @@ class VisionSystem {
     const ag = getAgeGroup(agent.ageGroupId);
     const v = ag?.vision;
     if (!v) return 1.0;
+    
+    // ── [Phase 3] Visual Attention System ──
+    // 1. Proximity Weight
     let score = 1.0 - (distance / v.maxScanDistance);
     if (score <= 0) return 0;
-    const boosts = SALIENCY_BOOSTS[ag.id] || SALIENCY_BOOSTS.school;
+    
+    const boosts = SALIENCY_BOOSTS[ag.id] || SALIENCY_BOOSTS.child;
+    
+    // 2. Novelty Weight
+    const isNovel = !agent.objectMemory.has(object.id);
+    const attentionProfile = ag.attentionProfile || { noveltyBias: 0.5 };
+    if (isNovel) {
+      score += attentionProfile.noveltyBias * 2.0; 
+    }
+    
+    // 3. Motion Weight (if Rapier rigid body provides velocity)
+    if (object.rigidBody) {
+       const vel = object.rigidBody.linvel();
+       const spd = Math.hypot(vel.x, vel.z);
+       if (spd > 0.1) score *= boosts.moving * (1 + spd);
+    }
+    
+    // 4. Contrast / Luminous / Visual Properties
     const props = object.properties || {};
     const mat = props.material || {};
     const color = mat.baseColor || [0.5, 0.5, 0.5];
     const emissive = mat.emissive || [0, 0, 0];
     const metallic = mat.metallic || 0;
+    
     const contrast = Math.abs(Math.max(...color) - Math.min(...color));
     if (contrast > 0.7) score *= boosts.highContrast;
+    
     if (color[0] > 0.8 || color[2] > 0.8) {
       score *= boosts.primaryColor * v.colorSensitivity;
     }

@@ -94,8 +94,15 @@ export const MODEL_REGISTRY: Record<string, ModelRegistryEntry> = {
     modelHeight:         1.0,
     forceProceduralOnly: true,   // FIX: use procedural until real GLB available
   },
-  toddler: {
-    realHeight:          0.90,
+  early_toddler: {
+    realHeight:          0.82,
+    driver:              'mixamo',
+    glbPath:             '/models/dummy.glb',
+    modelHeight:         1.0,
+    forceProceduralOnly: true,
+  },
+  late_toddler: {
+    realHeight:          0.94,
     driver:              'mixamo',
     glbPath:             '/models/dummy.glb',
     modelHeight:         1.0,
@@ -108,22 +115,8 @@ export const MODEL_REGISTRY: Record<string, ModelRegistryEntry> = {
     modelHeight:         1.0,
     forceProceduralOnly: true,
   },
-  school_age: {
+  child: {
     realHeight:          1.30,
-    driver:              'mixamo',
-    glbPath:             '/models/dummy.glb',
-    modelHeight:         1.0,
-    forceProceduralOnly: true,
-  },
-  school: {
-    realHeight:          1.30,
-    driver:              'mixamo',
-    glbPath:             '/models/dummy.glb',
-    modelHeight:         1.0,
-    forceProceduralOnly: true,
-  },
-  preteen: {
-    realHeight:          1.50,
     driver:              'mixamo',
     glbPath:             '/models/dummy.glb',
     modelHeight:         1.0,
@@ -132,7 +125,7 @@ export const MODEL_REGISTRY: Record<string, ModelRegistryEntry> = {
 };
 
 export function getRegistryEntry(ageGroupId: string): ModelRegistryEntry {
-  return MODEL_REGISTRY[ageGroupId] ?? MODEL_REGISTRY['toddler'];
+  return MODEL_REGISTRY[ageGroupId] ?? MODEL_REGISTRY['early_toddler'];
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -949,7 +942,7 @@ export class SkeletonDriver implements IFigureDriver {
     const entry = getRegistryEntry(ageGroupId);
     if (!this.model || !this.isReady) return;
 
-    const age = ({ infant: 1, toddler: 2, preschool: 4, school_age: 8, preteen: 12 } as Record<string, number>)[ageGroupId] ?? 4;
+    const age = ({ infant: 1, early_toddler: 2, late_toddler: 3, preschool: 4, child: 8 } as Record<string, number>)[ageGroupId] ?? 4;
     this.limbScaleFactor = Math.min(1.0, 0.65 + age * 0.07);
 
     let bs = this.baseScale;

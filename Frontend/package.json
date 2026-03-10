@@ -13,6 +13,7 @@
     "@react-three/drei": "^10.7.7",
     "@react-three/fiber": "^9.5.0",
     "@types/three": "^0.182.0",
+    "axios": "^1.13.6",
     "file-saver": "^2.0.5",
     "framer-motion": "^12.35.0",
     "jspdf": "^4.1.0",

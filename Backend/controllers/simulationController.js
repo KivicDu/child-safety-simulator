@@ -1,13 +1,15 @@
 import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import physicsEngine from '../services/physicsEngine.js';
-import colliderGenerator from '../utils/colliderGenerator.js';
+import { applyScaleToSceneData } from '../utils/scaleNormalizer.js';
+import scaleAuthority from '../services/scaleAuthority.js';
 import behaviorManager from '../services/behaviorManager.js';
 import injuryCalculator from '../services/injuryCalculator.js';
 import Agent from '../services/agent.js';
 import { getAgeGroup } from '../config/ageGroups.js';
-import { normalizeSceneToMeters } from '../utils/scaleNormalizer.js';
+import { initDeterministicMath, restoreMathRandom } from '../utils/seededRandom.js';
+import physicsEngine from '../services/physicsEngine.js';
+import colliderGenerator from '../utils/colliderGenerator.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname  = path.dirname(__filename);
@@ -15,7 +17,7 @@ const __dirname  = path.dirname(__filename);
 const PARSED_DIR     = process.env.PARSED_DIR     || './parsed';
 const SIMULATION_DIR = process.env.SIMULATION_DIR || './simulations';
 
-await fs.mkdir(SIMULATION_DIR, { recursive: true });
+fs.mkdir(SIMULATION_DIR, { recursive: true }).catch(() => {});
 
 const activeSimulations = new Map();
 
@@ -37,13 +39,20 @@ setInterval(() => {
 }, 60 * 60 * 1000);
 
 // Lấy Y mặt sàn tại vị trí XZ hiện tại của agent bằng raycast xuống.
+// Lấy Y mặt sàn tại vị trí XZ hiện tại của agent bằng raycast xuống.
 // Dùng mỗi physics frame để cập nhật floor Y chính xác khi agent di chuyển.
-function getCurrentFloorY(world, agentPos, sceneFloorHeight, agentBodyToIgnore = null) {
+//
+// [FIX BOUNCE]: Ray PHẢI bắn từ đỉnh đầu agent (bodyCentreY + halfH + 0.5m).
+// Bắn từ giữa người → ray xuất phát BÊN TRONG body → hit leg collider trước
+// → hitY ≈ feetY → targetY sai vài cm → clamp push up/down → bounce.
+function getCurrentFloorY(world, bodyCentreY, agentHalfH, xPos, zPos, sceneFloorHeight, agentBodyToIgnore = null) {
+  const castFromY = bodyCentreY + agentHalfH + 0.5;    // đỉnh đầu + buffer
+  const maxDist   = agentHalfH * 2 + 1.5;              // đủ reach sàn từ trên đầu
   return physicsEngine.getFloorHeightAt(
     world,
-    agentPos[0], agentPos[1], agentPos[2],
+    xPos, castFromY, zPos,
     sceneFloorHeight,
-    5.0,
+    maxDist,
     agentBodyToIgnore
   );
 }
@@ -127,6 +136,11 @@ function buildWalkableGrid(world, bb, floorHeight, agentHeight, capsuleRadius,
       const toi  = hit.toi ?? hit.timeOfImpact;
       const hitY = castFromY - toi;
 
+      // [FIX CEILING BUG] Ceiling guard: chỉ accept hit nằm trong khoảng sàn hợp lệ.
+      // hitY > floorHeight + 1m → bề mặt quá cao (trần hoặc đồ vật cao) → bỏ qua.
+      const MAX_VALID_FLOOR_Y = floorHeight + 1.0;
+      if (hitY > MAX_VALID_FLOOR_Y) continue;
+
       // Chỉ thêm vào walkable nếu tia chạm sàn thật (không phải mặt trên đồ vật)
       if (isFloor(meta) || Math.abs(hitY - floorHeight) < 0.06) {
         walkable.push({ x, z });
@@ -156,6 +170,15 @@ function checkSpawnPoint(x, z, world, floorHeight, agentHeight, capsuleRadius,
     const hitMeta = handleToCollider.get(hit.colliderHandle);
     const toi     = hit.toi ?? hit.timeOfImpact;
     const hitY    = castFromY - toi;
+
+    // [FIX CEILING BUG] Ceiling guard: hitY không được vượt quá floorHeight + 1m.
+    // Nếu không có guard này: raycast từ floorHeight+agentH+0.5 có thể hit trần (nếu
+    // trần có physics collider) trước khi reach sàn → actualFloorY = trần → agent bay.
+    const MAX_VALID_FLOOR_Y = floorHeight + 1.0;
+    if (hitY > MAX_VALID_FLOOR_Y) {
+      // Hit là trần hoặc bề mặt cao bất thường → từ chối điểm này
+      return { valid: false, actualFloorY: floorHeight };
+    }
 
     if (isFloor(hitMeta) || Math.abs(hitY - floorHeight) < 0.06) {
       actualFloorY = hitY; // sàn thật → ghi nhận Y chính xác
@@ -209,7 +232,7 @@ function checkSpawnPoint(x, z, world, floorHeight, agentHeight, capsuleRadius,
 export const startSimulation = async (req, res) => {
   console.log('--- ENTERED startSimulation ROUTE ---');
   try {
-    const { sceneId, agentCount = 10, duration = 30, ageGroupId = 'toddler' } = req.body;
+    const { sceneId, agentCount = 10, duration = 30, ageGroupId = 'early_toddler', simulationSeed = null } = req.body;
 
     if (!sceneId) {
       return res.status(400).json({ error: 'sceneId is required' });
@@ -237,12 +260,15 @@ export const startSimulation = async (req, res) => {
 
     // Chạy simulation bất đồng bộ để không block HTTP response
     (async () => {
+      // ── [Phase 8] Deterministic Simulation Mode ──
+      initDeterministicMath(simulationSeed);
+
       const startTime = Date.now();
 
       try {
         console.log(`[SIM] ──────────────────────────────────────────`);
         console.log(`[SIM] 🚀 Starting simulation ${simulationId}`);
-        console.log(`[SIM]    Scene: ${sceneId}, Agents: ${agentCount}, Duration: ${duration}s, Age: ${ageGroupId}`);
+        console.log(`[SIM]    Scene: ${sceneId}, Agents: ${agentCount}, Duration: ${duration}s, Age: ${ageGroupId}, Seed: ${simulationSeed}`);
 
         // Step 1: Load scene data
         console.log(`[SIM] Step 1/5: Loading scene data...`);
@@ -261,8 +287,13 @@ export const startSimulation = async (req, res) => {
           };
         }
 
-        normalizeSceneToMeters(sceneData);
-
+        // Backward compatibility for old scenes
+        let scaleFactor = sceneData._scaleFactor;
+        if (!scaleFactor) {
+          const scaleInfo = scaleAuthority.detectScale(sceneData);
+          scaleFactor = scaleInfo.factor;
+        }
+        applyScaleToSceneData(sceneData, scaleFactor);
         const simEntry = activeSimulations.get(simulationId);
         if (simEntry) {
           simEntry.scaleFactor = sceneData._scaleFactor || 1.0;
@@ -286,8 +317,17 @@ export const startSimulation = async (req, res) => {
         const isFloor = (c) => {
           if (!c) return false;
           if (c.type === 'floor') return true;
+          // Explicit ceiling/roof/wall type → không bao giờ là sàn
+          if (c.type === 'ceiling' || c.type === 'roof') return false;
 
           const n = (c.name || c.id || '').toLowerCase();
+
+          // [FIX CEILING BUG] Loại trừ trần/tường TRƯỚC khi check pattern sàn.
+          // Không làm bước này: "ceiling_plane", "ceiling_surface" khớp /plane|surface/
+          // → isFloor() = true cho TRẦN → agent spawn lơ lửng ở trên trần nhà.
+          if (/ceiling|plafond|decke|plafon|soffitto|techo|roof|dach/.test(n)) return false;
+          if (/^wall|[_\s]wall|wallpaper|wand|muro|pared/.test(n)) return false;
+
           if (/rug|carpet|mat($|[_\s])/.test(n)) return true;
           if (/floor|vloer|ground|plane|grond|surface/.test(n)) {
             return !/lamp|desk|table|chair|stand|fan|mirror|shelf|cabinet|top|stool|bench|bed|sofa|couch|mattress/.test(n);
@@ -314,12 +354,49 @@ export const startSimulation = async (req, res) => {
           const world     = physicsEngine.createWorld();
           const colliders = colliderGenerator.generateCollidersFromScene(sceneData, world, physicsEngine);
 
+          // [FIX BOUNCE A]: Explicit floor collider.
+          // KCC enableSnapToGround cần collider ngay dưới agent để snap.
+          // Nhiều GLB không export floor mesh thành physics collider → agent drift xuống → bounce.
+          // [FIX CEILING BUG — Bug phụ 2]: Lưu handle vào handleToCollider với type='floor'.
+          // Nếu không đăng ký: hitMeta = undefined → isFloor() = false → spawn check
+          // bỏ qua sàn này → có thể dẫn đến last-resort bắn ray hit trần nhà.
+          let explicitFloorHandle = null;
+          {
+            const fDesc = physicsEngine.rapier.RigidBodyDesc.fixed()
+              .setTranslation(0, floorHeight - 0.05, 0);
+            const fBody = world.createRigidBody(fDesc);
+            const fColl = world.createCollider(
+              physicsEngine.rapier.ColliderDesc.cuboid(100, 0.05, 100)
+                .setFriction(0.9)
+                .setRestitution(0.0),
+              fBody
+            );
+            explicitFloorHandle = fColl.handle;
+          }
+
           // Step physics 1 lần để ổn định handle trước khi build map.
           // deltaTime=0 gây NaN nên dùng default step.
           physicsEngine.step(world);
 
           const handleToCollider = new Map();
-          colliders.forEach(c => { if (c.collider) handleToCollider.set(c.collider.handle, c); });
+          colliders.forEach(c => {
+            if (c.collidersArr) {
+              c.collidersArr.forEach(coll => handleToCollider.set(coll.handle, c));
+            } else if (c.collider) {
+              handleToCollider.set(c.collider.handle, c);
+            }
+          });
+
+          // Đăng ký explicit floor collider sau khi map đã được build
+          if (explicitFloorHandle !== null) {
+            handleToCollider.set(explicitFloorHandle, {
+              type:        'floor',
+              id:          'explicit_floor',
+              name:        'floor',
+              boundingBox: { min: [-100, floorHeight - 0.1, -100], max: [100, floorHeight, 100] },
+              isSoft:      false,
+            });
+          }
 
           // Thêm tường vô hình bao quanh phòng để agent không đi ra ngoài
           if (bb) {
@@ -423,29 +500,46 @@ export const startSimulation = async (req, res) => {
             const cx = bb ? (bb.min[0] + bb.max[0]) / 2 : 0;
             const cz = bb ? (bb.min[2] + bb.max[2]) / 2 : 0;
 
-            // Cast từ cao hơn với max distance lớn hơn để không bỏ sót bề mặt cao
-            const highCastY  = floorHeight + 3.5;
-            const centerRay  = new physicsEngine.rapier.Ray(
-              { x: cx, y: highCastY, z: cz },
+            // [FIX CEILING BUG — Bug chính]: Ray PHẢI bắn từ GẦN SÀN, KHÔNG từ trên cao.
+            //
+            // Code cũ: highCastY = floorHeight + 3.5 (thường = ~3.5m, trên cả trần nhà 2.4m)
+            // → Ray đi xuống HIT TRẦN TRƯỚC khi đến sàn
+            // → actualFloorY = chiều cao trần → agent spawn lơ lửng ở trần nhà
+            //
+            // Fix: bắn từ floorHeight + 0.5 (ngay trên sàn), maxDist ngắn 1.5m
+            // → Ray chỉ có thể hit sàn hoặc đồ vật thấp (không bao giờ hit trần)
+            // → Nếu có đồ vật ở giữa phòng, ta cũng chấp nhận mặt đồ vật đó
+            const lowCastY  = floorHeight + 0.5;
+            const centerRay = new physicsEngine.rapier.Ray(
+              { x: cx, y: lowCastY, z: cz },
               { x: 0, y: -1, z: 0 }
             );
-            const centerHit = world.castRay(centerRay, 5.0, true);
+            const centerHit = world.castRay(centerRay, 1.5, true);
 
             if (centerHit) {
               const toi    = centerHit.toi ?? centerHit.timeOfImpact;
-              actualFloorY = highCastY - toi;
-              console.warn(`[SPAWN] ⚠️ Agent ${i}: center ray hit surface at Y=${actualFloorY.toFixed(4)}`);
+              const hitY   = lowCastY - toi;
+
+              // Ceiling guard: hit phải nằm trong khoảng sàn thực tế (≤ floorHeight + 1m).
+              // Nếu hitY > floorHeight + 1m → vẫn hit đồ vật cao hoặc tính toán sai → fallback về floorHeight.
+              const MAX_SPAWN_SURFACE = floorHeight + 1.0;
+              actualFloorY = hitY <= MAX_SPAWN_SURFACE ? hitY : floorHeight;
+              console.warn(`[SPAWN] ⚠️ Agent ${i}: center ray hit surface at Y=${hitY.toFixed(4)} → using Y=${actualFloorY.toFixed(4)}`);
             } else {
-              // Ray không trúng gì → dùng floorHeight nhưng offset lên cao
-              // để tránh xuyên qua đồ vật ở tâm phòng
-              actualFloorY = floorHeight + ageGroup.height * 0.5;
-              console.warn(`[SPAWN] ⚠️ Agent ${i}: center ray missed, offsetting to Y=${actualFloorY.toFixed(4)}`);
+              // Ray không trúng gì → sàn thật sự trống, dùng floorHeight
+              actualFloorY = floorHeight;
+              console.warn(`[SPAWN] ⚠️ Agent ${i}: center ray missed → using floorHeight=${actualFloorY.toFixed(4)}`);
             }
             spawnPos = [cx, actualFloorY, cz];
           }
 
-          // Đặt agent nhích lên 2cm so với bề mặt để tránh overlap ngay lúc spawn
-          spawnPos[1] = actualFloorY + 0.02;
+          // [FIX P1] Clearance 0.02 → 0.05m.
+          // Report formula: surfaceY + height/2 + 0.05 clearance.
+          // 0.02m was insufficient — thin-floor floating-point rounding caused
+          // the capsule's legs to overlap the mesh by 1-2mm, triggering a
+          // physics separation impulse → agent bounced upward every frame.
+          // 0.05m gives 5cm air gap that KCC snap-to-ground then closes smoothly.
+          spawnPos[1] = actualFloorY + 0.05;
 
           if (i < 3) {
             console.log(`[SPAWN DEBUG] Agent ${i}: floorHeight=${floorHeight.toFixed(4)}, actualFloorY=${actualFloorY.toFixed(4)}, finalY=${spawnPos[1].toFixed(4)}, XZ=[${spawnPos[0].toFixed(2)}, ${spawnPos[2].toFixed(2)}]`);
@@ -472,9 +566,34 @@ export const startSimulation = async (req, res) => {
           if (agentBodyObj.colliders.torso) handleToBodyPart.set(agentBodyObj.colliders.torso.handle, 'torso');
           if (agentBodyObj.colliders.legs)  handleToBodyPart.set(agentBodyObj.colliders.legs.handle,  'legs');
 
+          // [FIX P4] Create hand interaction sensors.
+          // Two kinematic sensor spheres (left + right hand) are created here so
+          // they share the same Rapier world as the agent. Their positions are
+          // updated every frame by agent._updateHandSensors() (called inside
+          // agent.update()) BEFORE physicsEngine.step(), so drainIntersectionEvents
+          // fires with the hands already in their correct frame position.
+          const handSensors = physicsEngine.createHandSensors(
+            world,
+            ageGroup.height,
+            ageGroup.capsuleRadius,
+            ageGroup.anthropometry || null
+          );
+          agent.handSensors = handSensors;
+
+          // Map hand sensor handles → agent (for intersection event routing)
+          const handSensorHandles = new Map();
+          if (handSensors?.left?.collider) {
+            handleToAgent.set(handSensors.left.collider.handle, agent);
+            handSensorHandles.set(handSensors.left.collider.handle, 'left');
+          }
+          if (handSensors?.right?.collider) {
+            handleToAgent.set(handSensors.right.collider.handle, agent);
+            handSensorHandles.set(handSensors.right.collider.handle, 'right');
+          }
+
           const eventQueue = new physicsEngine.rapier.EventQueue(true);
 
-          simWorlds.push({ world, agent, colliders, handleToCollider, handleToAgent, handleToBodyPart, eventQueue });
+          simWorlds.push({ world, agent, colliders, handleToCollider, handleToAgent, handleToBodyPart, handSensorHandles, eventQueue });
         }
 
         console.log(`[SIM]    ✅ Created ${simWorlds.length} independent worlds (1 agent each)`);
@@ -505,29 +624,33 @@ export const startSimulation = async (req, res) => {
           }
 
           for (const sim of simWorlds) {
-            const { world, agent, colliders, handleToCollider, handleToAgent, handleToBodyPart, eventQueue } = sim;
+            const { world, agent, colliders, handleToCollider, handleToAgent, handleToBodyPart, handSensorHandles, eventQueue } = sim;
 
-            // Cập nhật floor Y theo vị trí hiện tại và clamp agent không bay/xuyên sàn
+            // [FIX BOUNCE B+C]: Clamp agent Y — CHỈ push UP (ngăn xuyên sàn).
+            // KHÔNG push DOWN. KCC + gravity + snap-to-ground xử lý hướng xuống.
+            // Push DOWN là nguyên nhân bounce: nếu targetY sai ±2cm,
+            // frame A push UP → frame B push DOWN → oscillate vô tận.
             if (agent.body && !agent.fallState) {
-              const agentPos      = agent.getPosition();
-              const currentFloorY = getCurrentFloorY(world, agentPos, floorHeight, agent.body);
-              const pos           = agent.body.translation();
-              const targetY       = currentFloorY + (ageGroup.height / 2) + 0.02;
-              const maxFloorY     = floorHeight + ageGroup.height;
-              const clampedTargetY = Math.min(targetY, maxFloorY);
+              const pos        = agent.body.translation();
+              const agentHalfH = ageGroup.height / 2;
+              // Gọi với đúng signature mới: (world, bodyCentreY, halfH, x, z, floorHeight, body)
+              const currentFloorY = getCurrentFloorY(
+                world, pos.y, agentHalfH, pos.x, pos.z, floorHeight, agent.body
+              );
+              // targetY = body CENTRE khi đứng trên sàn
+              const targetY = currentFloorY + agentHalfH + 0.02;
 
-              if (pos.y < clampedTargetY - 0.05) {
-                agent.setSafeTranslation({ x: pos.x, y: clampedTargetY, z: pos.z });
+              // CHỈ push UP nếu agent xuyên dưới sàn (tolerance 3cm)
+              if (pos.y < targetY - 0.03) {
+                agent.setSafeTranslation({ x: pos.x, y: targetY, z: pos.z });
               }
 
+              // Safety cap riêng cho climbing
               const currentAction = agent.currentBehavior?.action || '';
-              const isClimbing = ['climb_on', 'climb', 'climb_approach', 'climb_reach', 'climb_pull', 'climb_mount', 'step_up'].includes(currentAction);
-
-              if (!isClimbing && pos.y > clampedTargetY + 0.05) {
-                agent.setSafeTranslation({ x: pos.x, y: clampedTargetY, z: pos.z });
-              } else if (isClimbing && pos.y > clampedTargetY + 0.5) {
-                // Safety cap: kể cả đang trèo cũng không được cao quá 0.5m trên standing height
-                agent.setSafeTranslation({ x: pos.x, y: clampedTargetY, z: pos.z });
+              const isClimbing = ['climb_on', 'climb', 'climb_approach', 'climb_reach',
+                                   'climb_pull', 'climb_mount', 'step_up'].includes(currentAction);
+              if (isClimbing && pos.y > currentFloorY + ageGroup.height + 1.5) {
+                agent.setSafeTranslation({ x: pos.x, y: targetY, z: pos.z });
                 agent.fallState = null;
                 agent.state = 'IDLE';
                 if (agent.currentBehavior) agent.currentBehavior.completed = true;
@@ -660,6 +783,23 @@ export const startSimulation = async (req, res) => {
                 try {
                   if (!intersecting) return;
 
+                  // [FIX P4] Check hand sensor intersections FIRST.
+                  // Hand sensors are kinematic sensors — they appear in
+                  // drainIntersectionEvents, not drainCollisionEvents.
+                  // Route to agent.handleHandSensorIntersection() for
+                  // affordance-based action selection (Priority 5).
+                  const handSide = handSensorHandles?.get(handle1) || handSensorHandles?.get(handle2);
+                  if (handSide) {
+                    const hitAgent   = handleToAgent.get(handle1) || handleToAgent.get(handle2);
+                    // The other handle must be a scene object (not agent body part)
+                    const sceneObjHandle = handSensorHandles?.has(handle1) ? handle2 : handle1;
+                    const sceneObj   = handleToCollider.get(sceneObjHandle);
+                    if (hitAgent && sceneObj) {
+                      hitAgent.handleHandSensorIntersection(handSide, sceneObj);
+                    }
+                    return;
+                  }
+
                   const agent1    = handleToAgent.get(handle1);
                   const agent2    = handleToAgent.get(handle2);
                   const collider1 = handleToCollider.get(handle1);
@@ -705,6 +845,9 @@ export const startSimulation = async (req, res) => {
             if (step % 30 === 0) {
               entry.progress = Math.round((step / totalSteps) * 100);
             }
+            // position[1] = CENTER Y của capsule (body.translation().y từ Rapier).
+            // Tức là: position[1] = floorHeight + agentHeight/2 + epsilon khi đứng trên sàn.
+            // Canvas3D.tsx (LiveAgent type) đã ghi chú "CENTER of agent capsule".
             entry.agentPositions = allAgents.map(a => {
               const pos = a.getPosition();
               let posArray = [0, 0, 0];
@@ -743,6 +886,9 @@ export const startSimulation = async (req, res) => {
           return {
             agentId:    agent.id,
             ageGroupId: agent.ageGroupId,
+            // positions[i] = [x, centerY, z] trong Rapier physics space.
+            // centerY = body.translation().y = floorHeight + agentHeight/2 + epsilon (khi đứng sàn).
+            // Canvas3D.tsx giải mã: footY_3js = (centerY - config.floorHeight) - agentHeight/2
             positions:  Array.isArray(sampledTraj) ? sampledTraj : [],
             actionLog:  sampledLog,
             collisions: agentEvents.map(e => e.position || [0, 0, 0]),
@@ -764,6 +910,17 @@ export const startSimulation = async (req, res) => {
             ageGroup: ageGroup.name, ageGroupId,
             scaleFactor: sceneData._scaleFactor || 1.0,
             fps: 60,
+            // ─── Y-CONVENTION CONTRACT (phải nhất quán với Canvas3D.tsx) ───────
+            // floorHeight: vị trí sàn trong physics space (Rapier world-space Y).
+            // Frontend dùng giá trị này làm offsetXYZ.y để chuyển đổi toạ độ:
+            //   worldY_threejs = physicsY - floorHeight
+            // Kết quả: sàn luôn nằm tại Y=0 trong Three.js world space.
+            //
+            // positions[] trong trajectories lưu CENTER Y của physics body
+            //   (= body.translation().y từ Rapier, KHÔNG phải foot Y).
+            // Frontend giải mã:
+            //   footY_threejs = (centerY - floorHeight) - agentHeight/2
+            floorHeight,
           },
           trajectories,
           collisionEvents: hazardEvents,
@@ -868,6 +1025,7 @@ export const startSimulation = async (req, res) => {
         activeSimulations.set(simulationId, { status: 'error', progress: 0, error: err.message });
       } finally {
         clearTimeout(safetyTimeout);
+        restoreMathRandom();
       }
     })();
 

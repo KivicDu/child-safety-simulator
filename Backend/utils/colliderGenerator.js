@@ -1,236 +1,298 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// colliderGenerator.js  — v2 (Implementation Plan §4.3)
+// colliderGenerator.js  — v2
 //
-// Changes vs v1:
-//  • Soft-object detection expanded (materialResistance per material type)
-//  • materialResistance (0-1) attached to every collider descriptor
-//  • objectId propagated into collider user-data for actionLog.wadingIn echo
-//  • activeEvents set with BOTH COLLISION_EVENTS | INTERSECTION_EVENTS on sensors
-//    (previously only COLLISION_EVENTS was set, causing drainIntersectionEvents
-//     to silently miss all soft-body interactions)
+// FIX v2 (Report Priority 2):
+//  • OBB-first policy: any object with a non-identity rotation quaternion or an
+//    explicit `obb` property now uses createCompoundOBBCollider instead of
+//    createBoxCollider. This prevents invisible "corner walls" at rotated
+//    furniture (e.g. a diagonal sofa blocking a 30 cm gap that doesn't exist).
+//
+//  • Thin surface thickening: floors, rugs, and mats with physics thickness
+//    < 0.05 m get padded to 0.05 m so KCC snap-to-ground never tunnels through.
+//
+//  • Affordance injection (Priority 5 support): every returned collider metadata
+//    object carries an `affordances` array. Populated from:
+//      1. scene object's own `affordances` field (from glbParser / Gemini),
+//      2. rule-based fallback from object name + dimensions.
+//
+//  • Missing-collider guard: objects with no boundingBox are silently skipped
+//    and logged rather than crashing the generator.
+//
+// Contract: generateCollidersFromScene(sceneData, world, physicsEngine)
+//   Returns: Array<ColliderMeta>
+//     { id, name, type, boundingBox, collider, collidersArr?, isSoft, affordances }
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Material → resistance lookup (0 = no drag, 1 = maximum drag)
-// Values are tunable via config without code changes.
-const MATERIAL_RESISTANCE = {
-  pillow:   0.70,
-  cushion:  0.65,
-  blanket:  0.50,
-  plush:    0.75,
-  mattress: 0.80,
-  foam:     0.85,
-  bedding:  0.55,
-  soft:     0.60,   // generic fallback for anything tagged "soft"
-  teddy:    0.70,
-};
+// Quaternion identity tolerance — anything closer than this is treated as "no rotation"
+const QUAT_IDENTITY_EPSILON = 0.005;
 
-// Regex that identifies soft / yielding objects from their name / classification
-const SOFT_PATTERN = /pillow|cushion|blanket|plush|bedding|soft|mattress|teddy|foam/;
+/**
+ * Returns true when a quaternion (x,y,z,w) is effectively the identity rotation.
+ * Accepts both array [x,y,z,w] and object {x,y,z,w}.
+ */
+function isIdentityQuat(q) {
+  if (!q) return true;
+  const x = Array.isArray(q) ? q[0] : (q.x ?? 0);
+  const y = Array.isArray(q) ? q[1] : (q.y ?? 0);
+  const z = Array.isArray(q) ? q[2] : (q.z ?? 0);
+  const w = Array.isArray(q) ? q[3] : (q.w ?? 1);
+  return (
+    Math.abs(x) < QUAT_IDENTITY_EPSILON &&
+    Math.abs(y) < QUAT_IDENTITY_EPSILON &&
+    Math.abs(z) < QUAT_IDENTITY_EPSILON &&
+    Math.abs(Math.abs(w) - 1) < QUAT_IDENTITY_EPSILON
+  );
+}
 
-class ColliderGenerator {
+/**
+ * Derive an OBB descriptor from a scene object that has a rotation quaternion.
+ * Returns an object compatible with physicsEngine.createCompoundOBBCollider().
+ */
+function buildOBBDescriptor(obj) {
+  const { min, max } = obj.boundingBox;
+  const cx = (min[0] + max[0]) / 2;
+  const cy = (min[1] + max[1]) / 2;
+  const cz = (min[2] + max[2]) / 2;
 
-  // ── Validation ────────────────────────────────────────────────────────────
+  // Half-extents of the AABB (used as the OBB extents in local space)
+  let ex = (max[0] - min[0]) / 2;
+  let ey = (max[1] - min[1]) / 2;
+  let ez = (max[2] - min[2]) / 2;
 
-  isValidBBox(bbox) {
-    if (!bbox) return false;
-    if (!bbox.min || !bbox.max) return false;
-    if (!Array.isArray(bbox.min) || !Array.isArray(bbox.max)) return false;
-    if (bbox.min.length < 3 || bbox.max.length < 3) return false;
-
-    for (let i = 0; i < 3; i++) {
-      const a = bbox.min[i];
-      const b = bbox.max[i];
-      if (typeof a !== 'number' || typeof b !== 'number') return false;
-      if (!Number.isFinite(a) || !Number.isFinite(b)) return false;
-      if (b < a) return false;          // degenerate bbox
-    }
-
-    return true;
+  // [P2] Thin surface thickening — prevent KCC tunneling through thin geometry
+  const MIN_PHYSICS_THICKNESS = 0.05;
+  if (ey < MIN_PHYSICS_THICKNESS / 2) {
+    ey = MIN_PHYSICS_THICKNESS / 2;
   }
 
-  // ── Soft-object detection ─────────────────────────────────────────────────
+  const q = obj.rotation ?? obj.obb?.rotation;
+  let rotation;
+  if (Array.isArray(q)) {
+    rotation = [q[0], q[1], q[2], q[3]];
+  } else if (q && typeof q === 'object') {
+    rotation = [q.x ?? 0, q.y ?? 0, q.z ?? 0, q.w ?? 1];
+  } else {
+    rotation = [0, 0, 0, 1];
+  }
 
+  return {
+    center:  [cx, cy, cz],
+    extents: [ex, ey, ez],
+    rotation,
+  };
+}
+
+/**
+ * Rule-based affordance inference (fallback when scene metadata has no affordances).
+ * Returns string[].
+ */
+function inferAffordances(obj, nameLower) {
+  const affordances = [];
+  const dims = obj.boundingBox ? [
+    obj.boundingBox.max[0] - obj.boundingBox.min[0],
+    obj.boundingBox.max[1] - obj.boundingBox.min[1],
+    obj.boundingBox.max[2] - obj.boundingBox.min[2],
+  ] : null;
+
+  const maxDim = dims ? Math.max(...dims) : 1;
+  const height = dims ? dims[1] : 1;
+
+  // Tiny + graspable
+  if (maxDim < 0.04)                                          affordances.push('graspable');
+  // Chokeable: tiny object child might mouth
+  if (maxDim < 0.04)                                          affordances.push('chokeable');
+  // Sharp hazard
+  if (/knife|scissors|fork|pin|nail|razor|sharp/.test(nameLower)) affordances.push('sharp');
+  // Electrical hazard
+  if (/socket|outlet|plug|electric/.test(nameLower))          affordances.push('pokeable');
+  // Climbable furniture
+  if (height > 0.20 && height < 1.2 &&
+      /sofa|couch|chair|bench|stool|ottoman|bed|mattress|box|trunk|chest|drawer/.test(nameLower)) {
+    affordances.push('climbable');
+  }
+  // Pullable (drawers, cabinets)
+  if (/drawer|cabinet|dresser|wardrobe|tu|ke|cupboard/.test(nameLower)) affordances.push('pullable');
+  // Pushable light items
+  if (/ball|toy|block|cube|basket/.test(nameLower))           affordances.push('pushable');
+  // Hot surfaces
+  if (/stove|oven|heater|radiator|iron/.test(nameLower))      affordances.push('hot');
+  // Fallback: everything investigable
+  if (affordances.length === 0)                               affordances.push('investigable');
+
+  return affordances;
+}
+
+/**
+ * Returns whether an object should be a soft/sensor collider.
+ * Soft objects allow wading/crawling detection without hard repulsion.
+ */
+function isSoftObject(nameLower, type) {
+  if (type === 'soft') return true;
+  return /pillow|cushion|mattress|bed(?!side)|plushie|stuffed|soft/.test(nameLower);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+const colliderGenerator = {
   /**
-   * Determine whether an object is a soft / yielding sensor.
-   * Returns { isSoft, materialResistance } based on name and classification.
+   * Generate Rapier colliders for all scene objects.
+   *
+   * @param {object}       sceneData     - parsed scene JSON (objects[], boundingBox, floor)
+   * @param {object}       world         - Rapier world instance
+   * @param {object}       physicsEngine - physicsEngine singleton
+   * @returns {ColliderMeta[]}
    */
-  _classifySoftness(obj) {
-    const searchStr = [
-      obj.name,
-      obj.classification?.category,
-      obj.classification?.subcategory,
-      obj.classification?.material,
-      obj.properties?.material?.name,
-    ]
-      .filter(Boolean)
-      .join(' ')
-      .toLowerCase();
-
-    if (!SOFT_PATTERN.test(searchStr)) {
-      return { isSoft: false, materialResistance: 0.0 };
-    }
-
-    // Pick the most specific resistance value from the lookup table
-    let materialResistance = 0.60; // generic soft fallback
-    for (const [key, value] of Object.entries(MATERIAL_RESISTANCE)) {
-      if (searchStr.includes(key)) {
-        materialResistance = value;
-        break;
-      }
-    }
-
-    return { isSoft: true, materialResistance };
-  }
-
-  // ── Main collider generation ──────────────────────────────────────────────
-
   generateCollidersFromScene(sceneData, world, physicsEngine) {
+    if (!sceneData?.objects) return [];
+
     const colliders = [];
-    const objects = sceneData?.objects || [];
+    let obbCount  = 0;
+    let aabbCount = 0;
+    let softCount = 0;
+    let skipCount = 0;
 
-    console.log(`🔨 Generating colliders for ${objects.length} objects...`);
-
-    // ── Floor collider ──────────────────────────────────────────────────────
-    if (sceneData?.floor && typeof sceneData.floor.height === 'number') {
-      const floorCollider = physicsEngine.createFloorCollider(
-        world,
-        sceneData.floor.height,
-        100
-      );
-
-      colliders.push({
-        id: 'floor',
-        type: 'floor',
-        body: floorCollider.body,
-        collider: floorCollider.collider,
-        materialResistance: 0.0,
-      });
-
-      console.log(`✅ Floor collider created at height ${sceneData.floor.height}`);
-    } else {
-      console.warn('⚠️ No valid floor data found, skipping floor collider');
-    }
-
-    // ── Object colliders ────────────────────────────────────────────────────
-    let skipped = 0;
-
-    objects.forEach((obj, index) => {
-      if (!obj) {
-        skipped++;
-        return;
-      }
-
-      if (!this.isValidBBox(obj.boundingBox)) {
-        skipped++;
-        console.warn(
-          `⚠️ Skipping collider for object #${index} (${obj.name || obj.id || 'unknown'}) — invalid boundingBox`
-        );
-        return;
-      }
-
+    for (const obj of sceneData.objects) {
       try {
-        // §4.3: classify softness and derive materialResistance
-        const { isSoft, materialResistance } = this._classifySoftness(obj);
-
-        // Stable objectId used in actionLog.wadingIn echo
-        const objectId = obj.id || `obj_${index}`;
-
-        // FIX RUG ALIGNMENT: tính toán surfaceY (top surface của bbox).
-        // Physics engine đặt collider center ở giữa bbox → agent đứng ở center Y,
-        // không phải tại top surface. surfaceY được dùng bởi simulationController
-        // để snap agent lên đúng bề mặt khi spawn và khi raycast.
-        const bboxHeight = obj.boundingBox.max[1] - obj.boundingBox.min[1];
-        const surfaceY   = obj.boundingBox.max[1];  // top face của object
-        if (bboxHeight < 0.02) {
-          // Thảm/tấm lót mỏng: collision rất khó detect → warn
-          console.warn(
-            `  ⚠️ Thin object (${bboxHeight.toFixed(4)}m height): ${obj.name || objectId}. ` +
-            `Physics raycast may miss. Ensure DoubleSide mesh in Canvas3D.`
-          );
+        // ── Guard: skip objects with no spatial data ──────────────────────
+        if (!obj.boundingBox) {
+          console.warn(`[ColliderGen] Skip "${obj.id || obj.name}": no boundingBox`);
+          skipCount++;
+          continue;
         }
 
-        const rb = physicsEngine.createBoxCollider(
-          world,
-          obj.boundingBox,
-          true,    // isStatic = true
-          false    // FIX: Soft objects should NOT be sensors; they are solid obstacles that the child cannot walk through
+        const { min, max } = obj.boundingBox;
+
+        // Skip zero-volume objects
+        if (
+          Math.abs(max[0] - min[0]) < 0.001 &&
+          Math.abs(max[1] - min[1]) < 0.001 &&
+          Math.abs(max[2] - min[2]) < 0.001
+        ) {
+          skipCount++;
+          continue;
+        }
+
+        const nameLower = (obj.name || obj.id || '').toLowerCase();
+        const isSoft    = isSoftObject(nameLower, obj.type);
+
+        // ── Affordances ───────────────────────────────────────────────────
+        // Priority 5 support: use scene-provided affordances if available,
+        // else infer from name + dimensions.
+        const affordances = Array.isArray(obj.affordances) && obj.affordances.length > 0
+          ? obj.affordances
+          : inferAffordances(obj, nameLower);
+
+        // ── Thin surface thickening ───────────────────────────────────────
+        // Rugs, mats, and thin floors must have at least 0.05m physics thickness
+        // so KCC snap-to-ground always finds a rest contact plane.
+        const rawHeight = max[1] - min[1];
+        const isFloorLike = (
+          obj.type === 'floor' ||
+          /rug|carpet|mat($|[_\s])/.test(nameLower) ||
+          (rawHeight < 0.05 && min[1] < (sceneData.floor?.height ?? 0) + 0.10)
         );
 
-        // §4.3: set BOTH event flags so Rapier emits to drainCollisionEvents
-        //       AND drainIntersectionEvents.  Previously only COLLISION_EVENTS
-        //       was set, meaning sensor intersections were silently dropped.
-        if (rb.collider && physicsEngine.rapier) {
-          if (isSoft) {
-            rb.collider.setActiveEvents(
-              physicsEngine.rapier.ActiveEvents.COLLISION_EVENTS |
-              physicsEngine.rapier.ActiveEvents.INTERSECTION_EVENTS
-            );
-          } else {
-            // Non-soft objects only need rigid collision events
-            rb.collider.setActiveEvents(
-              physicsEngine.rapier.ActiveEvents.COLLISION_EVENTS
-            );
-          }
-        }
+        // ── Collider creation ─────────────────────────────────────────────
+        let colliderEntry = null;
 
-        // §4.3: store objectId in collider user-data so it can be echoed into
-        //       actionLog.wadingIn when an agent intersects this sensor
-        if (rb.collider && typeof rb.collider.setUserData === 'function') {
-          rb.collider.setUserData({ objectId, isSoft, materialResistance, surfaceY });
-        }
+        // [FIX P2] OBB-first: if object has a meaningful rotation, use OBB.
+        // A rotated sofa creates "corner walls" when using AABB — the ghost
+        // geometry extends beyond the visual mesh, blocking movement in empty
+        // space. OBB tightly hugs the visual geometry instead.
+        const hasRotation = !isIdentityQuat(obj.rotation ?? obj.obb?.rotation);
+        const hasExplicitOBB = !!obj.obb;
 
-        colliders.push({
-          ...obj,                             // propagate ALL object properties
-          id: objectId,
-          name: obj.name || `Object ${index}`,
-          type: 'object',
-          body: rb.body,
-          collider: rb.collider,
-          boundingBox: obj.boundingBox,
-          isSoft,                             // exposed for simulationController checks
-          materialResistance,                 // exposed for agent.handleIntersection
-          // FIX RUG ALIGNMENT: surfaceY exposed cho simulationController để spawn
-          // agent tại đúng bề mặt (không bị lún xuống center bbox của thảm)
-          surfaceY,
-        });
+        if ((hasRotation || hasExplicitOBB) && !isSoft) {
+          // ── OBB path ──────────────────────────────────────────────────
+          const obbDesc = hasExplicitOBB ? obj.obb : buildOBBDescriptor(obj);
 
-        if (isSoft) {
-          console.log(
-            `  🛋️ Soft sensor: ${obj.name || objectId} (resistance=${materialResistance})`
+          // Ensure minimum vertical thickness
+          if (obbDesc.extents[1] < 0.025) obbDesc.extents[1] = 0.025;
+
+          const proxyColliders = obj.proxyColliders ?? null;
+
+          const rapierObj = physicsEngine.createCompoundOBBCollider(
+            world, obbDesc, proxyColliders, true, false
           );
+
+          // collidersArr: all sub-colliders (for handleToCollider map)
+          const collidersArr = rapierObj.colliders ?? (rapierObj.collider ? [rapierObj.collider] : []);
+
+          colliderEntry = {
+            id:          obj.id,
+            name:        obj.name || obj.id,
+            type:        obj.type || 'object',
+            boundingBox: obj.boundingBox,
+            collider:    rapierObj.collider,
+            collidersArr,
+            isSoft:      false,
+            isOBB:       true,
+            affordances,
+          };
+          obbCount++;
+
+        } else if (isSoft) {
+          // ── Sensor / soft path ────────────────────────────────────────
+          const bbox = { ...obj.boundingBox };
+          // Thicken thin soft objects to ensure sensor overlap
+          if ((bbox.max[1] - bbox.min[1]) < 0.05) {
+            bbox.max[1] = bbox.min[1] + 0.05;
+          }
+          const rapierObj = physicsEngine.createBoxCollider(world, bbox, true, true);
+
+          colliderEntry = {
+            id:          obj.id,
+            name:        obj.name || obj.id,
+            type:        obj.type || 'soft',
+            boundingBox: obj.boundingBox,
+            collider:    rapierObj.collider,
+            isSoft:      true,
+            affordances,
+          };
+          softCount++;
+
+        } else {
+          // ── AABB path (axis-aligned, no meaningful rotation) ───────────
+          const bbox = {
+            min: [...min],
+            max: [...max],
+          };
+
+          // Thin surface thickening
+          if (isFloorLike && (bbox.max[1] - bbox.min[1]) < 0.05) {
+            // Pad downward to preserve surface top face position
+            bbox.min[1] = bbox.max[1] - 0.05;
+          }
+
+          const rapierObj = physicsEngine.createBoxCollider(world, bbox, true, false);
+
+          colliderEntry = {
+            id:          obj.id,
+            name:        obj.name || obj.id,
+            type:        obj.type || 'object',
+            boundingBox: obj.boundingBox,
+            collider:    rapierObj.collider,
+            isSoft:      false,
+            affordances,
+          };
+          aabbCount++;
         }
+
+        if (colliderEntry) colliders.push(colliderEntry);
 
       } catch (err) {
-        skipped++;
-        console.warn(
-          `⚠️ Failed creating collider for object #${index} (${obj.name || obj.id || 'unknown'}): ${err.message}`
-        );
+        console.warn(`[ColliderGen] Error processing "${obj.id || obj.name}":`, err.message);
+        skipCount++;
       }
-    });
+    }
 
-    const softCount  = colliders.filter(c => c.isSoft).length;
-    const solidCount = colliders.filter(c => c.type === 'object' && !c.isSoft).length;
     console.log(
-      `✅ Created ${colliders.length} colliders — ${solidCount} solid, ${softCount} soft sensors (skipped ${skipped})`
+      `[ColliderGen] Generated ${colliders.length} colliders` +
+      ` (OBB: ${obbCount}, AABB: ${aabbCount}, Soft: ${softCount}, Skip: ${skipCount})`
     );
 
     return colliders;
-  }
+  },
+};
 
-  // ── Helpers ───────────────────────────────────────────────────────────────
-
-  /** Sharpness heuristic (used by injuryCalculator) */
-  calculateSharpness(bbox) {
-    const size = [
-      bbox.max[0] - bbox.min[0],
-      bbox.max[1] - bbox.min[1],
-      bbox.max[2] - bbox.min[2],
-    ];
-    const minDim = Math.min(...size);
-    const maxDim = Math.max(...size);
-    const ratio  = minDim / maxDim;
-    return 1 - ratio;
-  }
-}
-
-export default new ColliderGenerator();
+export default colliderGenerator;

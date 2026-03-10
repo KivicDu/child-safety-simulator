@@ -72,7 +72,7 @@ const Simulator = () => {
   const [modelPath, setModelPath] = useState<string>("");
   const [sceneData, setSceneData] = useState<any>(null);
   const [simulationPlayback, setSimulationPlayback] = useState<any>(null);
-  const [ageGroup, setAgeGroup] = useState<string>("Toddler (1-3y)");
+  const [ageGroup, setAgeGroup] = useState<string>("Early Toddler (1-2y)");
   const [agentCount, setAgentCount] = useState<number>(10);
   const [duration, setDuration] = useState<number>(30);
   const [running, setRunning] = useState<boolean>(false);
@@ -192,10 +192,10 @@ const Simulator = () => {
       // Map ageGroup to ageGroupId
       const ageGroupMap: { [key: string]: string } = {
         "Infant (0-1y)": "infant",
-        "Toddler (1-3y)": "toddler",
+        "Early Toddler (1-2y)": "early_toddler",
+        "Late Toddler (2-3y)": "late_toddler",
         "Preschool (3-5y)": "preschool",
-        "School (6-10y)": "school_age",
-        "Preteen (10-14y)": "preteen",
+        "Child (6-10y)": "child",
       };
 
       // Start simulation
@@ -208,7 +208,7 @@ const Simulator = () => {
         },
         body: JSON.stringify({
           sceneId,
-          ageGroupId: ageGroupMap[ageGroup] || "toddler",
+          ageGroupId: ageGroupMap[ageGroup] || "early_toddler",
           duration,
           agentCount,
         }),
@@ -474,14 +474,14 @@ const Simulator = () => {
       {/* --- Main Simulator Interface --- */}
       <section
         id="simulator"
-        className="relative z-10 min-h-screen pt-24 pb-20 px-8"
+        className="relative z-10 min-h-screen pt-20 pb-16 px-5"
       >
-        <div className="max-w-7xl mx-auto">
-          <div className="mb-10">
-            <span className="text-sm font-bold text-pink-400 tracking-widest uppercase">
+        <div className="max-w-6xl mx-auto">
+          <div className="mb-6">
+            <span className="text-xs font-bold text-pink-400 tracking-widest uppercase">
               3D Environment
             </span>
-            <h2 className="text-4xl font-black text-slate-700 mt-1">
+            <h2 className="text-2xl font-black text-slate-700 mt-1">
               Simulator Controls
             </h2>
           </div>
@@ -494,14 +494,14 @@ const Simulator = () => {
           )}
 
           {/* Control Panel */}
-          <div className="glass-panel p-8 mb-8 space-y-4">
-            <div className="flex flex-wrap gap-6 items-end">
+          <div className="glass-panel p-5 mb-6 space-y-3">
+            <div className="flex flex-wrap gap-4 items-end">
               {/* File Upload */}
               <div>
-                <label className="block text-sm font-bold text-gray-600 mb-2">
+                <label className="block text-xs font-bold text-gray-600 mb-1.5">
                   📂 3D Model (GLB/GLTF)
                 </label>
-                <label className="cursor-pointer bg-white px-6 py-3 rounded-xl shadow-sm border-2 border-dashed border-pink-300 hover:border-pink-500 transition font-bold inline-block">
+                <label className="cursor-pointer bg-white px-4 py-2 rounded-xl shadow-sm border-2 border-dashed border-pink-300 hover:border-pink-500 transition font-bold inline-block text-sm">
                   <input
                     type="file"
                     accept=".glb,.gltf"
@@ -517,25 +517,25 @@ const Simulator = () => {
 
               {/* Age Group */}
               <div>
-                <label className="block text-sm font-bold text-gray-600 mb-2">
+                <label className="block text-xs font-bold text-gray-600 mb-1.5">
                   👶 Age Group
                 </label>
                 <select
                   value={ageGroup}
                   onChange={(e) => setAgeGroup(e.target.value)}
-                  className="px-4 py-3 rounded-xl border-2 border-pink-200 font-bold bg-white"
+                  className="px-3 py-2 rounded-xl border-2 border-pink-200 font-bold bg-white text-sm"
                 >
                   <option>Infant (0-1y)</option>
-                  <option>Toddler (1-3y)</option>
+                  <option>Early Toddler (1-2y)</option>
+                  <option>Late Toddler (2-3y)</option>
                   <option>Preschool (3-5y)</option>
-                  <option>School (6-10y)</option>
-                  <option>Preteen (10-14y)</option>
+                  <option>Child (6-10y)</option>
                 </select>
               </div>
 
               {/* Agent Count */}
               <div>
-                <label className="block text-sm font-bold text-gray-600 mb-2">
+                <label className="block text-xs font-bold text-gray-600 mb-1.5">
                   🤖 Agents
                 </label>
                 <input
@@ -544,13 +544,13 @@ const Simulator = () => {
                   max="20"
                   value={agentCount}
                   onChange={(e) => setAgentCount(Number(e.target.value))}
-                  className="w-32 px-4 py-3 rounded-xl border-2 border-pink-200 font-bold bg-white"
+                  className="w-24 px-3 py-2 rounded-xl border-2 border-pink-200 font-bold bg-white text-sm"
                 />
               </div>
 
               {/* Duration */}
               <div>
-                <label className="block text-sm font-bold text-gray-600 mb-2">
+                <label className="block text-xs font-bold text-gray-600 mb-1.5">
                   ⏱️ Duration (s)
                 </label>
                 <input
@@ -559,7 +559,7 @@ const Simulator = () => {
                   max="30"
                   value={duration}
                   onChange={(e) => setDuration(Number(e.target.value))}
-                  className="w-32 px-4 py-3 rounded-xl border-2 border-pink-200 font-bold bg-white"
+                  className="w-24 px-3 py-2 rounded-xl border-2 border-pink-200 font-bold bg-white text-sm"
                 />
               </div>
 
@@ -567,17 +567,17 @@ const Simulator = () => {
               <button
                 onClick={startSimulation}
                 disabled={running || !uploadedFile}
-                className="px-8 py-4 rounded-xl font-black shadow-lg bg-gradient-to-r from-yellow-400 to-orange-500 text-white hover:from-yellow-300 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                className="px-6 py-2.5 rounded-xl font-black shadow-lg bg-gradient-to-r from-yellow-400 to-orange-500 text-white hover:from-yellow-300 transition-all disabled:opacity-50 disabled:cursor-not-allowed text-sm"
               >
                 {running ? "⏳ Running..." : "🚀 Run Simulation"}
               </button>
             </div>
 
             {/* View Tools Row */}
-            <div className="flex flex-wrap gap-3 mt-4 pt-4 border-t border-pink-100">
+            <div className="flex flex-wrap gap-2 pt-3 border-t border-pink-100">
               <button
                 onClick={() => setIsBabyView(!isBabyView)}
-                className={`px-5 py-2.5 rounded-xl font-bold text-sm transition-all ${
+                className={`px-4 py-2 rounded-xl font-bold text-xs transition-all ${
                   isBabyView
                     ? "bg-gradient-to-r from-violet-500 to-purple-500 text-white shadow-lg shadow-purple-200/50"
                     : "bg-white/80 text-gray-600 hover:bg-violet-50 hover:text-violet-600 border border-gray-200"
@@ -587,7 +587,7 @@ const Simulator = () => {
               </button>
               <button
                 onClick={handleScreenshot}
-                className="px-5 py-2.5 rounded-xl font-bold text-sm bg-white/80 text-gray-600 hover:bg-emerald-50 hover:text-emerald-600 border border-gray-200 transition-all"
+                className="px-4 py-2 rounded-xl font-bold text-xs bg-white/80 text-gray-600 hover:bg-emerald-50 hover:text-emerald-600 border border-gray-200 transition-all"
               >
                 📸 Screenshot
               </button>
@@ -596,14 +596,14 @@ const Simulator = () => {
 
           {/* --- Progress Indicator --- */}
           {running && simResult && (
-            <div className="mb-8 p-6 bg-white/60 rounded-2xl shadow-lg backdrop-blur">
+            <div className="mb-5 p-4 bg-white/60 rounded-2xl shadow backdrop-blur">
               <div className="flex justify-between items-center mb-2">
-                <span className="font-bold text-gray-700">Progress</span>
-                <span className="font-black text-2xl text-pink-500">
+                <span className="font-bold text-gray-700 text-sm">Progress</span>
+                <span className="font-black text-lg text-pink-500">
                   {simResult.progress}%
                 </span>
               </div>
-              <div className="w-full h-4 bg-gray-200 rounded-full overflow-hidden">
+              <div className="w-full h-3 bg-gray-200 rounded-full overflow-hidden">
                 <div
                   className="h-full bg-gradient-to-r from-pink-400 to-orange-500 transition-all duration-300"
                   style={{ width: `${simResult.progress}%` }}
@@ -615,7 +615,7 @@ const Simulator = () => {
           {/* --- 3D Visualization --- */}
           <div
             ref={canvasContainerRef}
-            className="h-[500px] rounded-3xl border-4 border-gray-800 relative overflow-hidden shadow-2xl mb-8"
+            className="h-[420px] rounded-2xl border-2 border-gray-800 relative overflow-hidden shadow-xl mb-6"
           >
             {isBabyView && (
               <div className="absolute top-4 left-1/2 -translate-x-1/2 z-20 px-4 py-2 rounded-full bg-violet-500/90 text-white text-sm font-bold backdrop-blur-sm shadow-lg animate-pulse-glow">
@@ -646,9 +646,9 @@ const Simulator = () => {
           {/* ── Agent Selector Bar ── */}
           {simulationPlayback?.trajectories &&
             simulationPlayback.trajectories.length > 0 && (
-              <div className="glass-panel p-4 mb-8">
-                <div className="flex items-center justify-between mb-3">
-                  <h3 className="text-lg font-black text-slate-700">
+              <div className="glass-panel p-4 mb-5">
+                <div className="flex items-center justify-between mb-2">
+                  <h3 className="text-sm font-black text-slate-700">
                     👶 Agent Inspector
                   </h3>
                   {selectedAgentId !== null && (
@@ -687,6 +687,7 @@ const Simulator = () => {
                       const distance = traj.finalState?.totalDistance ?? 0;
                       return (
                         <button
+                          type="button"
                           key={traj.agentId ?? i}
                           onClick={() =>
                             setSelectedAgentId(
@@ -754,7 +755,7 @@ const Simulator = () => {
                         (e.injury?.riskTier || "safe").toLowerCase() !== "safe",
                     );
 
-                    // Age group properties lookup
+                    // Age group properties lookup — dùng đúng ID mới (v5)
                     const ageGroupNames: Record<
                       string,
                       {
@@ -767,46 +768,46 @@ const Simulator = () => {
                     > = {
                       infant: {
                         label: "Infant (0-1y)",
-                        height: "0.45m",
+                        height: "0.70m",
                         speed: "0.1-0.3 m/s (crawl)",
                         capabilities: "Crawl, Roll",
                         attracted: "Bright lights, Faces, Rattles",
                       },
-                      toddler: {
-                        label: "Toddler (1-3y)",
-                        height: "0.80m",
-                        speed: "0.3-1.0 m/s (walk)",
-                        capabilities: "Walk, Crawl, Climb (low)",
+                      early_toddler: {
+                        label: "Early Toddler (1-2y)",
+                        height: "0.82m",
+                        speed: "0.3-0.8 m/s (walk unsteady)",
+                        capabilities: "Walk (unsteady), Crawl, Climb low",
                         attracted: "Colorful objects, Doors, Stairs",
+                      },
+                      late_toddler: {
+                        label: "Late Toddler (2-3y)",
+                        height: "0.94m",
+                        speed: "0.5-1.2 m/s (walk/run burst)",
+                        capabilities: "Walk, Run (burst), Climb, Push",
+                        attracted: "Furniture edges, Windows, Moving objects",
                       },
                       preschool: {
                         label: "Preschool (3-5y)",
-                        height: "1.00m",
+                        height: "1.10m",
                         speed: "0.5-1.5 m/s (walk/run)",
                         capabilities: "Walk, Run, Climb, Jump",
                         attracted: "Toys, Furniture edges, Windows",
                       },
-                      school_age: {
-                        label: "School Age (5-8y)",
-                        height: "1.20m",
+                      child: {
+                        label: "Child (6-10y)",
+                        height: "1.30m",
                         speed: "0.8-2.5 m/s (run)",
                         capabilities: "Walk, Run, Sprint, Climb, Jump",
                         attracted: "Electronics, High surfaces, Doors",
-                      },
-                      preteen: {
-                        label: "Pre-teen (8-12y)",
-                        height: "1.45m",
-                        speed: "1.0-3.0 m/s (sprint)",
-                        capabilities: "All movement types",
-                        attracted: "High places, Heavy objects",
                       },
                     };
                     const ageId =
                       traj.ageGroupId ||
                       simulationPlayback.config?.ageGroupId ||
-                      "toddler";
+                      "early_toddler";
                     const ageMeta =
-                      ageGroupNames[ageId] || ageGroupNames.toddler;
+                      ageGroupNames[ageId] || ageGroupNames["early_toddler"];
 
                     return (
                       <div className="mt-4 p-4 rounded-2xl border-2 border-pink-200 bg-gradient-to-br from-white to-pink-50">
@@ -1007,29 +1008,29 @@ const Simulator = () => {
 
           {/* --- Simulation Results --- */}
           {simResult && (
-            <div className="space-y-6">
+            <div className="space-y-4">
               {/* Summary Stats */}
-              <div className="grid grid-cols-3 gap-4">
-                <div className="glass-panel p-6 text-center">
-                  <div className="text-4xl font-black text-pink-500">
+              <div className="grid grid-cols-3 gap-3">
+                <div className="glass-panel p-4 text-center">
+                  <div className="text-2xl font-black text-pink-500">
                     {simResult.progress}%
                   </div>
-                  <div className="text-sm font-bold text-gray-600 mt-2">
+                  <div className="text-xs font-bold text-gray-600 mt-1">
                     Progress
                   </div>
                 </div>
-                <div className="glass-panel p-6 text-center">
-                  <div className="text-4xl font-black text-blue-500">
+                <div className="glass-panel p-4 text-center">
+                  <div className="text-2xl font-black text-blue-500">
                     {simResult.totalEvents}
                   </div>
-                  <div className="text-sm font-bold text-gray-600 mt-2">
+                  <div className="text-xs font-bold text-gray-600 mt-1">
                     Collision Events
                   </div>
                 </div>
-                <div className="glass-panel p-6 text-center">
+                <div className="glass-panel p-4 text-center">
                   <div
                     className={
-                      "text-4xl font-black " +
+                      "text-2xl font-black " +
                       (simResult.status === "complete"
                         ? "text-green-500"
                         : "text-yellow-500")
@@ -1037,7 +1038,7 @@ const Simulator = () => {
                   >
                     {simResult.status === "complete" ? "✅" : "⏳"}
                   </div>
-                  <div className="text-sm font-bold text-gray-600 mt-2 capitalize">
+                  <div className="text-xs font-bold text-gray-600 mt-1 capitalize">
                     {simResult.status}
                   </div>
                 </div>
@@ -1045,8 +1046,8 @@ const Simulator = () => {
 
               {/* Collision Events Table */}
               {simResult.events.length > 0 && (
-                <div className="glass-panel p-8">
-                  <h3 className="text-2xl font-black text-slate-700 mb-4">
+                <div className="glass-panel p-5">
+                  <h3 className="text-base font-black text-slate-700 mb-3">
                     🎯 Collision Events
                   </h3>
                   <div className="overflow-x-auto">
@@ -1220,17 +1221,17 @@ const Simulator = () => {
 
           {/* ── RESULTS DASHBOARD ────────────────────────────────────── */}
           {simResult && (
-            <div className="bg-white rounded-2xl shadow-xl overflow-hidden animate-fade-in-up">
-              <div className="bg-gradient-to-r from-pink-500 to-rose-500 p-4 flex justify-between items-center text-white">
-                <h2 className="text-xl font-bold flex items-center gap-2">
-                  <span className="text-2xl">📊</span> Simulation Report
+            <div className="bg-white rounded-xl shadow-lg overflow-hidden animate-fade-in-up">
+              <div className="bg-gradient-to-r from-pink-500 to-rose-500 px-4 py-3 flex flex-wrap justify-between items-center gap-2 text-white">
+                <h2 className="text-base font-bold flex items-center gap-2">
+                  <span>📊</span> Simulation Report
                 </h2>
-                <div className="flex gap-3">
+                <div className="flex flex-wrap gap-2">
                   <button
                     onClick={() => setShowHeatmap(!showHeatmap)}
-                    className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
                       showHeatmap
-                        ? "bg-white text-pink-600 shadow-lg"
+                        ? "bg-white text-pink-600 shadow"
                         : "bg-white/20 hover:bg-white/30"
                     }`}
                   >
@@ -1238,9 +1239,9 @@ const Simulator = () => {
                   </button>
                   <button
                     onClick={() => setShowBoundingBoxes(!showBoundingBoxes)}
-                    className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
                       showBoundingBoxes
-                        ? "bg-green-100 text-green-700 shadow-lg"
+                        ? "bg-green-100 text-green-700 shadow"
                         : "bg-white/20 hover:bg-white/30"
                     }`}
                   >
@@ -1248,7 +1249,7 @@ const Simulator = () => {
                   </button>
                   <button
                     onClick={exportToExcel}
-                    className="px-4 py-2 bg-white/20 hover:bg-white/30 rounded-lg text-sm font-bold backdrop-blur-sm"
+                    className="px-3 py-1.5 bg-white/20 hover:bg-white/30 rounded-lg text-xs font-bold"
                   >
                     📊 Export CSV
                   </button>
@@ -1264,25 +1265,25 @@ const Simulator = () => {
                         });
                       }
                     }}
-                    className="px-4 py-2 bg-white/20 hover:bg-white/30 rounded-lg text-sm font-bold backdrop-blur-sm"
+                    className="px-3 py-1.5 bg-white/20 hover:bg-white/30 rounded-lg text-xs font-bold"
                   >
                     📄 Export PDF
                   </button>
                 </div>
               </div>
 
-              <div className="p-6 grid grid-cols-1 md:grid-cols-4 gap-6">
+              <div className="p-4 grid grid-cols-1 md:grid-cols-4 gap-4">
                 {/* RSI Score Card */}
-                <div className="bg-slate-50 rounded-xl p-5 border border-slate-200 relative overflow-hidden">
-                  <div className="absolute top-0 right-0 p-4 opacity-10 text-6xl">
+                <div className="bg-slate-50 rounded-xl p-4 border border-slate-200 relative overflow-hidden">
+                  <div className="absolute top-0 right-0 p-3 opacity-10 text-4xl">
                     🛡️
                   </div>
-                  <h3 className="text-slate-500 text-sm font-bold uppercase tracking-wider mb-2">
+                  <h3 className="text-slate-500 text-xs font-bold uppercase tracking-wider mb-1.5">
                     Room Safety Grade
                   </h3>
                   <div className="flex items-baseline gap-2">
                     <span
-                      className={`text-5xl font-black ${
+                      className={`text-4xl font-black ${
                         simResult.roomSafetyIndex?.grade === "S" ||
                         simResult.roomSafetyIndex?.grade === "A"
                           ? "text-green-500"
@@ -1293,19 +1294,19 @@ const Simulator = () => {
                     >
                       {simResult.roomSafetyIndex?.grade || "-"}
                     </span>
-                    <span className="text-2xl font-bold text-slate-400">
+                    <span className="text-lg font-bold text-slate-400">
                       / {simResult.roomSafetyIndex?.score ?? 0}
                     </span>
                   </div>
-                  <div className="mt-4 space-y-1">
+                  <div className="mt-3 space-y-1">
                     <div className="flex justify-between text-xs text-slate-600">
-                      <span>Critical Incidents:</span>
+                      <span>Critical:</span>
                       <span className="font-bold text-red-500">
                         {simResult.roomSafetyIndex?.breakdown?.critical ?? 0}
                       </span>
                     </div>
                     <div className="flex justify-between text-xs text-slate-600">
-                      <span>Serious Injuries:</span>
+                      <span>Serious:</span>
                       <span className="font-bold text-orange-500">
                         {simResult.roomSafetyIndex?.breakdown?.serious ?? 0}
                       </span>
@@ -1314,14 +1315,14 @@ const Simulator = () => {
                 </div>
 
                 {/* Total Events */}
-                <div className="bg-pink-50 rounded-xl p-5 border border-pink-100">
-                  <h3 className="text-pink-400 text-sm font-bold uppercase tracking-wider mb-1">
+                <div className="bg-pink-50 rounded-xl p-4 border border-pink-100">
+                  <h3 className="text-pink-400 text-xs font-bold uppercase tracking-wider mb-1">
                     Total Incidents
                   </h3>
-                  <div className="text-3xl font-black text-pink-600">
+                  <div className="text-2xl font-black text-pink-600">
                     {simResult.events.length}
                   </div>
-                  <div className="text-xs text-pink-400 mt-2">
+                  <div className="text-xs text-pink-400 mt-1">
                     Collision events recorded
                   </div>
                 </div>
@@ -1329,13 +1330,13 @@ const Simulator = () => {
             </div>
           )}
 
-          {/* Heatmap Legend (no duplicate toggle — use the one in the Report header) */}
+          {/* Heatmap Legend */}
           {simResult &&
             simResult.status === "complete" &&
             heatmapData &&
             heatmapData.length > 0 && (
-              <div className="glass-panel p-8">
-                <h3 className="text-2xl font-black text-slate-700 mb-6">
+              <div className="glass-panel p-5">
+                <h3 className="text-base font-black text-slate-700 mb-4">
                   🗺️ 3D Danger Heatmap
                 </h3>
 
@@ -1402,11 +1403,11 @@ const Simulator = () => {
             simResult.status === "complete" &&
             heatmapData &&
             heatmapData.some((h) => h.recommendations.length > 0) && (
-              <div className="glass-panel p-8">
-                <h3 className="text-2xl font-black text-slate-700 mb-6">
+              <div className="glass-panel p-5">
+                <h3 className="text-base font-black text-slate-700 mb-4">
                   🛡️ Safety Recommendations
                 </h3>
-                <div className="space-y-6">
+                <div className="space-y-4">
                   {heatmapData
                     .filter((obj) => obj.recommendations.length > 0)
                     .map((obj, idx) => {
@@ -1522,47 +1523,47 @@ const Simulator = () => {
             )}
           {/* ── Zone Analysis Panel ── */}
           {simResult && simResult.status === "complete" && zoneAnalysis && (
-            <div className="glass-panel p-8">
-              <h3 className="text-2xl font-black text-slate-700 mb-6">
+            <div className="glass-panel p-5">
+              <h3 className="text-base font-black text-slate-700 mb-3">
                 📍 Zone Analysis
               </h3>
-              <p className="text-sm text-gray-500 mb-4">
+              <p className="text-xs text-gray-500 mb-3">
                 Room divided into {zoneAnalysis.summary?.gridSize || 8}×
                 {zoneAnalysis.summary?.gridSize || 8} grid. Each cell classified
                 by collision severity.
               </p>
 
               {/* Zone Summary Badges */}
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-                <div className="rounded-xl bg-green-50 border-2 border-green-200 p-4 text-center">
-                  <div className="text-3xl font-black text-green-600">
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+                <div className="rounded-xl bg-green-50 border-2 border-green-200 p-3 text-center">
+                  <div className="text-2xl font-black text-green-600">
                     {zoneAnalysis.summary?.safe || 0}
                   </div>
-                  <div className="text-xs font-bold text-green-700 mt-1">
+                  <div className="text-xs font-bold text-green-700 mt-0.5">
                     ✅ Safe Zones
                   </div>
                 </div>
-                <div className="rounded-xl bg-yellow-50 border-2 border-yellow-200 p-4 text-center">
-                  <div className="text-3xl font-black text-yellow-600">
+                <div className="rounded-xl bg-yellow-50 border-2 border-yellow-200 p-3 text-center">
+                  <div className="text-2xl font-black text-yellow-600">
                     {zoneAnalysis.summary?.caution || 0}
                   </div>
-                  <div className="text-xs font-bold text-yellow-700 mt-1">
+                  <div className="text-xs font-bold text-yellow-700 mt-0.5">
                     👀 Caution Zones
                   </div>
                 </div>
-                <div className="rounded-xl bg-orange-50 border-2 border-orange-200 p-4 text-center">
-                  <div className="text-3xl font-black text-orange-600">
+                <div className="rounded-xl bg-orange-50 border-2 border-orange-200 p-3 text-center">
+                  <div className="text-2xl font-black text-orange-600">
                     {zoneAnalysis.summary?.hazard || 0}
                   </div>
-                  <div className="text-xs font-bold text-orange-700 mt-1">
+                  <div className="text-xs font-bold text-orange-700 mt-0.5">
                     ⚠️ Hazard Zones
                   </div>
                 </div>
-                <div className="rounded-xl bg-red-50 border-2 border-red-200 p-4 text-center">
-                  <div className="text-3xl font-black text-red-600">
+                <div className="rounded-xl bg-red-50 border-2 border-red-200 p-3 text-center">
+                  <div className="text-2xl font-black text-red-600">
                     {zoneAnalysis.summary?.danger || 0}
                   </div>
-                  <div className="text-xs font-bold text-red-700 mt-1">
+                  <div className="text-xs font-bold text-red-700 mt-0.5">
                     🚨 Danger Zones
                   </div>
                 </div>

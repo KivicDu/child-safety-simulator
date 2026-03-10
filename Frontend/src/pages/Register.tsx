@@ -1,15 +1,16 @@
 import React, { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
+import axios from "axios";
 import AuthLayout from "../components/AuthLayout";
 
 const Register = () => {
   const navigate = useNavigate();
-
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
 
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -19,96 +20,131 @@ const Register = () => {
       setError("Passwords do not match!");
       return;
     }
+    if (password.length < 6) {
+      setError("Password must be at least 6 characters!");
+      return;
+    }
 
-    if (email && password) {
-      // Mock successful registration
-      localStorage.setItem("user", JSON.stringify({ name, email })); // Simple session storage
-      alert("Welcome to the family! 🎉");
-      navigate("/simulator");
+    setLoading(true);
+
+    try {
+      const response = await axios.post("/api/auth/register", {
+        name,
+        email,
+        password,
+        confirmPassword,
+      });
+
+      if (response.data.success) {
+        const { user } = response.data;
+        localStorage.setItem("user", JSON.stringify(user));
+        localStorage.setItem("token", user.token);
+        navigate("/simulator");
+      } else {
+        setError(response.data.error || "Registration failed");
+      }
+    } catch (err: any) {
+      setError(err.response?.data?.error || "Registration failed. Please try again.");
+    } finally {
+      setLoading(false);
     }
   };
 
   return (
-    <AuthLayout title="Join Us!" subtitle="Create your free account" icon="✨">
-      <form onSubmit={handleRegister} className="space-y-4">
+    <AuthLayout title="Create account" subtitle="Join Child Safety Simulator for free" icon="✨">
+      <form onSubmit={handleRegister} className="space-y-3">
         {error && (
-          <div className="text-red-500 text-xs text-center bg-red-100 p-2 rounded-xl border-2 border-red-200 font-bold animate-pulse">
+          <div style={{
+            background: "#fef2f2",
+            border: "1.5px solid #fca5a5",
+            color: "#dc2626",
+            borderRadius: 10,
+            padding: "8px 12px",
+            fontSize: "0.78rem",
+            fontWeight: 700,
+            textAlign: "center",
+          }}>
             {error}
           </div>
         )}
 
         <div>
+          <label style={labelStyle}>Full Name</label>
           <input
             type="text"
             value={name}
             onChange={(e) => setName(e.target.value)}
             required
-            placeholder="Your Name"
-            className="w-full px-5 py-3 rounded-xl bg-purple-50 border-2 border-purple-100 text-gray-700 placeholder-purple-300 focus:outline-none focus:ring-4 focus:ring-purple-200 focus:border-purple-400 transition-all font-bold text-sm"
+            placeholder="Your name"
+            className="auth-input"
           />
         </div>
 
         <div>
+          <label style={labelStyle}>Email</label>
           <input
             type="email"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             required
-            placeholder="Email Address"
-            className="w-full px-5 py-3 rounded-xl bg-purple-50 border-2 border-purple-100 text-gray-700 placeholder-purple-300 focus:outline-none focus:ring-4 focus:ring-purple-200 focus:border-purple-400 transition-all font-bold text-sm"
+            placeholder="name@example.com"
+            className="auth-input"
           />
         </div>
 
         <div>
+          <label style={labelStyle}>Password</label>
           <input
             type="password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             required
-            placeholder="Password"
-            className="w-full px-5 py-3 rounded-xl bg-purple-50 border-2 border-purple-100 text-gray-700 placeholder-purple-300 focus:outline-none focus:ring-4 focus:ring-purple-200 focus:border-purple-400 transition-all font-bold text-sm"
+            placeholder="Min 6 characters"
+            className="auth-input"
           />
         </div>
 
         <div>
+          <label style={labelStyle}>Confirm Password</label>
           <input
             type="password"
             value={confirmPassword}
             onChange={(e) => setConfirmPassword(e.target.value)}
             required
-            placeholder="Confirm Password"
-            className="w-full px-5 py-3 rounded-xl bg-purple-50 border-2 border-purple-100 text-gray-700 placeholder-purple-300 focus:outline-none focus:ring-4 focus:ring-purple-200 focus:border-purple-400 transition-all font-bold text-sm"
+            placeholder="••••••••"
+            className="auth-input"
           />
         </div>
 
-        <div className="pt-2">
-          <button
-            type="submit"
-            className="w-full py-3 px-6 bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600 text-white text-lg font-black rounded-xl shadow-lg border-b-[6px] border-pink-700 active:border-b-0 active:translate-y-[6px] transition-all transform hover:-translate-y-1 block"
-          >
-            Sign Up Now
+        <div style={{ paddingTop: 4 }}>
+          <button type="submit" disabled={loading} className="auth-btn">
+            {loading ? "Creating account…" : "Create Account 🌟"}
           </button>
         </div>
       </form>
 
-      <div className="mt-6 text-center text-xs">
-        <p className="text-gray-400 font-medium">
-          Already have an account?{" "}
-          <Link to="/login" className="text-sky-500 font-bold hover:underline">
-            Login here
-          </Link>
-        </p>
-        <p className="mt-2 text-gray-300">
-          <Link
-            to="/simulator"
-            className="hover:text-gray-500 transition-colors"
-          >
-            ← Back to Home
-          </Link>
-        </p>
+      <div style={{ marginTop: 20, textAlign: "center", fontSize: "0.78rem", color: "#9ca3af", fontWeight: 600 }}>
+        Already have an account?{" "}
+        <Link to="/login" style={linkStyle}>Sign in</Link>
       </div>
     </AuthLayout>
   );
+};
+
+const labelStyle: React.CSSProperties = {
+  display: "block",
+  fontSize: "0.72rem",
+  fontWeight: 700,
+  color: "#6b7280",
+  textTransform: "uppercase",
+  letterSpacing: "0.06em",
+  marginBottom: 5,
+};
+
+const linkStyle: React.CSSProperties = {
+  color: "#818cf8",
+  fontWeight: 700,
+  textDecoration: "none",
 };
 
 export default Register;

@@ -2,6 +2,8 @@ import React, { useRef, useEffect, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
+import { ScaleApplicator } from "../utils/ScaleApplicator";
+import { CharacterScaleValidator } from "../utils/CharacterScaleValidator";
 import {
   createDriver,
   AGENT_PALETTE,
@@ -24,6 +26,11 @@ interface SimPlayback {
     duration?: number;
     ageGroupId?: string;
     scaleFactor?: number;
+    floorHeight?: number; // Physics floor Y (Rapier world-space) — Single Source of Truth từ backend
+  };
+  debugStats?: {
+    rejectedSpawns?: number[][];
+    [key: string]: any;
   };
 }
 interface HeatPt {
@@ -85,6 +92,17 @@ interface FigureHandle {
   // Trail vẽ động — chỉ hiện khi agent được chọn
   trailPoints: THREE.Vector3[];
   trailLine: THREE.Line | null;
+  arrowHelper: THREE.ArrowHelper | null;
+  capsuleHelper: THREE.Mesh | null;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// dampAngle helper for smooth shortest-path rotation
+// ─────────────────────────────────────────────────────────────────────────────
+function dampAngle(x: number, y: number, lambda: number, dt: number): number {
+  const PI2 = Math.PI * 2;
+  const delta = ((((y - x) % PI2) + PI2 * 1.5) % PI2) - Math.PI;
+  return x + delta * (1 - Math.exp(-lambda * dt));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -310,6 +328,7 @@ const Canvas3D: React.FC<Props> = ({
       trails: [] as THREE.Line[],
       labels: [] as THREE.Sprite[],
       hitSpheres: [] as THREE.Mesh[],
+      rejectedSpheres: [] as THREE.Mesh[],
       model: null,
       offsetXZ: new THREE.Vector2(),
       offsetXYZ: new THREE.Vector3(),
@@ -406,10 +425,19 @@ const Canvas3D: React.FC<Props> = ({
 
     new GLTFLoader().load(
       url,
-      (gltf) => {
+      async (gltf) => {
         const model = gltf.scene;
 
-        model.scale.setScalar(sceneUnitScale);
+        // 🚨 Fetch the exact scalar from the Backend Single Source of Truth (.meta file)
+        await ScaleApplicator.applyMetadataScale(
+          model,
+          url,
+          propsRef.current.sceneData?._scaleFactor,
+        );
+
+        // 🚨 Validate physical structural integrity for a 5yo agent (~1.10m)
+        CharacterScaleValidator.validate(model, 1.1);
+
         c.scene.add(model);
         model.updateMatrixWorld(true);
 
@@ -423,27 +451,48 @@ const Canvas3D: React.FC<Props> = ({
 
         c.offsetXZ = new THREE.Vector2(ctr.x, ctr.z);
 
-        c.offsetXYZ = new THREE.Vector3(ctr.x, box3.min.y, ctr.z);
+        // rawFloorY = vị trí sàn trong Rapier physics space.
+        // Ưu tiên lấy từ sceneData (cùng nguồn với backend),
+        // fallback về box3.min.y (trước khi model repositioning).
+        const rawFloorY: number =
+          propsRef.current.sceneData?.floor?.height != null
+            ? (propsRef.current.sceneData.floor.height as number)
+            : box3.min.y;
+
+        // ─── Y-CONVENTION FIX (Bug #1) ────────────────────────────────────────
+        // offsetXYZ.y PHẢI là rawFloorY (physics floor height), KHÔNG phải box3.min.y.
+        //
+        // Vì sao: trajectory từ backend lưu CENTER Y trong Rapier physics space.
+        //   worldY_3js = physicsY - offsetXYZ.y
+        //
+        // Nếu dùng box3.min.y: worldY = physicsY - box3.min.y
+        //   → chỉ đúng khi box3.min.y == rawFloorY (scale nhất quán hoàn toàn)
+        //   → khi có lệch scale dù 1mm → agent lơ lửng
+        //
+        // Nếu dùng rawFloorY (= sceneData.floor.height, cùng nguồn với backend):
+        //   worldY = physicsY - rawFloorY = (floorHeight + halfH) - floorHeight = halfH
+        //   footY  = worldY - halfH = 0  → đúng với sàn Three.js tại Y=0 ✓
+        //
+        // physicsFloorY trong Three.js world space = rawFloorY - offsetXYZ.y = 0
+        // (sàn Three.js luôn ở Y=0 vì model.position.y = -box3.min.y)
+        c.offsetXYZ = new THREE.Vector3(ctr.x, rawFloorY, ctr.z);
 
         // physicsFloorY in world space (after model position offset)
-        // model.position.y = -box3.min.y, so floor = box3.min.y + (-box3.min.y) = 0
-        // Unless sceneData has explicit floor height (which is also in physics space)
-        const rawFloorY =
-          propsRef.current.sceneData?.floor?.height != null
-            ? (propsRef.current.sceneData.floor.height as number) *
-              sceneUnitScale
-            : box3.min.y;
-        // Convert to world space: rawFloorY - offsetXYZ.y = rawFloorY - box3.min.y
-        c.physicsFloorY = rawFloorY - box3.min.y;
-
-        c.floorBias = rawFloorY - box3.min.y;
+        // Với offsetXYZ.y = rawFloorY, sàn Three.js world luôn = 0
+        c.physicsFloorY = 0;
 
         model.traverse((o: THREE.Object3D) => {
           const mesh = o as THREE.Mesh;
           if (mesh.isMesh) {
-            mesh.layers.enable(1);
-            mesh.receiveShadow = true;
-            mesh.castShadow = true;
+            if ((mesh.name || "").startsWith("COL_")) {
+              mesh.visible = false;
+              mesh.castShadow = false;
+              mesh.receiveShadow = false;
+            } else {
+              mesh.layers.enable(1);
+              mesh.receiveShadow = true;
+              mesh.castShadow = true;
+            }
 
             if (mesh.material) {
               const mat = mesh.material as THREE.Material | THREE.Material[];
@@ -472,20 +521,14 @@ const Canvas3D: React.FC<Props> = ({
         c.bbHelpers = [];
         model.traverse((o: THREE.Object3D) => {
           const mesh = o as THREE.Mesh;
-          if (mesh.isMesh && mesh.geometry) {
-            mesh.geometry.computeBoundingBox();
-            if (mesh.geometry.boundingBox) {
-              const worldBB = mesh.geometry.boundingBox.clone();
-              worldBB.applyMatrix4(mesh.matrixWorld);
-              const helper = new THREE.Box3Helper(
-                worldBB,
-                new THREE.Color(0x00ff88),
-              );
-              helper.visible = false; // hidden by default, toggle via showBoundingBoxes
-              helper.renderOrder = 998;
-              c.scene.add(helper);
-              c.bbHelpers.push(helper);
-            }
+          if (mesh.isMesh && (!mesh.name || !mesh.name.startsWith("COL_"))) {
+            const helper = new THREE.BoxHelper(mesh, 0xffff00);
+            (helper.material as THREE.LineBasicMaterial).transparent = true;
+            (helper.material as THREE.LineBasicMaterial).opacity = 0.3;
+            helper.visible = false; // hidden by default, toggle via showBoundingBoxes
+            helper.renderOrder = 998;
+            c.scene.add(helper);
+            c.bbHelpers.push(helper);
           }
         });
 
@@ -504,10 +547,10 @@ const Canvas3D: React.FC<Props> = ({
         setTimeout(() => setLoadStatus(""), 3000);
 
         console.info(
-          `[Canvas3D v6] Scene loaded.` +
+          `[Canvas3D v7] Scene loaded.` +
             ` Size after scale: ${sz.x.toFixed(2)}m × ${sz.y.toFixed(2)}m × ${sz.z.toFixed(2)}m.` +
-            ` box3.min.y=${box3.min.y.toFixed(3)}  physicsFloorY=${c.physicsFloorY.toFixed(3)}` +
-            ` floorBias=${c.floorBias.toFixed(3)}m.` +
+            ` box3.min.y=${box3.min.y.toFixed(3)}  rawFloorY=${rawFloorY.toFixed(3)}` +
+            ` offsetXYZ.y=${rawFloorY.toFixed(3)} physicsFloorY(3js)=${c.physicsFloorY.toFixed(3)}` +
             ` sceneUnitScale=${sceneUnitScale}.`,
         );
       },
@@ -533,22 +576,23 @@ const Canvas3D: React.FC<Props> = ({
     action: string,
     doSnap: boolean,
   ): number {
-    // FIX #13/#14: Floor clearance offset — prevents feet from sinking through floor mesh.
-    // Floor collider has half-height 0.1m; visual floor mesh has additional thickness.
-    // Scale clearance by body size: smaller children need less, bigger need more
-    const FLOOR_CLEARANCE = realHeight * 0.04; // ~4% of body height
+    // Y-CONVENTION:
+    //   worldPos.y = physicsCENTER_Y - offsetXYZ.y
+    //              = (floorHeight + halfH + ε) - rawFloorY
+    //              = halfH + ε   (khi đứng trên sàn)
+    //
+    //   backendBaseY = worldPos.y - realHeight/2 = ε ≈ 0   (foot-level trong Three.js world)
+    //   sceneFloorY  = 0                                     (model.position.y = -box3.min.y)
+    //
+    // Với offsetXYZ.y = rawFloorY (Bug #1 đã fix), backendBaseY sẽ luôn gần 0 khi đứng sàn.
+    // resolveAgentY chỉ cần xử lý jitter nhỏ và trường hợp lơ lửng thật sự.
 
-    // Decode foot position from physics center
+    const FLOOR_CLEARANCE = realHeight * 0.04; // ~4% chiều cao (~1–2cm)
+
+    // backendBaseY = vị trí bàn chân theo backend physics (foot-level trong Three.js world)
     const backendBaseY = worldPos.y - realHeight / 2;
     const sceneFloorY = c.physicsFloorY ?? 0;
 
-    // FIX #17: Trust the backend's rigorous raycast-validated spawn Y!
-    // If we indiscriminately cast a new ray from +5.0m here, we will hit the TOP of beds,
-    // overriding the safe floor spawn and yanking the agent up into the mattress visually.
-    // We only snap to the local mesh floor if actively walking/falling, otherwise trust the start point.
-    // FIX BUG #10: Old list was ["falling","free_fall","walk","run"] — missing most real
-    // action names that come from entry.a (e.g. walk_to, walk_random, crawl, lunge, investigate).
-    // Expanded to cover all locomotion actions so floor snap fires correctly.
     const SNAP_ACTIONS = new Set([
       "falling",
       "free_fall",
@@ -564,38 +608,54 @@ const Canvas3D: React.FC<Props> = ({
       "investigate",
       "wade",
     ]);
+
     if (doSnap && SNAP_ACTIONS.has(action)) {
       const rayY = getFloorY(c, worldPos);
       if (rayY !== null) {
-        // For falling states allow larger snap distance (agent may be high up)
-        const threshold = ["falling", "free_fall", "fall_forward"].includes(
-          action,
-        )
-          ? 5.0
-          : 0.8;
-        // FIX BUG #6: Only snap when ray hit is CLOSE to the backend foot position.
-        // Previously we snapped unconditionally if within threshold, causing the figure
-        // to jump onto a bed surface when the 3D ray hit the mattress mesh.
-        // New guard: if rayY is ABOVE the backend foot position by more than FLOOR_CLEARANCE,
-        // it likely hit a furniture surface — ignore it and trust the backend Y.
         const rayAboveBackend = rayY - backendBaseY;
-        if (
-          Math.abs(rayY - backendBaseY) < threshold &&
-          rayAboveBackend <= FLOOR_CLEARANCE * 3
-        ) {
+
+        // Rule 1: Ray hit THẤP HƠN backend foot → agent đang lơ lửng → kéo xuống.
+        // Ngưỡng 2.0m thay vì 0.5m cũ: đảm bảo catch được cả khi lệch scale lớn.
+        // Guard trên chỉ loại trừ ray hit âm vô cực (geometry lỗi).
+        if (rayY < backendBaseY - 0.05 && rayY > backendBaseY - 2.0) {
           return rayY + FLOOR_CLEARANCE;
         }
+
+        // Rule 2: Ray hit GẦN backend foot (trong 0.10m) → dùng ray để giảm jitter sàn
+        if (Math.abs(rayAboveBackend) < 0.1) {
+          return rayY + FLOOR_CLEARANCE;
+        }
+
+        // Rule 3: Ray hit CAO HƠN backend foot → furniture surface → BỎ QUA, trust backend.
+        // (nguyên nhân floating cũ: agent bị kéo lên mặt tủ/kệ)
       }
     }
 
-    // Trust the backed position by default, but NEVER go below the absolute scene floor
+    // Default: trust backend foot position, clamp không bao giờ xuống dưới sàn tuyệt đối.
     return Math.max(backendBaseY, sceneFloorY + FLOOR_CLEARANCE);
   }
 
   // ── Spawn playback agents ─────────────────────────────────────────────────
+  // [FIX CANVAS RESET]:
+  // Mỗi lần poll xong, Simulator.tsx gọi setSimulationPlayback(newObj) với object MỚI
+  // → simulationPlayback reference thay đổi → useEffect này chạy → xóa figures → màn hình flash.
+  // Fix: Dùng fingerprint ref để chỉ rebuild khi trajectory data THỰC SỰ thay đổi.
+  const trajFingerprintRef = React.useRef<string>("");
   useEffect(() => {
     if (!ctx.current) return;
     const c = ctx.current;
+
+    const trajs = simulationPlayback?.trajectories;
+    const newFingerprint = trajs
+      ? trajs
+          .map((t: any) => `${t.agentId ?? "?"}_${t.positions?.length ?? 0}`)
+          .join("|")
+      : "";
+
+    // Nếu fingerprint giống nhau → data không đổi, KHÔNG rebuild
+    if (newFingerprint === trajFingerprintRef.current) return;
+    trajFingerprintRef.current = newFingerprint;
+
     c.figures.forEach((fh: FigureHandle) => {
       c.scene.remove(fh.root);
       fh.driver.dispose();
@@ -606,12 +666,42 @@ const Canvas3D: React.FC<Props> = ({
     c.labels.forEach((s: THREE.Sprite) => c.scene.remove(s));
     c.labels = [];
     c.isPlaying = false;
-    if (!simulationPlayback?.trajectories) return;
 
-    const defAge = simulationPlayback.config?.ageGroupId ?? "toddler";
-    // const offXYZ = c.offsetXYZ as THREE.Vector3;
+    // Clear old rejected spheres
+    if (c.rejectedSpheres) {
+      c.rejectedSpheres.forEach((m: THREE.Mesh) => {
+        c.scene.remove(m);
+        m.geometry?.dispose();
+        (m.material as THREE.Material)?.dispose();
+      });
+    }
+    c.rejectedSpheres = [];
 
-    simulationPlayback.trajectories.forEach((tr, i) => {
+    // Add new rejected spheres if any
+    if (simulationPlayback?.debugStats?.rejectedSpawns) {
+      const off = c.offsetXYZ as THREE.Vector3;
+      const geo = new THREE.SphereGeometry(0.12, 8, 8);
+      const mat = new THREE.MeshBasicMaterial({
+        color: 0xffaa00,
+        transparent: true,
+        opacity: 0.6,
+        wireframe: true,
+      });
+      simulationPlayback.debugStats.rejectedSpawns.forEach((pos: number[]) => {
+        if (!Array.isArray(pos) || pos.length < 3) return;
+        const sph = new THREE.Mesh(geo, mat);
+        sph.position.copy(toWorldSpace(pos, off));
+        sph.visible = !!propsRef.current.showBoundingBoxes;
+        c.scene.add(sph);
+        c.rejectedSpheres.push(sph);
+      });
+    }
+
+    if (!trajs) return;
+
+    const defAge = simulationPlayback.config?.ageGroupId ?? "early_toddler";
+
+    trajs.forEach((tr: any, i: number) => {
       if (!tr?.positions?.length) return;
       const ageId = tr.ageGroupId ?? defAge;
       const color = AGENT_PALETTE[i % AGENT_PALETTE.length];
@@ -624,23 +714,39 @@ const Canvas3D: React.FC<Props> = ({
         color,
         trajectory: tr.positions,
         actionLog: tr.actionLog ?? [],
-        walkCycle: 0,
+        lx: tr.positions?.[0]?.[0],
+        lz: tr.positions?.[0]?.[2],
+        walkCycle: Math.random() * Math.PI * 2,
         currentlyWading: false,
-        lastFloorY: 0,
+        lastFloorY: c.physicsFloorY ?? 0,
         trailPoints: [],
         trailLine: null,
+        arrowHelper: null,
+        capsuleHelper: null,
       };
       driver.root.traverse((o: THREE.Object3D) => o.layers.set(0));
       driver.root.visible = false;
       c.scene.add(driver.root);
       c.figures.push(handle);
-      // Trail vẽ động — không pre-build ở đây, tick() sẽ xử lý
     });
 
     c.isPlaying = !playbackPaused;
     c.playStart = Date.now();
     c.currentFrame = 0;
     c.figures.forEach((fh: FigureHandle) => (fh.root.visible = true));
+
+    // ─── Y-CONVENTION SYNC (Bug #1 guard) ────────────────────────────────────
+    // Nếu backend gửi config.floorHeight, dùng nó để cập nhật physicsFloorY.
+    // Trường hợp model chưa load (offsetXYZ chưa được set với rawFloorY đúng),
+    // đây là lớp bảo vệ thứ hai để giữ nhân vật không lơ lửng.
+    //
+    // physicsFloorY trong Three.js world space = floorHeight - offsetXYZ.y
+    // Với offsetXYZ.y = rawFloorY = floorHeight → physicsFloorY = 0 ✓
+    if (simulationPlayback?.config?.floorHeight != null && c.offsetXYZ) {
+      const cfgFloor = simulationPlayback.config.floorHeight as number;
+      const offsetY = (c.offsetXYZ as THREE.Vector3).y;
+      c.physicsFloorY = cfgFloor - offsetY;
+    }
   }, [simulationPlayback, modelPath, sceneUnitScale]);
 
   // ── Selection / highlights ────────────────────────────────────────────────
@@ -701,12 +807,24 @@ const Canvas3D: React.FC<Props> = ({
 
   // ── Bounding Box Debug Toggle ─────────────────────────────────────────────
   useEffect(() => {
-    if (!ctx.current) return;
-    const c = ctx.current;
-    c.bbHelpers.forEach((h: THREE.Object3D) => {
-      h.visible = showBoundingBoxes;
-    });
-  }, [showBoundingBoxes]);
+    // Toggle helpers visibility based on props
+    if (ctx.current) {
+      ctx.current.bbHelpers.forEach((h: THREE.Object3D) => {
+        h.visible = !!showBoundingBoxes;
+      });
+      ctx.current.figures.forEach((fh: FigureHandle) => {
+        if (fh.arrowHelper)
+          fh.arrowHelper.visible =
+            !!showBoundingBoxes && fh.agentId === selectedAgentId;
+        if (fh.capsuleHelper)
+          fh.capsuleHelper.visible =
+            !!showBoundingBoxes && fh.agentId === selectedAgentId;
+      });
+      ctx.current.rejectedSpheres.forEach((m: THREE.Mesh) => {
+        m.visible = !!showBoundingBoxes;
+      });
+    }
+  }, [showBoundingBoxes, selectedAgentId]);
 
   // ── Baby View ─────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -882,18 +1000,20 @@ const Canvas3D: React.FC<Props> = ({
       liveAgentPositions.forEach((a, i) => {
         if (!a?.position || a.position.some(isNaN)) return;
         const color = AGENT_PALETTE[i % AGENT_PALETTE.length];
-        const driver = createDriver(a.ageGroupId ?? "toddler", i, color);
+        const driver = createDriver(a.ageGroupId ?? "early_toddler", i, color);
         const handle: FigureHandle = {
           driver,
           root: driver.root,
           agentId: a.agentId,
-          ageId: a.ageGroupId ?? "toddler",
+          ageId: a.ageGroupId ?? "early_toddler",
           color,
           walkCycle: 0,
           currentlyWading: false,
           lastFloorY: 0,
           trailPoints: [],
           trailLine: null,
+          arrowHelper: null,
+          capsuleHelper: null,
         };
         driver.root.traverse((o: THREE.Object3D) => o.layers.set(0));
         const wp = toWorldSpace(a.position, offXYZ);
@@ -938,7 +1058,16 @@ const Canvas3D: React.FC<Props> = ({
 
       fh.root.position.set(tgt.x, finalY, tgt.z);
 
-      if (dist > 0.001) fh.root.rotation.y = Math.atan2(dx, dz);
+      if (dist > 0.001) {
+        const targetRotation = Math.atan2(dx, dz);
+        // System C: Rotation Smoothing (Frontend)
+        fh.root.rotation.y = dampAngle(
+          fh.root.rotation.y,
+          targetRotation,
+          10,
+          frameDt,
+        );
+      }
       const lodLevel = getLOD(fh.root, c.camera);
       if (lodLevel !== "far") {
         fh.driver.update(frameDt, { a: liveAction, v: 0 });
@@ -999,7 +1128,16 @@ const Canvas3D: React.FC<Props> = ({
       const dx = simPos[0] - (fh.lx ?? simPos[0]);
       const dz = simPos[2] - (fh.lz ?? simPos[2]);
       const spd = Math.sqrt(dx * dx + dz * dz);
-      if (spd > 0.001) fh.root.rotation.y = Math.atan2(dx, dz);
+      if (spd > 0.001) {
+        const targetRotation = Math.atan2(dx, dz);
+        // System C: Rotation Smoothing (Frontend)
+        fh.root.rotation.y = dampAngle(
+          fh.root.rotation.y,
+          targetRotation,
+          10,
+          dt,
+        );
+      }
       fh.lx = simPos[0];
       fh.lz = simPos[2];
 
@@ -1039,7 +1177,8 @@ const Canvas3D: React.FC<Props> = ({
         );
       }
 
-      // FIX #3: Smooth Y lerp for climbing actions
+      // FIX #3: Smooth Y lerp for all actions to prevent 1-frame floor snap jitter
+      // (The user reported characters jumping up and down erratically)
       const climbActions = [
         "climb_on",
         "climb",
@@ -1050,14 +1189,17 @@ const Canvas3D: React.FC<Props> = ({
         "step_up",
         "step_down",
       ];
-      if (climbActions.includes(action)) {
-        // FIX: Increased from 0.08 to 0.25 — faster Y convergence during climb transitions
-        const smoothY =
-          fh.root.position.y + (finalY - fh.root.position.y) * 0.25;
-        fh.root.position.set(worldPos.x, smoothY, worldPos.z);
-      } else {
-        fh.root.position.set(worldPos.x, finalY, worldPos.z);
-      }
+      const isClimbing = climbActions.includes(action);
+      const isFalling = ["falling", "free_fall", "fall_forward"].includes(
+        action,
+      );
+
+      // Use slower lerp for climbing, faster lerp for normal movement to hide jitter, no lerp for falling
+      const lerpFactor = isFalling ? 1.0 : isClimbing ? 0.25 : 0.4;
+
+      const smoothY =
+        fh.root.position.y + (finalY - fh.root.position.y) * lerpFactor;
+      fh.root.position.set(worldPos.x, smoothY, worldPos.z);
 
       const lodLevel = getLOD(fh.root, c.camera);
       if (lodLevel !== "far") {
@@ -1118,6 +1260,62 @@ const Canvas3D: React.FC<Props> = ({
             }
           }
         }
+
+        // System F: Debug Target Direction Arrow
+        if (!fh.arrowHelper) {
+          fh.arrowHelper = new THREE.ArrowHelper(
+            new THREE.Vector3(0, 0, 1),
+            fh.root.position,
+            1.2,
+            fh.color,
+            0.3,
+            0.3,
+          );
+          fh.arrowHelper.renderOrder = 1000;
+          c.scene.add(fh.arrowHelper);
+        }
+        // Always point Arrow towards movement or targetRotation
+        const lookDir = new THREE.Vector3(dx, 0, dz);
+        if (lookDir.lengthSq() > 0.0001) {
+          fh.arrowHelper.setDirection(lookDir.normalize());
+        } else {
+          // If no movement, fallback to current facing rot
+          fh.arrowHelper.setDirection(
+            new THREE.Vector3(
+              Math.sin(fh.root.rotation.y),
+              0,
+              Math.cos(fh.root.rotation.y),
+            ),
+          );
+        }
+        fh.arrowHelper.position.copy(fh.root.position);
+        fh.arrowHelper.position.y += 0.1; // Float slightly above foot level
+        fh.arrowHelper.visible = !!showBoundingBoxes;
+
+        // System G: Debug Capsule Collider
+        if (!fh.capsuleHelper) {
+          const capHeight = fh.driver.registryEntry?.realHeight ?? 1.1;
+          const capRad =
+            (fh.driver.registryEntry as any)?.capsuleRadius ?? 0.15;
+
+          const geometry = new THREE.CapsuleGeometry(capRad, capHeight, 4, 8);
+          const material = new THREE.MeshBasicMaterial({
+            color: 0x00ff00,
+            transparent: true,
+            opacity: 0.5,
+            wireframe: true,
+          });
+          fh.capsuleHelper = new THREE.Mesh(geometry, material);
+          fh.capsuleHelper.renderOrder = 999;
+          c.scene.add(fh.capsuleHelper);
+        }
+        fh.capsuleHelper.position.copy(fh.root.position);
+        fh.capsuleHelper.position.y +=
+          (fh.driver.registryEntry?.realHeight ?? 1.1) / 2;
+        fh.capsuleHelper.visible = !!showBoundingBoxes;
+      } else {
+        if (fh.arrowHelper) fh.arrowHelper.visible = false;
+        if (fh.capsuleHelper) fh.capsuleHelper.visible = false;
       }
     });
 

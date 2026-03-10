@@ -1,21 +1,21 @@
 import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import physicsEngine from '../services/physicsEngine.js';
-import colliderGenerator from '../utils/colliderGenerator.js';
+import { applyScaleToSceneData } from '../utils/scaleNormalizer.js';
+import scaleAuthority from '../services/scaleAuthority.js';
 import behaviorManager from '../services/behaviorManager.js';
 import injuryCalculator from '../services/injuryCalculator.js';
 import Agent from '../services/agent.js';
 import { getAllAgeGroups } from '../config/ageGroups.js';
-import { normalizeSceneToMeters } from '../utils/scaleNormalizer.js';
-
+import physicsEngine from '../services/physicsEngine.js';
+import colliderGenerator from '../utils/colliderGenerator.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const PARSED_DIR = process.env.PARSED_DIR || './parsed';
 const SIMULATION_DIR = process.env.SIMULATION_DIR || './simulations';
 
-await fs.mkdir(SIMULATION_DIR, { recursive: true });
+fs.mkdir(SIMULATION_DIR, { recursive: true }).catch(() => {});
 
 /**
  * Batch simulate all age groups with progress tracking
@@ -39,8 +39,12 @@ export const batchSimulateAllAges = async (req, res) => {
     const parsedPath = path.join(PARSED_DIR, `${sceneId}.json`);
     const sceneData = JSON.parse(await fs.readFile(parsedPath, 'utf8'));
 
-    // Normalize scene coordinates to meters (handles GLB files in inches/cm/feet/mm)
-    normalizeSceneToMeters(sceneData);
+    let scaleFactor = sceneData._scaleFactor;
+    if (!scaleFactor) {
+      const scaleInfo = scaleAuthority.detectScale(sceneData);
+      scaleFactor = scaleInfo.factor;
+    }
+    applyScaleToSceneData(sceneData, scaleFactor);
 
     const ageGroups = getAllAgeGroups();
     const results = {};
@@ -238,7 +242,9 @@ async function runSingleSimulation(sceneId, sceneData, ageGroupId, ageGroup, age
   
   const handleToCollider = new Map();
   colliders.forEach(c => {
-    if (c.collider) {
+    if (c.collidersArr) {
+      c.collidersArr.forEach(coll => handleToCollider.set(coll.handle, c));
+    } else if (c.collider) {
       handleToCollider.set(c.collider.handle, c);
     }
   });

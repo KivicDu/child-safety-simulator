@@ -22,14 +22,18 @@
     "@gltf-transform/core": "^4.3.0",
     "@gltf-transform/functions": "^4.3.0",
     "@google/generative-ai": "^0.24.1",
+    "bcryptjs": "^3.0.3",
     "compression": "^1.8.1",
     "cors": "^2.8.6",
     "dotenv": "^17.2.3",
     "express": "^5.2.1",
-    "multer": "^2.0.2",
+    "express-rate-limit": "^6.7.0",
     "helmet": "^6.0.1",
+    "mongodb": "^4.17.2",
+    "mongoose": "^9.2.4",
     "morgan": "^1.10.0",
-    "express-rate-limit": "^6.7.0"
+    "multer": "^2.0.2",
+    "nodemailer": "^8.0.2"
   },
   "devDependencies": {
     "@ljharb/tsconfig": "^0.3.2",

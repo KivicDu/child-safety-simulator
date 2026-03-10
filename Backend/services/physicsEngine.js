@@ -1,13 +1,28 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// physicsEngine.js  — v2
+// physicsEngine.js  — v4
 //
-// Key changes:
-//  • createAgentMultipartCollider: uses real heights from ageGroups (not guessed)
-//  • createCharacterController: Rapier KinematicCharacterController to block
-//    agents from passing through solid geometry
-//  • moveAgentWithController: wrapper used by simulationController each step
-//    instead of setNextKinematicTranslation directly → prevents clipping
-//  • All existing API surface preserved (no breaking changes)
+// FIXES v4 (Report Priority 1 + 4):
+//  • [P1] getFloorHeightAt: removed hidden y+0.3 offset. Origin = exact y.
+//    hitY = y - toi (not origin.y + dir.y*t with offset).
+//    Old hidden offset caused spawn hovering/sinking and DBC false-positives.
+//  • [P4] createHandSensors: new method — creates two kinematic sensor spheres
+//    (left/right hand) for reach-based object interaction instead of torso collision.
+//  • [P4] updateHandSensorPositions: new method — repositions hand sensors each
+//    frame to match agent body pos + heading-relative arm extension.
+//
+// BUG FIX v3:
+//  • [FIX BOUNCE BUG] createAgentMultipartCollider: caller passes FEET position
+//    (floor Y + 0.02). Engine internally adds halfH to centre the body.
+//    Previously, both the caller AND the engine were adding halfH → body spawned
+//    halfH above the floor, causing gravity → bounce → KCC push → infinite loop.
+//    Contract is now explicit: position[1] = feet Y. Engine owns the +halfH.
+//
+//  • [FIX FALL HEIGHT] getBodyCenterY / getFeetY helpers added so agent.js can
+//    convert between body-centre (Rapier translation) and feet Y without
+//    hardcoding halfH everywhere. Fixes free_fall height calculation that used
+//    pos.y (centre) - spawnY (feet) → always positive even on flat ground.
+//
+// All other API surface preserved (no breaking changes).
 // ─────────────────────────────────────────────────────────────────────────────
 
 import RAPIER from '@dimforge/rapier3d-compat';
@@ -31,6 +46,35 @@ class PhysicsEngine {
   createWorld() {
     const gravity = { x: 0.0, y: -9.81, z: 0.0 };
     return new this.rapier.World(gravity);
+  }
+
+  // ── [Phase 4] Foot-Ground Contact Friction Matrices ──────────────────────
+  getFrictionForMovement(movementType, floorSurface = 'hardwood') {
+    const frictionMatrix = {
+      walk:  { hardwood: 0.5, carpet: 0.7 },
+      run:   { hardwood: 0.4, carpet: 0.65 },
+      crawl: { hardwood: 0.6, carpet: 0.8 },
+      lunge: { hardwood: 0.3, carpet: 0.5 },
+    };
+    const actionFriction = frictionMatrix[movementType] || frictionMatrix.walk;
+    return actionFriction[floorSurface] || 0.5;
+  }
+
+  // ── [FIX v3] Height conversion helpers ───────────────────────────────────
+  /**
+   * Given a feet Y (floor surface) and agent height, return the body-centre Y
+   * that Rapier stores as rigidBody.translation().y
+   */
+  getBodyCenterY(feetY, agentHeight) {
+    return feetY + (agentHeight / 2);
+  }
+
+  /**
+   * Given the body-centre Y (from rigidBody.translation().y) and agent height,
+   * return the feet Y (what was passed to createAgentMultipartCollider as position[1]).
+   */
+  getFeetY(bodyCenterY, agentHeight) {
+    return bodyCenterY - (agentHeight / 2);
   }
 
   // ── Box collider for scene objects ───────────────────────────────────────
@@ -68,11 +112,63 @@ class PhysicsEngine {
     return { body: rigidBody, collider };
   }
 
+  // ── OBB & Compound Collider for scene objects ────────────────────────────
+  createCompoundOBBCollider(world, obbData, proxyColliders = [], isStatic = true, isSensor = false) {
+    const rigidBodyDesc = isStatic
+      ? this.rapier.RigidBodyDesc.fixed()
+      : this.rapier.RigidBodyDesc.dynamic();
+
+    rigidBodyDesc.setTranslation(obbData.center[0], obbData.center[1], obbData.center[2]);
+    const rigidBody = world.createRigidBody(rigidBodyDesc);
+
+    let activeEvents = this.rapier.ActiveEvents.COLLISION_EVENTS;
+    if (isSensor) {
+      activeEvents = activeEvents | this.rapier.ActiveEvents.INTERSECTION_EVENTS;
+    }
+
+    const colliders = [];
+
+    if (proxyColliders && proxyColliders.length > 0) {
+      proxyColliders.forEach(proxy => {
+        let colliderDesc = this.rapier.ColliderDesc
+          .cuboid(proxy.extents[0], proxy.extents[1], proxy.extents[2])
+          .setFriction(0.6)
+          .setRestitution(0.0)
+          .setActiveEvents(activeEvents);
+
+        if (isSensor) colliderDesc = colliderDesc.setSensor(true);
+
+        const localX = proxy.center[0] - obbData.center[0];
+        const localY = proxy.center[1] - obbData.center[1];
+        const localZ = proxy.center[2] - obbData.center[2];
+
+        colliderDesc.setTranslation(localX, localY, localZ);
+        colliderDesc.setRotation({ x: proxy.rotation[0], y: proxy.rotation[1], z: proxy.rotation[2], w: proxy.rotation[3] });
+
+        colliders.push(world.createCollider(colliderDesc, rigidBody));
+      });
+    } else {
+      let colliderDesc = this.rapier.ColliderDesc
+        .cuboid(obbData.extents[0], obbData.extents[1], obbData.extents[2])
+        .setFriction(0.6)
+        .setRestitution(0.0)
+        .setActiveEvents(activeEvents);
+
+      if (isSensor) colliderDesc = colliderDesc.setSensor(true);
+
+      colliderDesc.setRotation({ x: obbData.rotation[0], y: obbData.rotation[1], z: obbData.rotation[2], w: obbData.rotation[3] });
+
+      colliders.push(world.createCollider(colliderDesc, rigidBody));
+    }
+
+    return { body: rigidBody, colliders, collider: colliders[0] };
+  }
+
   // ── Floor collider ────────────────────────────────────────────────────────
   createFloorCollider(world, floorHeight, size = 50) {
     const rigidBodyDesc = this.rapier.RigidBodyDesc
       .fixed()
-      .setTranslation(0, floorHeight - 0.1, 0); // Translate down by half-height so top surface aligns with floorHeight
+      .setTranslation(0, floorHeight - 0.1, 0);
     const rigidBody  = world.createRigidBody(rigidBodyDesc);
     const colliderDesc = this.rapier.ColliderDesc
       .cuboid(size, 0.1, size)
@@ -86,11 +182,14 @@ class PhysicsEngine {
   // ── Agent multipart collider ─────────────────────────────────────────────
   /**
    * Creates a kinematic rigidbody with 3 colliders (head/torso/legs).
-   * Dimensions come directly from ageGroups.js anthropometry so sizes
-   * match the real child dimensions, not arbitrary defaults.
+   *
+   * CONTRACT (v3 — fixes bounce bug):
+   *   position[1] = FEET Y (floor surface Y + small offset, e.g. actualFloorY + 0.02).
+   *   This function adds halfH internally to place the body centre correctly.
+   *   Callers must NOT pre-add halfH. The old v2 contract was ambiguous; v3 is explicit.
    *
    * @param {object} world       - Rapier world
-   * @param {number[]} position  - [x, y, z] spawn position
+   * @param {number[]} position  - [x, feetY, z]  ← feetY = floor surface, NOT centre
    * @param {number} height      - real height in metres (from ageGroup.height)
    * @param {number} radius      - capsule radius (from ageGroup.capsuleRadius)
    * @param {object|null} anthropometry - from ageGroup.anthropometry
@@ -99,24 +198,27 @@ class PhysicsEngine {
     // Guard against NaN in position
     if (!position || !Array.isArray(position) || position.some(v => !Number.isFinite(v))) {
       console.warn('[PhysicsEngine] NaN in agent spawn position:', position);
-      position = [0, 1.0, 0];
+      position = [0, 0.02, 0];
     }
     const safeHeight = Number.isFinite(height) ? height : 1.0;
 
-    // Agent origin is placed at feet + half-height so the body is centred
-    const halfH = safeHeight / 2;
-    const posY  = (typeof position[1] === 'number') ? position[1] + halfH : halfH;
+    // ── [FIX v3] Body centre Y = feet Y + halfH ───────────────────────────
+    // position[1] is the FEET position (floor surface + tiny offset).
+    // We compute the body centre here — callers must not add halfH themselves.
+    const halfH  = safeHeight / 2;
+    const feetY  = position[1];                 // explicit alias for clarity
+    const centreY = feetY + halfH;              // Rapier body origin = centre of capsule stack
 
     const rigidBodyDesc = this.rapier.RigidBodyDesc
       .kinematicPositionBased()
-      .setTranslation(position[0], posY, position[2]);
+      .setTranslation(position[0], centreY, position[2]);
     const rigidBody = world.createRigidBody(rigidBodyDesc);
 
     // Derive from anthropometry or sensible proportional fallbacks
     const headRadius  = anthropometry?.headRadius   ?? height * 0.12;
     const torsoLength = anthropometry?.torsoLength   ?? height * 0.40;
     const torsoRadius = anthropometry?.torsoRadius   ?? radius * 0.9;
-    const legLength   = anthropometry?.legLength      ?? height * 0.40;
+    const legLength   = anthropometry?.legLength     ?? height * 0.40;
 
     const parts = {};
     const KINEMATIC_FIXED = this.rapier.ActiveCollisionTypes.KINEMATIC_FIXED
@@ -148,10 +250,7 @@ class PhysicsEngine {
     );
 
     // LEGS — capsule at bottom
-    // A Rapier capsule's total height is 2 * halfHeight + 2 * radius.
-    // To ensure the lowest point is exactly at -halfH (so agent's feet sit perfectly on the floor),
-    // legsOffset - (legLength / 2 + radius * 0.75) must equal -halfH.
-    // Thus, legsOffset = -halfH + legLength / 2 + radius * 0.75.
+    // Lowest point of legs capsule = legsOffset - (legLength/2 + radius*0.75) = -halfH (feet)
     const legsOffset = -halfH + legLength / 2 + radius * 0.75;
     parts.legs = world.createCollider(
       this.rapier.ColliderDesc.capsule(legLength / 2, radius * 0.75)
@@ -163,19 +262,16 @@ class PhysicsEngine {
       rigidBody
     );
 
-    // Explicit Center of Mass Shift
-    // Infants are top heavy. A headRatio of 0.25 pulls the CoM significantly upwards.
+    // Explicit Center of Mass shift for top-heavy infants
     const headRatio = anthropometry?.headHeightRatio ?? 0.15;
-    const baseMass = 10.0; // Arbitrary but consistent for kinematic bodies
-    // Shift CoM up proportionally to how much larger the head is vs adult (~0.14)
-    let comYShift = headRatio > 0.15 ? (headRatio - 0.15) * safeHeight * 2.0 : 0; 
+    const baseMass = 10.0;
+    let comYShift = headRatio > 0.15 ? (headRatio - 0.15) * safeHeight * 2.0 : 0;
     if (!Number.isFinite(comYShift)) comYShift = 0;
-    
-    // Set custom mass properties on the rigid body
+
     rigidBody.setAdditionalMassProperties(
-      baseMass, 
-      { x: 0, y: comYShift, z: 0 }, 
-      { x: 1, y: 1, z: 1 }, 
+      baseMass,
+      { x: 0, y: comYShift, z: 0 },
+      { x: 1, y: 1, z: 1 },
       { w: 1, x: 0, y: 0, z: 0 }
     );
 
@@ -183,55 +279,30 @@ class PhysicsEngine {
   }
 
   // ── Character controller (anti-clip) ─────────────────────────────────────
-  /**
-   * §Fix: KinematicCharacterController prevents agents from clipping through
-   * solid geometry.  Call once per agent after creating its rigid body.
-   *
-   * @param {object} world       - Rapier world
-   * @param {number} offset      - skin width around character (metres)
-   * @param {number} maxStepHeight - max height obstacle KCC can step over automatically
-   * @returns {RAPIER.KinematicCharacterController}
-   */
   createCharacterController(world, offset = 0.02, maxStepHeight = 0.3) {
     const controller = world.createCharacterController(offset);
     controller.setUp({ x: 0, y: 1, z: 0 });
-    controller.setMaxSlopeClimbAngle(45 * Math.PI / 180);   // 45°
-    controller.setMinSlopeSlideAngle(30 * Math.PI / 180);   // 30°
-    controller.enableAutostep(maxStepHeight, 0.2, true);    // max step matches parameter
-    controller.enableSnapToGround(0.2);                     // snap within 20cm
-    controller.setSlideEnabled(true);                       // slide along walls
+    controller.setMaxSlopeClimbAngle(45 * Math.PI / 180);
+    controller.setMinSlopeSlideAngle(30 * Math.PI / 180);
+    controller.enableAutostep(maxStepHeight, 0.2, true);
+    controller.enableSnapToGround(0.2);
+    controller.setSlideEnabled(true);
     return controller;
   }
 
   // ── Move agent respecting collisions ─────────────────────────────────────
-  /**
-   * §Fix: replaces direct setNextKinematicTranslation calls in agent.js /
-   * simulationController.js.  The controller resolves collisions and returns
-   * the corrected translation that Rapier will actually apply.
-   *
-   * @param {object} world           - Rapier world
-   * @param {object} controller      - KinematicCharacterController
-   * @param {object} rigidBody       - agent's rigidbody
-   * @param {object} collider        - agent's primary collider (torso)
-   * @param {{x,y,z}} desiredMove    - movement delta this frame
-   * @param {number} deltaTime       - seconds
-   * @returns {{x,y,z}} applied translation
-   */
   moveAgentWithController(world, controller, rigidBody, collider, desiredMove, deltaTime) {
     if (!controller || !rigidBody || !collider) return desiredMove;
 
-    // Guard against NaN in desiredMove BEFORE calling Rapier WebAssembly
     if (!Number.isFinite(desiredMove.x) || !Number.isFinite(desiredMove.y) || !Number.isFinite(desiredMove.z)) {
       console.warn('[PhysicsEngine] NaN detected in desiredMove:', desiredMove);
       return { x: 0, y: 0, z: 0 };
     }
 
     try {
-      // Compute collision-resolved movement
       controller.computeColliderMovement(collider, desiredMove);
       const corrected = controller.computedMovement();
 
-      // Apply the corrected position
       const pos = rigidBody.translation();
       const newPos = {
         x: pos.x + corrected.x,
@@ -239,7 +310,6 @@ class PhysicsEngine {
         z: pos.z + corrected.z,
       };
 
-      // Guard against NaN (WASM crash prevention)
       if (Number.isFinite(newPos.x) && Number.isFinite(newPos.y) && Number.isFinite(newPos.z)) {
         rigidBody.setNextKinematicTranslation(newPos);
       }
@@ -251,9 +321,6 @@ class PhysicsEngine {
     }
   }
 
-  /**
-   * Check if controller determined the character is grounded.
-   */
   isGrounded(controller) {
     try {
       return controller.computedGrounded();
@@ -289,9 +356,6 @@ class PhysicsEngine {
     });
   }
 
-  /**
-   * Get contact point on the static object's surface.
-   */
   getContactPoint(world, collider1, collider2) {
     let contactData = null;
     let maxDepth    = -Infinity;
@@ -391,47 +455,131 @@ class PhysicsEngine {
   }
 
   /**
- * Downward raycast to find actual floor height at (x, z).
- * Returns floorFallback if ray misses or hits furniture (not floor).
- * Only accepts surfaces within maxStepHeight of the scene floor.
- */
-getFloorHeightAt(world, x, y, z, floorFallback = 0, maxDistance = 10, agentBodyToIgnore = null) {
-  if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) return floorFallback;
-
-  try {
-    // Cast from slightly above the agent's current position to allow stepping up
-    const origin    = { x, y: y + 0.3, z }; 
-    const direction = { x: 0, y: -1, z: 0 };
-    const ray  = new this.rapier.Ray(origin, direction);
-    
-    // We pass agentBodyToIgnore as the filterRigidBody argument (7th positional)
-    // and we also specify QueryFilterFlags.EXCLUDE_KINEMATIC (2) as the filterFlags argument (5th positional)
-    // to ensure we never hit agents.
-    // Signature: castRay(ray, maxToi, solid, collisionGroups, filterFlags, filterTarget, filterBody, filterCollider)
-    const excludeKinematic = 2;
-    const hit  = world.castRay(ray, maxDistance, true, undefined, excludeKinematic, undefined, agentBodyToIgnore, undefined);
-    
-    // Older Rapier JS uses timeOfImpact, newer uses toi. Handle both safely to avoid NaN coordinates
-    const t = hit ? (hit.toi !== undefined ? hit.toi : hit.timeOfImpact) : null;
-    if (t !== null && t !== undefined) {
-      const hitY = origin.y + direction.y * t;
-      // return the actual surface so agents don't snap through furniture
-      return hitY;
-    }
-  } catch (_) {}
-  return floorFallback;
-}
-
-  // ── BUG #3 FIX: Multi-part spawn geometry helper ─────────────────────────
-  /**
-   * Returns per-part shape descriptors matching the real createAgentMultipartCollider geometry.
-   * Used by simulationController spawn checks to test each body-part individually,
-   * catching gaps between torso-bottom and legs-top that a single capsule misses.
+   * Downward raycast to find actual floor height at (x, z).
    *
-   * @param {number} height       - agent height in metres
-   * @param {number} radius       - capsule radius
-   * @param {object|null} anthro  - ageGroup.anthropometry
-   * @returns {Array<{shape, centerOffsetY}>}  shapes with Y offsets relative to body center
+   * CONTRACT v4 (Priority 1 fix):
+   *   Origin is exactly (x, y, z) — NO hidden offset.
+   *   hitY = y - toi  (direction.y = -1, so hitPoint.y = origin.y + (-1)*toi)
+   *   Callers must pass y = agentFeetY or agentFeetY + small_clearance,
+   *   NOT y = bodyCentreY.  The old hidden +0.3 caused hitY errors of ±0.3m,
+   *   leading to spawn hovering and DBC false-positive falls.
+   *
+   * @param {object} world
+   * @param {number} x
+   * @param {number} y        - ray origin Y (pass feet-level or slightly above)
+   * @param {number} z
+   * @param {number} floorFallback
+   * @param {number} maxDistance
+   * @param {object|null} agentBodyToIgnore
+   */
+  getFloorHeightAt(world, x, y, z, floorFallback = 0, maxDistance = 10, agentBodyToIgnore = null) {
+    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) return floorFallback;
+
+    try {
+      // [FIX P1] Origin = exact y, no hidden offset.
+      // Old code used y + 0.3 → hitY = (y+0.3) - toi → systematic error.
+      const origin    = { x, y, z };
+      const direction = { x: 0, y: -1, z: 0 };
+      const ray  = new this.rapier.Ray(origin, direction);
+
+      const excludeKinematic = 2;
+      const hit  = world.castRay(ray, maxDistance, true, undefined, excludeKinematic, undefined, agentBodyToIgnore, undefined);
+
+      const t = hit ? (hit.toi !== undefined ? hit.toi : hit.timeOfImpact) : null;
+      if (t !== null && t !== undefined) {
+        // hitY = origin.y + direction.y * t = y - t  (since direction.y = -1)
+        const hitY = y - t;
+        return hitY;
+      }
+    } catch (_) {}
+    return floorFallback;
+  }
+
+  // ── Hand Interaction Sensors (Priority 4) ────────────────────────────────
+  /**
+   * Creates two Kinematic sensor spheres representing Left and Right hand positions.
+   * These are NOT attached as child colliders to the agent body — they are independent
+   * fixed bodies that the agent's update() loop repositions each frame by mirroring
+   * the agent's body position + a hand-reach offset.
+   *
+   * Usage:
+   *   const { left, right } = physicsEngine.createHandSensors(world, height, radius);
+   *   // each frame: physicsEngine.updateHandSensorPositions(left, right, bodyPos, heading, ag)
+   *   // drain intersectionEvents to detect what the hands are touching
+   *
+   * @param {object} world
+   * @param {number} height      - agent height (m)
+   * @param {number} capsuleRadius
+   * @param {object|null} anthropometry
+   * @returns {{ left: {body, collider}, right: {body, collider} }}
+   */
+  createHandSensors(world, height, capsuleRadius, anthropometry = null) {
+    const handR = anthropometry?.handRadius ?? Math.max(0.04, capsuleRadius * 0.35);
+
+    const makeSensor = (x0, y0, z0) => {
+      const bodyDesc = this.rapier.RigidBodyDesc.kinematicPositionBased()
+        .setTranslation(x0, y0, z0);
+      const body = world.createRigidBody(bodyDesc);
+      const colliderDesc = this.rapier.ColliderDesc.ball(handR)
+        .setSensor(true)
+        .setActiveEvents(
+          this.rapier.ActiveEvents.INTERSECTION_EVENTS |
+          this.rapier.ActiveEvents.COLLISION_EVENTS
+        );
+      const collider = world.createCollider(colliderDesc, body);
+      return { body, collider };
+    };
+
+    // Initial positions are arbitrary — updateHandSensorPositions sets them every frame
+    return {
+      left:  makeSensor(0, 0, 0),
+      right: makeSensor(0, 0, 0),
+    };
+  }
+
+  /**
+   * Reposition hand sensors each physics frame to match agent's body + heading.
+   * Call this BEFORE physicsEngine.step() so sensors are in the right place
+   * when the event queue is drained.
+   *
+   * @param {{body}} leftSensor
+   * @param {{body}} rightSensor
+   * @param {{x,y,z}} bodyPos   - agent body translation (centre Y)
+   * @param {number}  heading   - agent's current heading in radians
+   * @param {number}  height    - agent height
+   * @param {object|null} anthropometry
+   */
+  updateHandSensorPositions(leftSensor, rightSensor, bodyPos, heading, height, anthropometry = null) {
+    if (!leftSensor?.body || !rightSensor?.body) return;
+
+    const armLength   = anthropometry?.armLength   ?? height * 0.30;
+    const shoulderY   = anthropometry?.torsoLength ?? height * 0.40;
+    const halfH       = height / 2;
+
+    // Shoulder height in body-local frame (measured from body centre)
+    const handY = bodyPos.y - halfH + shoulderY * 0.70;
+
+    // Hands extended forward-left and forward-right relative to heading
+    const fwdX = Math.cos(heading), fwdZ = Math.sin(heading);
+    const latX = -fwdZ,            latZ =  fwdX;   // perpendicular left
+
+    const reach = armLength * 0.75; // 75% arm extension for normal reach
+
+    const lx = bodyPos.x + fwdX * reach * 0.5 + latX * reach * 0.5;
+    const lz = bodyPos.z + fwdZ * reach * 0.5 + latZ * reach * 0.5;
+    const rx = bodyPos.x + fwdX * reach * 0.5 - latX * reach * 0.5;
+    const rz = bodyPos.z + fwdZ * reach * 0.5 - latZ * reach * 0.5;
+
+    if (Number.isFinite(lx) && Number.isFinite(lz)) {
+      leftSensor.body.setNextKinematicTranslation({ x: lx, y: handY, z: lz });
+    }
+    if (Number.isFinite(rx) && Number.isFinite(rz)) {
+      rightSensor.body.setNextKinematicTranslation({ x: rx, y: handY, z: rz });
+    }
+  }
+  /**
+   * Returns per-part shape descriptors matching createAgentMultipartCollider geometry.
+   * centerOffsetY values are relative to the BODY CENTRE (= feetY + halfH).
    */
   getAgentSpawnShapes(height, radius, anthro = null) {
     const halfH       = height / 2;

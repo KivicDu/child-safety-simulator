@@ -93,6 +93,68 @@ const MathUtils = {
       ( e[ 1 ] * x + e[ 5 ] * y + e[ 9 ] * z + e[ 13 ] ) * w,
       ( e[ 2 ] * x + e[ 6 ] * y + e[ 10 ] * z + e[ 14 ] ) * w
     ];
+  },
+
+  decomposeMatrix: (te) => {
+    let sx = Math.hypot(te[0], te[1], te[2]);
+    let sy = Math.hypot(te[4], te[5], te[6]);
+    let sz = Math.hypot(te[8], te[9], te[10]);
+
+    const det = te[0] * (te[5] * te[10] - te[6] * te[9]) -
+                te[1] * (te[4] * te[10] - te[6] * te[8]) +
+                te[2] * (te[4] * te[9] - te[5] * te[8]);
+    if (det < 0) sx = -sx;
+
+    const invSX = sx !== 0 ? 1 / sx : 0;
+    const invSY = sy !== 0 ? 1 / sy : 0;
+    const invSZ = sz !== 0 ? 1 / sz : 0;
+
+    const m11 = te[0] * invSX, m12 = te[4] * invSY, m13 = te[8] * invSZ;
+    const m21 = te[1] * invSX, m22 = te[5] * invSY, m23 = te[9] * invSZ;
+    const m31 = te[2] * invSX, m32 = te[6] * invSY, m33 = te[10] * invSZ;
+
+    const trace = m11 + m22 + m33;
+    let x, y, z, w;
+
+    if (trace > 0.0) {
+      const s = 0.5 / Math.sqrt(trace + 1.0);
+      w = 0.25 / s;
+      x = (m32 - m23) * s;
+      y = (m13 - m31) * s;
+      z = (m21 - m12) * s;
+    } else if (m11 >= m22 && m11 >= m33) {
+      const s = 2.0 * Math.sqrt(1.0 + m11 - m22 - m33);
+      w = (m32 - m23) / s;
+      x = 0.25 * s;
+      y = (m12 + m21) / s;
+      z = (m13 + m31) / s;
+    } else if (m22 > m33) {
+      const s = 2.0 * Math.sqrt(1.0 + m22 - m11 - m33);
+      w = (m13 - m31) / s;
+      x = (m12 + m21) / s;
+      y = 0.25 * s;
+      z = (m23 + m32) / s;
+    } else {
+      const s = 2.0 * Math.sqrt(1.0 + m33 - m11 - m22);
+      w = (m21 - m12) / s;
+      x = (m13 + m31) / s;
+      y = (m23 + m32) / s;
+      z = 0.25 * s;
+    }
+
+    const len = Math.hypot(x, y, z, w);
+    if (len > 0) {
+      const invLen = 1 / len;
+      x *= invLen; y *= invLen; z *= invLen; w *= invLen;
+    } else {
+      x = 0; y = 0; z = 0; w = 1;
+    }
+
+    return {
+      translation: [te[12], te[13], te[14]],
+      rotation: [x, y, z, w],
+      scale: [sx, sy, sz]
+    };
   }
 };
 
@@ -129,8 +191,10 @@ class GLBParser {
       let globalMax = [-Infinity, -Infinity, -Infinity];
 
       // ✅ TRAVERSE RECURSIVELY WITH MATRIX MATH checks
-      const traverseNode = (node, parentMatrix = MathUtils.identityMatrix()) => {
+      const traverseNode = (node, parentMatrix = MathUtils.identityMatrix(), currentObject = null) => {
         const mesh = node.getMesh();
+        const nodeName = node.getName() || '';
+        const isProxy = nodeName.startsWith('COL_');
         
         // 1. Get local transform matrix
         const t = node.getTranslation();
@@ -141,46 +205,45 @@ class GLBParser {
         // 2. Combine with parent matrix -> World Matrix
         const worldMatrix = MathUtils.multiplyMatrices(parentMatrix, localMatrix);
         
+        let newCurrentObject = currentObject;
+
         if (mesh) {
           // 3. Get local AABB
           const localBbox = this.calculateBoundingBox(mesh);
           
-          // 4. Transform AABB to World Space (using 8 corners)
+          // 4. Transform AABB to World Space (using 8 corners) for global floor detection
           const worldBbox = this.transformBoundingBox(localBbox, worldMatrix);
 
-          // 🔥 RESTORED WITH FIX: Extract material properties from first primitive
-          // (User's revert removed this, but implementation plan requires it)
-          const primitives = mesh.listPrimitives();
-          let materialData = null;
+          // 5. Extract properly aligned OBB
+          const min = localBbox.min;
+          const max = localBbox.max;
           
-          if (primitives.length > 0) {
-            const material = primitives[0].getMaterial();
-            if (material) {
-              const baseColor = material.getBaseColorFactor(); // [r, g, b, a]
-              const metallic = material.getMetallicFactor();
-              const roughness = material.getRoughnessFactor();
-              materialData = {
-                name: material.getName(),
-                baseColor: baseColor, // [r,g,b,a]
-                metallic: metallic,
-                roughness: roughness,
-                emissive: material.getEmissiveFactor && material.getEmissiveFactor() // [r,g,b]
-              };
-            }
-          }
+          // Local center offset from geometry origin
+          const localCenter = [
+            (min[0] + max[0]) / 2,
+            (min[1] + max[1]) / 2,
+            (min[2] + max[2]) / 2
+          ];
           
-          objects.push({
-            id: `obj_${objects.length}`,
-            name: node.getName() || `Object_${objects.length}`,
-            // Decompose position from world matrix for simple reference
-            transform: {
-              position: [worldMatrix[12], worldMatrix[13], worldMatrix[14]],
-            },
-            boundingBox: worldBbox,
-            primitiveCount: primitives.length,
-            // 🔥 Attached extracted material data
-            material: materialData
-          });
+          // Half-extents for physics shapes
+          const halfExtents = [
+            (max[0] - min[0]) / 2,
+            (max[1] - min[1]) / 2,
+            (max[2] - min[2]) / 2
+          ];
+          
+          // Transform local center directly to world space
+          const worldCenter = MathUtils.applyMatrixToPoint(worldMatrix, localCenter);
+          
+          // Decompose the world matrix to find real world rotation
+          const decomposed = MathUtils.decomposeMatrix(worldMatrix);
+          // When scale has a negative determinant, we'll compensate (already done in decomposeMatrix).
+          
+          const obbData = {
+            center: worldCenter,
+            extents: halfExtents,
+            rotation: decomposed.rotation
+          };
 
           // Update global bounds
           globalMin = [
@@ -193,12 +256,63 @@ class GLBParser {
             Math.max(globalMax[1], worldBbox.max[1]),
             Math.max(globalMax[2], worldBbox.max[2])
           ];
-        }
+
+          if (isProxy) {
+            if (currentObject) {
+              // Add this proxy to the current parent's proxy list
+              currentObject.proxyColliders.push({
+                name: nodeName,
+                ...obbData
+              });
+              console.log(`  🔗 Found proxy collider: ${nodeName} on ${currentObject.name}`);
+            } else {
+              console.warn(`  ⚠️ Found proxy collider ${nodeName} but no parent object to attach to.`);
+            }
+          } else {
+            // Normal object
+            // Extract material properties from first primitive
+            const primitives = mesh.listPrimitives();
+            let materialData = null;
+            
+            if (primitives.length > 0) {
+              const material = primitives[0].getMaterial();
+              if (material) {
+                const baseColor = material.getBaseColorFactor(); // [r, g, b, a]
+                const metallic = material.getMetallicFactor();
+                const roughness = material.getRoughnessFactor();
+                materialData = {
+                  name: material.getName(),
+                  baseColor: baseColor, // [r,g,b,a]
+                  metallic: metallic,
+                  roughness: roughness,
+                  emissive: material.getEmissiveFactor && material.getEmissiveFactor() // [r,g,b]
+                };
+              }
+            }
+            
+            const newObject = {
+              id: `obj_${objects.length}`,
+              name: nodeName || `Object_${objects.length}`,
+              // Backwards compatibility transforms for standard system
+              transform: {
+                position: [worldMatrix[12], worldMatrix[13], worldMatrix[14]],
+              },
+              boundingBox: worldBbox, // Kept for scaleNormalizer and legacy compatibility
+              obb: obbData,           // New structured OBB!
+              proxyColliders: [],     // Array of attached proxies
+              primitiveCount: primitives.length,
+              material: materialData
+            };
+            
+            objects.push(newObject);
+            newCurrentObject = newObject;
+          }
+        } // end if (mesh)
 
         // Traverse children
         const children = node.listChildren();
         for (const child of children) {
-          traverseNode(child, worldMatrix);
+          traverseNode(child, worldMatrix, newCurrentObject);
         }
       };
 

@@ -134,7 +134,14 @@ class InjuryCalculator {
     ) * boneDensityFactor; // Apply physiological bone softness across all mechanical impacts
 
     const ageAdjustedScore = calculateAgeAdjustedInjury(rawScore, ageGroupId, bodyPart);
-    const finalScore = Math.max(0, Math.min(100, ageAdjustedScore));
+    let finalScore = Math.max(0, Math.min(100, ageAdjustedScore));
+    
+    // [Phase 5] Physis Yield (Growth Plate) Check
+    const physisInjury = this.calculatePhysisYield(impactForce, ageGroupId);
+    if (physisInjury && finalScore < 71) {
+      finalScore = 85; // A fracture represents critical injury minimum
+    }
+    
     const riskTier = this.getRiskTier(finalScore);
 
     return {
@@ -142,6 +149,7 @@ class InjuryCalculator {
       riskTier: riskTier.label,
       riskColor: riskTier.color,
       bodyPart,
+      specificInjury: physisInjury || null,
       // Biomechanics detail
       gForce: Math.round(gForce * 10) / 10,
       gForceTier: gForceTier.label,
@@ -160,6 +168,27 @@ class InjuryCalculator {
       },
       metadata: { velocity, mass, ageGroup: ageGroupId, timestamp: new Date().toISOString() }
     };
+  }
+
+  // ===========================================================================
+  // GROWTH PLATE FRACTURE MODELING (Physis Yield)
+  // ===========================================================================
+  calculatePhysisYield(jointForce, ageGroupId) {
+    const ageGroup = getAgeGroup(ageGroupId);
+    if (!ageGroup || !ageGroup.physics || !ageGroup.physics.physisYieldLimitNm) {
+      return null;
+    }
+
+    // Simplified biomechanical torque calculation converting impact force (N) to torque (Nm)
+    // Assuming an average joint lever arm during a fall (e.g., rigid arm or bent knee)
+    const leverArm = 0.15; // 15cm lever arm
+    const appliedTorque = jointForce * leverArm;
+    const physisThreshold = ageGroup.physics.physisYieldLimitNm;
+
+    if (appliedTorque > physisThreshold) {
+      return "growth_plate_fracture";
+    }
+    return null;
   }
 
   // ===========================================================================
@@ -252,8 +281,10 @@ class InjuryCalculator {
   }
 
   normalizeForce(force, mass) {
-    // Force threshold based on body weight: 50x body weight is ~dangerous
-    const threshold = mass * 50 * this.GRAVITY; // N
+    // Phase 5: Scale bone fracture thresholds based on age (implied by body weight here, 
+    // but we can make it steeper for heavier/older children to account for bone density changes).
+    // Using 40x body weight as a baseline for dangerous thresholds in pediatric models.
+    const threshold = mass * 40 * this.GRAVITY; // N
     if (force < threshold * 0.1) return 0;
     if (force < threshold * 0.3) return 20 * (force / (threshold * 0.3));
     if (force < threshold) return 20 + 50 * ((force - threshold * 0.3) / (threshold * 0.7));
@@ -502,6 +533,7 @@ export default {
   // Expose helpers if needed by validatons
   calculateHIC15: calculatorInstance.calculateHIC15.bind(calculatorInstance),
   getCollisionDuration: calculatorInstance.getCollisionDuration.bind(calculatorInstance),
+  calculatePhysisYield: calculatorInstance.calculatePhysisYield.bind(calculatorInstance),
 
   RISK_TIERS: calculatorInstance.RISK_TIERS,
   MATERIAL_COLLISION
