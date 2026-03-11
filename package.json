@@ -1,0 +1,27 @@
+{
+  "name": "child-safety-simulator",
+  "version": "1.0.0",
+  "description": "Child Safety Simulator - Integrated Full Stack Application",
+  "type": "module",
+  "scripts": {
+    "install-all": "npm install && npm --prefix Backend install && npm --prefix Frontend install",
+    "dev": "concurrently \"npm --prefix Backend run dev\" \"npm --prefix Frontend run dev\"",
+    "dev:backend": "npm --prefix Backend run dev",
+    "dev:frontend": "npm --prefix Frontend run dev",
+    "build": "npm --prefix Frontend run build && npm --prefix Backend run build",
+    "build:frontend": "npm --prefix Frontend run build",
+    "start": "npm --prefix Backend run start",
+    "preview": "npm --prefix Frontend run preview",
+    "lint": "npm --prefix Frontend run lint",
+    "test": "npm --prefix Backend run test:week3"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "axios": "^1.13.6"
+  }
+}

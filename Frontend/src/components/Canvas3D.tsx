@@ -1,0 +1,1406 @@
+import React, { useRef, useEffect, useState } from "react";
+import * as THREE from "three";
+import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
+import { ScaleApplicator } from "../utils/ScaleApplicator";
+import { CharacterScaleValidator } from "../utils/CharacterScaleValidator";
+import {
+  createDriver,
+  AGENT_PALETTE,
+  type IFigureDriver,
+  type ActionEntry,
+} from "./Figuredriver";
+
+// ─── Types ────────────────────────────────────────────────────────────────────
+interface TrajData {
+  agentId: number;
+  ageGroupId?: string;
+  positions: number[][];
+  actionLog?: ActionEntry[];
+  collisions?: number[][];
+}
+interface SimPlayback {
+  trajectories?: TrajData[];
+  config?: {
+    fps?: number;
+    duration?: number;
+    ageGroupId?: string;
+    scaleFactor?: number;
+    floorHeight?: number; // Physics floor Y (Rapier world-space) — Single Source of Truth từ backend
+  };
+  debugStats?: {
+    rejectedSpawns?: number[][];
+    [key: string]: any;
+  };
+}
+interface HeatPt {
+  position: number[];
+  normal?: number[];
+  score?: number;
+  riskTier?: string;
+}
+interface HeatObj {
+  objectId: string;
+  objectName: string;
+  boundingBox?: any;
+  collisions?: HeatPt[];
+  collisionPositions?: number[][];
+  maxInjuryScore: number;
+  heatColor: number[];
+  intensity: number;
+}
+interface LiveAgent {
+  agentId: number;
+  position: number[]; // CENTER of agent capsule (physicsEngine convention)
+  ageGroupId?: string;
+}
+interface Props {
+  modelPath?: string;
+  sceneData?: any;
+  sceneUnitScale?: number;
+  simulationPlayback?: SimPlayback | null;
+  heatmapData?: HeatObj[] | null;
+  showHeatmap?: boolean;
+  liveAgentPositions?: LiveAgent[] | null;
+  selectedAgentId?: number | null;
+  onPlaybackUpdate?: (info: {
+    progress: number;
+    action: string;
+    time: number;
+  }) => void;
+  playbackPaused?: boolean;
+  playbackSeek?: number | null;
+  enableFloorSnap?: boolean;
+  showBoundingBoxes?: boolean;
+  isBabyView?: boolean;
+}
+
+// ─── Figure handle ────────────────────────────────────────────────────────────
+interface FigureHandle {
+  driver: IFigureDriver;
+  root: THREE.Group;
+  agentId: number;
+  ageId: string;
+  color: number;
+  trajectory?: number[][];
+  actionLog?: ActionEntry[];
+  lx?: number;
+  lz?: number;
+  walkCycle: number;
+  currentlyWading: boolean;
+  lastFloorY: number;
+  // Trail vẽ động — chỉ hiện khi agent được chọn
+  trailPoints: THREE.Vector3[];
+  trailLine: THREE.Line | null;
+  arrowHelper: THREE.ArrowHelper | null;
+  capsuleHelper: THREE.Mesh | null;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// dampAngle helper for smooth shortest-path rotation
+// ─────────────────────────────────────────────────────────────────────────────
+function dampAngle(x: number, y: number, lambda: number, dt: number): number {
+  const PI2 = Math.PI * 2;
+  const delta = ((((y - x) % PI2) + PI2 * 1.5) % PI2) - Math.PI;
+  return x + delta * (1 - Math.exp(-lambda * dt));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// toWorldSpace
+// ─────────────────────────────────────────────────────────────────────────────
+function toWorldSpace(
+  pos: number[] | THREE.Vector3,
+  offsetXYZ: THREE.Vector3,
+): THREE.Vector3 {
+  const x = Array.isArray(pos) ? pos[0] : pos.x;
+  const y = Array.isArray(pos) ? pos[1] : pos.y;
+  const z = Array.isArray(pos) ? pos[2] : pos.z;
+
+  // Guard: if offsetXYZ is not yet computed (model not loaded), use zero offset
+  if (!offsetXYZ) {
+    return new THREE.Vector3(x, y, z);
+  }
+
+  return new THREE.Vector3(x - offsetXYZ.x, y - offsetXYZ.y, z - offsetXYZ.z);
+}
+
+function getFloorY(c: any, worldPos: THREE.Vector3): number | null {
+  const floorMeshes = c.floorMeshes as THREE.Mesh[];
+  const allMeshes = c.sceneMeshes as THREE.Mesh[];
+  if (!allMeshes.length) return null;
+
+  const rc = c.raycaster as THREE.Raycaster;
+  const origin = new THREE.Vector3(worldPos.x, worldPos.y + 5.0, worldPos.z);
+  const down = new THREE.Vector3(0, -1, 0);
+  rc.far = 10.0;
+
+  // Pass 1: Raycast only against named floor meshes (Layer 2) — most accurate
+  if (floorMeshes.length > 0) {
+    rc.set(origin, down);
+    const floorHits = rc.intersectObjects(floorMeshes, false);
+    if (floorHits.length > 0) {
+      return floorHits[0].point.y;
+    }
+  }
+
+  // Pass 2: Raycast against ALL scene meshes.
+  // FIX #14: Find the LOWEST hit point — this is the floor surface.
+  // Previously we filtered by sceneFloorY + 0.3, which failed when sceneFloorY was wrong.
+  // The lowest hit is almost always the floor (furniture/table surfaces are higher).
+  // FIX #16: Find hit closest to known physics floor (within 0.5m tolerance).
+  // Previously returned the lowest hit, which could be a geometry artefact.
+  // Now we prefer actual floor-level hits to avoid snapping to furniture surfaces.
+  rc.set(origin, down);
+  const allHits = rc.intersectObjects(allMeshes, false);
+  if (!allHits.length) {
+    return c.physicsFloorY ?? null;
+  }
+
+  // Prioritize hits on floor-classified meshes (e.g. layers containing 2)
+  const floorLayer = new THREE.Layers();
+  floorLayer.set(2);
+  const floorHits = allHits.filter((h) => h.object.layers.test(floorLayer));
+  if (floorHits.length > 0) {
+    return floorHits[0].point.y;
+  }
+
+  const physFloor = c.physicsFloorY ?? 0;
+  let bestY: number | null = null;
+  let bestDist = Infinity;
+  for (let i = 0; i < allHits.length; i++) {
+    const hitY = allHits[i].point.y;
+    const dist = Math.abs(hitY - physFloor);
+    if (dist < 0.5 && dist < bestDist) {
+      bestDist = dist;
+      bestY = hitY;
+    }
+  }
+  return bestY ?? c.physicsFloorY ?? null;
+}
+
+// ─── LOD ─────────────────────────────────────────────────────────────────────
+type LOD = "near" | "mid" | "far";
+function getLOD(root: THREE.Group, cam: THREE.Camera): LOD {
+  const d = root.position.distanceTo(cam.position);
+  return d < 5 ? "near" : d < 15 ? "mid" : "far";
+}
+
+// ─── Action icons ─────────────────────────────────────────────────────────────
+const ICONS: Record<string, string> = {
+  crawl: "🐛",
+  walk: "🚶",
+  walk_to: "🚶",
+  walk_random: "🚶",
+  run: "🏃",
+  sprint: "💨",
+  run_unstable: "🏃",
+  climb_on: "🧗",
+  climb: "🧗",
+  climb_approach: "🧗",
+  climb_reach: "🧗",
+  climb_pull: "🧗",
+  climb_mount: "🧗",
+  climb_fail: "❌",
+  step_up: "⬆️",
+  step_down: "⬇️",
+  stumble: "⚠️",
+  trip: "⚠️",
+  falling: "💥",
+  free_fall: "💥",
+  fall_forward: "💥",
+  lose_balance: "🌀",
+  hurt_light: "😣",
+  hurt_medium: "😢",
+  hurt_heavy: "😭",
+  hurt_shock: "🤕",
+  recoil: "😖",
+  crying_stand: "😭",
+  crying_sit: "😭",
+  get_up_slow: "🧎",
+  get_up_fast: "🧎",
+  idle: "💤",
+  pause: "💤",
+  wade: "🌊",
+  grab: "✊",
+  grab_mouth: "👄",
+  reach_up: "🙆",
+  pull: "🤏",
+  lunge: "💨",
+  investigate: "👀",
+  look_around: "👀",
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Component
+// ─────────────────────────────────────────────────────────────────────────────
+const Canvas3D: React.FC<Props> = ({
+  modelPath,
+  sceneData,
+  sceneUnitScale = 1.0,
+  simulationPlayback,
+  heatmapData,
+  showHeatmap = false,
+  liveAgentPositions,
+  selectedAgentId = null,
+  onPlaybackUpdate,
+  playbackPaused = false,
+  playbackSeek = null,
+  enableFloorSnap = true,
+  showBoundingBoxes = false,
+  isBabyView = false,
+}) => {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const ctx = useRef<any>(null);
+  const propsRef = useRef({
+    simulationPlayback,
+    playbackPaused,
+    selectedAgentId,
+    onPlaybackUpdate,
+    playbackSeek,
+    enableFloorSnap,
+    sceneData,
+    showBoundingBoxes,
+  });
+  propsRef.current = {
+    simulationPlayback,
+    playbackPaused,
+    selectedAgentId,
+    onPlaybackUpdate,
+    playbackSeek,
+    enableFloorSnap,
+    sceneData,
+    showBoundingBoxes,
+  };
+  const [loadStatus, setLoadStatus] = useState("");
+  const [loadPct, setLoadPct] = useState<number | null>(null);
+
+  // ── Mount renderer ────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (!containerRef.current) return;
+    const el = containerRef.current;
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x111520);
+    scene.fog = new THREE.Fog(0x111520, 40, 130);
+
+    const w = el.clientWidth || 800,
+      h = el.clientHeight || 400;
+    const camera = new THREE.PerspectiveCamera(55, w / h, 0.01, 2500);
+    camera.position.set(4, 4, 4);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(w, h);
+    renderer.setPixelRatio(window.devicePixelRatio);
+    renderer.shadowMap.enabled = true;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.1;
+    el.appendChild(renderer.domElement);
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.08;
+    controls.minDistance = 0.3;
+    controls.maxDistance = 200;
+
+    scene.add(new THREE.AmbientLight(0xd0e8ff, 0.65));
+    const sun = new THREE.DirectionalLight(0xfff5e0, 1.1);
+    sun.position.set(8, 20, 10);
+    sun.castShadow = true;
+    sun.shadow.mapSize.set(2048, 2048);
+    scene.add(sun);
+    scene.add(new THREE.HemisphereLight(0xb0d0ff, 0x806040, 0.38));
+    // scene.add(new THREE.GridHelper(30, 30, 0x334455, 0x1a2535));
+    // scene.add(new THREE.AxesHelper(2));
+
+    const raycaster = new THREE.Raycaster();
+    raycaster.layers.set(1);
+
+    ctx.current = {
+      scene,
+      camera,
+      renderer,
+      controls,
+      raycaster,
+      frameId: 0,
+      lastTime: Date.now(),
+      figures: [] as FigureHandle[],
+      liveFigures: [] as FigureHandle[],
+      heatMeshes: [] as THREE.Mesh[],
+      trails: [] as THREE.Line[],
+      labels: [] as THREE.Sprite[],
+      hitSpheres: [] as THREE.Mesh[],
+      rejectedSpheres: [] as THREE.Mesh[],
+      model: null,
+      offsetXZ: new THREE.Vector2(),
+      offsetXYZ: new THREE.Vector3(),
+      physicsFloorY: 0,
+      floorBias: 0,
+      sceneMeshes: [] as THREE.Mesh[],
+      floorMeshes: [] as THREE.Mesh[],
+      bbHelpers: [] as THREE.Object3D[],
+      isPlaying: false,
+      playStart: 0,
+      currentFrame: 0,
+      pausedAt: 0,
+    };
+
+    const loop = () => {
+      const c = ctx.current;
+      if (!c) return;
+      c.frameId = requestAnimationFrame(loop);
+      try {
+        const now = Date.now();
+        const dt = Math.min((now - c.lastTime) / 1000, 0.05);
+        c.lastTime = now;
+        c.controls.update();
+        const p = propsRef.current;
+        if (p.simulationPlayback?.trajectories) tick(c, p, dt);
+        c.renderer.render(c.scene, c.camera);
+      } catch (e) {
+        console.error("[Canvas3D]", e);
+      }
+    };
+    loop();
+
+    const resize = () => {
+      if (!ctx.current) return;
+      ctx.current.camera.aspect = el.clientWidth / el.clientHeight;
+      ctx.current.camera.updateProjectionMatrix();
+      ctx.current.renderer.setSize(el.clientWidth, el.clientHeight);
+    };
+    window.addEventListener("resize", resize);
+    return () => {
+      window.removeEventListener("resize", resize);
+      if (ctx.current) {
+        cancelAnimationFrame(ctx.current.frameId);
+        ctx.current.controls.dispose();
+        if (el.contains(ctx.current.renderer.domElement))
+          el.removeChild(ctx.current.renderer.domElement);
+        ctx.current.renderer.dispose();
+        ctx.current = null;
+      }
+    };
+  }, []);
+
+  // ── Playback controls ─────────────────────────────────────────────────────
+  useEffect(() => {
+    if (!ctx.current) return;
+    const c = ctx.current;
+    if (playbackPaused) {
+      c.isPlaying = false;
+      c.pausedAt = c.currentFrame;
+    } else if (c.figures.length > 0) {
+      c.isPlaying = true;
+      c.playStart =
+        Date.now() -
+        (c.pausedAt / (simulationPlayback?.config?.fps ?? 60)) * 1000;
+    }
+  }, [playbackPaused]);
+
+  useEffect(() => {
+    if (!ctx.current || playbackSeek === null) return;
+    const fps = simulationPlayback?.config?.fps ?? 60;
+    const dur = simulationPlayback?.config?.duration ?? 30;
+    ctx.current.currentFrame = Math.floor(playbackSeek * fps * dur);
+    ctx.current.playStart =
+      Date.now() - (ctx.current.currentFrame / fps) * 1000;
+  }, [playbackSeek]);
+
+  // ── Load scene model ──────────────────────────────────────────────────────
+  useEffect(() => {
+    if (!ctx.current || !modelPath?.trim()) return;
+    const c = ctx.current;
+    if (c.model) {
+      c.scene.remove(c.model);
+      c.model = null;
+    }
+    c.bbHelpers.forEach((h: THREE.Object3D) => c.scene.remove(h));
+    c.bbHelpers = [];
+    c.sceneMeshes = [];
+
+    const url = modelPath.startsWith("/")
+      ? `${window.location.origin}${modelPath}`
+      : modelPath;
+    setLoadStatus("⏳ Loading...");
+    setLoadPct(0);
+
+    new GLTFLoader().load(
+      url,
+      async (gltf) => {
+        const model = gltf.scene;
+
+        // 🚨 Fetch the exact scalar from the Backend Single Source of Truth (.meta file)
+        await ScaleApplicator.applyMetadataScale(
+          model,
+          url,
+          propsRef.current.sceneData?._scaleFactor,
+        );
+
+        // 🚨 Validate physical structural integrity for a 5yo agent (~1.10m)
+        CharacterScaleValidator.validate(model, 1.1);
+
+        c.scene.add(model);
+        model.updateMatrixWorld(true);
+
+        const box3 = new THREE.Box3().setFromObject(model);
+        const ctr = box3.getCenter(new THREE.Vector3());
+
+        model.position.set(-ctr.x, -box3.min.y, -ctr.z);
+        model.updateMatrixWorld(true);
+
+        c.model = model;
+
+        c.offsetXZ = new THREE.Vector2(ctr.x, ctr.z);
+
+        // rawFloorY = vị trí sàn trong Rapier physics space.
+        // Ưu tiên lấy từ sceneData (cùng nguồn với backend),
+        // fallback về box3.min.y (trước khi model repositioning).
+        const rawFloorY: number =
+          propsRef.current.sceneData?.floor?.height != null
+            ? (propsRef.current.sceneData.floor.height as number)
+            : box3.min.y;
+
+        // ─── Y-CONVENTION FIX (Bug #1) ────────────────────────────────────────
+        // offsetXYZ.y PHẢI là rawFloorY (physics floor height), KHÔNG phải box3.min.y.
+        //
+        // Vì sao: trajectory từ backend lưu CENTER Y trong Rapier physics space.
+        //   worldY_3js = physicsY - offsetXYZ.y
+        //
+        // Nếu dùng box3.min.y: worldY = physicsY - box3.min.y
+        //   → chỉ đúng khi box3.min.y == rawFloorY (scale nhất quán hoàn toàn)
+        //   → khi có lệch scale dù 1mm → agent lơ lửng
+        //
+        // Nếu dùng rawFloorY (= sceneData.floor.height, cùng nguồn với backend):
+        //   worldY = physicsY - rawFloorY = (floorHeight + halfH) - floorHeight = halfH
+        //   footY  = worldY - halfH = 0  → đúng với sàn Three.js tại Y=0 ✓
+        //
+        // physicsFloorY trong Three.js world space = rawFloorY - offsetXYZ.y = 0
+        // (sàn Three.js luôn ở Y=0 vì model.position.y = -box3.min.y)
+        c.offsetXYZ = new THREE.Vector3(ctr.x, rawFloorY, ctr.z);
+
+        // physicsFloorY in world space (after model position offset)
+        // Với offsetXYZ.y = rawFloorY, sàn Three.js world luôn = 0
+        c.physicsFloorY = 0;
+
+        model.traverse((o: THREE.Object3D) => {
+          const mesh = o as THREE.Mesh;
+          if (mesh.isMesh) {
+            if ((mesh.name || "").startsWith("COL_")) {
+              mesh.visible = false;
+              mesh.castShadow = false;
+              mesh.receiveShadow = false;
+            } else {
+              mesh.layers.enable(1);
+              mesh.receiveShadow = true;
+              mesh.castShadow = true;
+            }
+
+            if (mesh.material) {
+              const mat = mesh.material as THREE.Material | THREE.Material[];
+              const mats = Array.isArray(mat) ? mat : [mat];
+              mats.forEach((m) => {
+                m.side = THREE.DoubleSide;
+                if (m.transparent && (m as any).opacity < 0.01) {
+                  (m as any).opacity = 1.0;
+                  m.transparent = false;
+                }
+              });
+            }
+            c.sceneMeshes.push(mesh);
+
+            // Classify floor meshes by name for layer-based raycasting
+            const name = (mesh.name || "").toLowerCase();
+            if (/floor|ground|plane|surface|vloer|grond/.test(name)) {
+              mesh.layers.enable(2);
+              c.floorMeshes.push(mesh);
+            }
+          }
+        });
+
+        // ── Build bounding box wireframe helpers for debug visualization ──
+        c.bbHelpers.forEach((h: THREE.Object3D) => c.scene.remove(h));
+        c.bbHelpers = [];
+        model.traverse((o: THREE.Object3D) => {
+          const mesh = o as THREE.Mesh;
+          if (mesh.isMesh && (!mesh.name || !mesh.name.startsWith("COL_"))) {
+            const helper = new THREE.BoxHelper(mesh, 0xffff00);
+            (helper.material as THREE.LineBasicMaterial).transparent = true;
+            (helper.material as THREE.LineBasicMaterial).opacity = 0.3;
+            helper.visible = false; // hidden by default, toggle via showBoundingBoxes
+            helper.renderOrder = 998;
+            c.scene.add(helper);
+            c.bbHelpers.push(helper);
+          }
+        });
+
+        // Fit camera
+        const sz = box3.getSize(new THREE.Vector3());
+        const md = Math.max(sz.x, sz.y, sz.z);
+        const cd =
+          Math.abs(md / 2 / Math.tan((c.camera.fov * Math.PI) / 360)) * 1.6;
+        c.camera.position.set(cd * 0.7, cd * 0.6, cd * 0.7);
+        c.camera.lookAt(0, 0, 0);
+        c.controls.target.set(0, 0, 0);
+        c.controls.update();
+
+        setLoadPct(null);
+        setLoadStatus("✅ Loaded");
+        setTimeout(() => setLoadStatus(""), 3000);
+
+        console.info(
+          `[Canvas3D v7] Scene loaded.` +
+            ` Size after scale: ${sz.x.toFixed(2)}m × ${sz.y.toFixed(2)}m × ${sz.z.toFixed(2)}m.` +
+            ` box3.min.y=${box3.min.y.toFixed(3)}  rawFloorY=${rawFloorY.toFixed(3)}` +
+            ` offsetXYZ.y=${rawFloorY.toFixed(3)} physicsFloorY(3js)=${c.physicsFloorY.toFixed(3)}` +
+            ` sceneUnitScale=${sceneUnitScale}.`,
+        );
+      },
+      (xhr) => {
+        if (xhr.lengthComputable) {
+          const p = Math.round((xhr.loaded / xhr.total) * 100);
+          setLoadPct(p);
+          setLoadStatus(`⏳ ${p}%`);
+        }
+      },
+      (err) => {
+        console.error(err);
+        setLoadStatus("❌ Failed");
+        setLoadPct(null);
+      },
+    );
+  }, [modelPath, sceneUnitScale]);
+
+  function resolveAgentY(
+    c: any,
+    worldPos: THREE.Vector3,
+    realHeight: number,
+    action: string,
+    doSnap: boolean,
+  ): number {
+    // Y-CONVENTION:
+    //   worldPos.y = physicsCENTER_Y - offsetXYZ.y
+    //              = (floorHeight + halfH + ε) - rawFloorY
+    //              = halfH + ε   (khi đứng trên sàn)
+    //
+    //   backendBaseY = worldPos.y - realHeight/2 = ε ≈ 0   (foot-level trong Three.js world)
+    //   sceneFloorY  = 0                                     (model.position.y = -box3.min.y)
+    //
+    // Với offsetXYZ.y = rawFloorY (Bug #1 đã fix), backendBaseY sẽ luôn gần 0 khi đứng sàn.
+    // resolveAgentY chỉ cần xử lý jitter nhỏ và trường hợp lơ lửng thật sự.
+
+    const FLOOR_CLEARANCE = realHeight * 0.04; // ~4% chiều cao (~1–2cm)
+
+    // backendBaseY = vị trí bàn chân theo backend physics (foot-level trong Three.js world)
+    const backendBaseY = worldPos.y - realHeight / 2;
+    const sceneFloorY = c.physicsFloorY ?? 0;
+
+    const SNAP_ACTIONS = new Set([
+      "falling",
+      "free_fall",
+      "fall_forward",
+      "walk",
+      "walk_to",
+      "walk_random",
+      "run",
+      "run_unstable",
+      "sprint",
+      "crawl",
+      "lunge",
+      "investigate",
+      "wade",
+    ]);
+
+    if (doSnap && SNAP_ACTIONS.has(action)) {
+      const rayY = getFloorY(c, worldPos);
+      if (rayY !== null) {
+        const rayAboveBackend = rayY - backendBaseY;
+
+        // Rule 1: Ray hit THẤP HƠN backend foot → agent đang lơ lửng → kéo xuống.
+        // Ngưỡng 2.0m thay vì 0.5m cũ: đảm bảo catch được cả khi lệch scale lớn.
+        // Guard trên chỉ loại trừ ray hit âm vô cực (geometry lỗi).
+        if (rayY < backendBaseY - 0.05 && rayY > backendBaseY - 2.0) {
+          return rayY + FLOOR_CLEARANCE;
+        }
+
+        // Rule 2: Ray hit GẦN backend foot (trong 0.10m) → dùng ray để giảm jitter sàn
+        if (Math.abs(rayAboveBackend) < 0.1) {
+          return rayY + FLOOR_CLEARANCE;
+        }
+
+        // Rule 3: Ray hit CAO HƠN backend foot → furniture surface → BỎ QUA, trust backend.
+        // (nguyên nhân floating cũ: agent bị kéo lên mặt tủ/kệ)
+      }
+    }
+
+    // Default: trust backend foot position, clamp không bao giờ xuống dưới sàn tuyệt đối.
+    return Math.max(backendBaseY, sceneFloorY + FLOOR_CLEARANCE);
+  }
+
+  // ── Spawn playback agents ─────────────────────────────────────────────────
+  // [FIX CANVAS RESET]:
+  // Mỗi lần poll xong, Simulator.tsx gọi setSimulationPlayback(newObj) với object MỚI
+  // → simulationPlayback reference thay đổi → useEffect này chạy → xóa figures → màn hình flash.
+  // Fix: Dùng fingerprint ref để chỉ rebuild khi trajectory data THỰC SỰ thay đổi.
+  const trajFingerprintRef = React.useRef<string>("");
+  useEffect(() => {
+    if (!ctx.current) return;
+    const c = ctx.current;
+
+    const trajs = simulationPlayback?.trajectories;
+    const newFingerprint = trajs
+      ? trajs
+          .map((t: any) => `${t.agentId ?? "?"}_${t.positions?.length ?? 0}`)
+          .join("|")
+      : "";
+
+    // Nếu fingerprint giống nhau → data không đổi, KHÔNG rebuild
+    if (newFingerprint === trajFingerprintRef.current) return;
+    trajFingerprintRef.current = newFingerprint;
+
+    c.figures.forEach((fh: FigureHandle) => {
+      c.scene.remove(fh.root);
+      fh.driver.dispose();
+    });
+    c.figures = [];
+    c.trails.forEach((l: THREE.Line) => c.scene.remove(l));
+    c.trails = [];
+    c.labels.forEach((s: THREE.Sprite) => c.scene.remove(s));
+    c.labels = [];
+    c.isPlaying = false;
+
+    // Clear old rejected spheres
+    if (c.rejectedSpheres) {
+      c.rejectedSpheres.forEach((m: THREE.Mesh) => {
+        c.scene.remove(m);
+        m.geometry?.dispose();
+        (m.material as THREE.Material)?.dispose();
+      });
+    }
+    c.rejectedSpheres = [];
+
+    // Add new rejected spheres if any
+    if (simulationPlayback?.debugStats?.rejectedSpawns) {
+      const off = c.offsetXYZ as THREE.Vector3;
+      const geo = new THREE.SphereGeometry(0.12, 8, 8);
+      const mat = new THREE.MeshBasicMaterial({
+        color: 0xffaa00,
+        transparent: true,
+        opacity: 0.6,
+        wireframe: true,
+      });
+      simulationPlayback.debugStats.rejectedSpawns.forEach((pos: number[]) => {
+        if (!Array.isArray(pos) || pos.length < 3) return;
+        const sph = new THREE.Mesh(geo, mat);
+        sph.position.copy(toWorldSpace(pos, off));
+        sph.visible = !!propsRef.current.showBoundingBoxes;
+        c.scene.add(sph);
+        c.rejectedSpheres.push(sph);
+      });
+    }
+
+    if (!trajs) return;
+
+    const defAge = simulationPlayback.config?.ageGroupId ?? "early_toddler";
+
+    trajs.forEach((tr: any, i: number) => {
+      if (!tr?.positions?.length) return;
+      const ageId = tr.ageGroupId ?? defAge;
+      const color = AGENT_PALETTE[i % AGENT_PALETTE.length];
+      const driver = createDriver(ageId, i, color);
+      const handle: FigureHandle = {
+        driver,
+        root: driver.root,
+        agentId: tr.agentId ?? i,
+        ageId,
+        color,
+        trajectory: tr.positions,
+        actionLog: tr.actionLog ?? [],
+        lx: tr.positions?.[0]?.[0],
+        lz: tr.positions?.[0]?.[2],
+        walkCycle: Math.random() * Math.PI * 2,
+        currentlyWading: false,
+        lastFloorY: c.physicsFloorY ?? 0,
+        trailPoints: [],
+        trailLine: null,
+        arrowHelper: null,
+        capsuleHelper: null,
+      };
+      driver.root.traverse((o: THREE.Object3D) => o.layers.set(0));
+      driver.root.visible = false;
+      c.scene.add(driver.root);
+      c.figures.push(handle);
+    });
+
+    c.isPlaying = !playbackPaused;
+    c.playStart = Date.now();
+    c.currentFrame = 0;
+    c.figures.forEach((fh: FigureHandle) => (fh.root.visible = true));
+
+    // ─── Y-CONVENTION SYNC (Bug #1 guard) ────────────────────────────────────
+    // Nếu backend gửi config.floorHeight, dùng nó để cập nhật physicsFloorY.
+    // Trường hợp model chưa load (offsetXYZ chưa được set với rawFloorY đúng),
+    // đây là lớp bảo vệ thứ hai để giữ nhân vật không lơ lửng.
+    //
+    // physicsFloorY trong Three.js world space = floorHeight - offsetXYZ.y
+    // Với offsetXYZ.y = rawFloorY = floorHeight → physicsFloorY = 0 ✓
+    if (simulationPlayback?.config?.floorHeight != null && c.offsetXYZ) {
+      const cfgFloor = simulationPlayback.config.floorHeight as number;
+      const offsetY = (c.offsetXYZ as THREE.Vector3).y;
+      c.physicsFloorY = cfgFloor - offsetY;
+    }
+  }, [simulationPlayback, modelPath, sceneUnitScale]);
+
+  // ── Selection / highlights ────────────────────────────────────────────────
+  useEffect(() => {
+    if (!ctx.current) return;
+    const c = ctx.current;
+    // Fade out non-selected agents
+    c.figures.forEach((fh: FigureHandle) => {
+      const sel = selectedAgentId === null || fh.agentId === selectedAgentId;
+      fh.root.traverse((ch: any) => {
+        if (ch.isMesh && ch.material) {
+          ch.material.opacity = sel ? 1 : 0.1;
+          ch.material.transparent = true;
+        }
+      });
+    });
+
+    // Xóa trail của tất cả figures khi selection thay đổi.
+    // tick() sẽ tự build lại trail cho agent được chọn từ vị trí hiện tại.
+    c.figures.forEach((fh: FigureHandle) => {
+      if (fh.trailLine) {
+        c.scene.remove(fh.trailLine);
+        fh.trailLine.geometry.dispose();
+        (fh.trailLine.material as THREE.Material).dispose();
+        fh.trailLine = null;
+      }
+      fh.trailPoints = [];
+    });
+
+    c.hitSpheres.forEach((m: THREE.Mesh) => {
+      c.scene.remove(m);
+      m.geometry?.dispose();
+      (m.material as THREE.Material)?.dispose();
+    });
+    c.hitSpheres = [];
+    if (selectedAgentId !== null && simulationPlayback?.trajectories) {
+      const tr = simulationPlayback.trajectories.find(
+        (t) => (t.agentId ?? 0) === selectedAgentId,
+      );
+      const off = c.offsetXYZ as THREE.Vector3;
+      const geo = new THREE.SphereGeometry(0.08, 10, 10);
+      const mat = new THREE.MeshBasicMaterial({
+        color: 0xff3333,
+        transparent: true,
+        opacity: 0.85,
+      });
+      (tr?.collisions ?? []).forEach((pos: number[]) => {
+        if (!Array.isArray(pos) || pos.length < 3) return;
+        const sph = new THREE.Mesh(geo, mat.clone());
+        const wp = toWorldSpace(pos, off);
+        // Collision points are foot-level positions (not center)
+        sph.position.copy(wp);
+        c.scene.add(sph);
+        c.hitSpheres.push(sph);
+      });
+    }
+  }, [selectedAgentId, simulationPlayback]);
+
+  // ── Bounding Box Debug Toggle ─────────────────────────────────────────────
+  useEffect(() => {
+    // Toggle helpers visibility based on props
+    if (ctx.current) {
+      ctx.current.bbHelpers.forEach((h: THREE.Object3D) => {
+        h.visible = !!showBoundingBoxes;
+      });
+      ctx.current.figures.forEach((fh: FigureHandle) => {
+        if (fh.arrowHelper)
+          fh.arrowHelper.visible =
+            !!showBoundingBoxes && fh.agentId === selectedAgentId;
+        if (fh.capsuleHelper)
+          fh.capsuleHelper.visible =
+            !!showBoundingBoxes && fh.agentId === selectedAgentId;
+      });
+      ctx.current.rejectedSpheres.forEach((m: THREE.Mesh) => {
+        m.visible = !!showBoundingBoxes;
+      });
+    }
+  }, [showBoundingBoxes, selectedAgentId]);
+
+  // ── Baby View ─────────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (!ctx.current) return;
+    const c = ctx.current;
+    if (isBabyView) {
+      // Store current camera position for restoration
+      c._savedCamPos = c.camera.position.clone();
+      c._savedTarget = c.controls.target.clone();
+      // Set camera to child eye level (~0.6m) looking forward
+      const lookDir = new THREE.Vector3(0, 0, -1)
+        .applyQuaternion(c.camera.quaternion)
+        .normalize();
+      c.camera.position.set(
+        c.controls.target.x - lookDir.x * 2,
+        0.6,
+        c.controls.target.z - lookDir.z * 2,
+      );
+      c.controls.target.set(c.controls.target.x, 0.6, c.controls.target.z);
+      c.controls.maxPolarAngle = Math.PI * 0.55;
+      c.controls.minPolarAngle = Math.PI * 0.35;
+      c.controls.update();
+    } else if (c._savedCamPos) {
+      // Restore saved camera position
+      c.camera.position.copy(c._savedCamPos);
+      c.controls.target.copy(c._savedTarget);
+      c.controls.maxPolarAngle = Math.PI;
+      c.controls.minPolarAngle = 0;
+      c.controls.update();
+    }
+  }, [isBabyView]);
+
+  // ── Heatmap ───────────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (!ctx.current) return;
+    const c = ctx.current;
+    c.heatMeshes.forEach((m: THREE.Mesh) => {
+      c.scene.remove(m);
+      m.geometry?.dispose();
+      (m.material as THREE.Material)?.dispose();
+    });
+    c.heatMeshes = [];
+    if (!showHeatmap || !heatmapData?.length || !c.model) return;
+    const off = c.offsetXYZ as THREE.Vector3;
+
+    heatmapData.forEach((obj) => {
+      if (!obj) return;
+      const hc = new THREE.Color(
+        obj.heatColor?.[0] ?? 1,
+        obj.heatColor?.[1] ?? 0,
+        obj.heatColor?.[2] ?? 0,
+      );
+      if (obj.boundingBox) {
+        const bb = obj.boundingBox;
+        const mn = toWorldSpace([bb.min[0], bb.min[1], bb.min[2]], off);
+        const mx = toWorldSpace([bb.max[0], bb.max[1], bb.max[2]], off);
+        const ctr = new THREE.Vector3().addVectors(mn, mx).multiplyScalar(0.5);
+        const sz = new THREE.Vector3().subVectors(mx, mn);
+
+        // FIX #9: Add heatbox to SCENE (not model) to avoid double-transformation
+        // The world-space coordinates from toWorldSpace already account for offset.
+        // Adding to model.worldToLocal + scale(1/unitScale) caused double-scaling.
+        const heatBox = new THREE.Mesh(
+          new THREE.BoxGeometry(sz.x, sz.y, sz.z),
+          new THREE.MeshBasicMaterial({
+            color: hc,
+            transparent: true,
+            opacity: Math.min(0.25, 0.05 + obj.intensity * 0.1),
+            depthWrite: false,
+            depthTest: true,
+            blending: THREE.AdditiveBlending,
+            side: THREE.DoubleSide,
+          }),
+        );
+        heatBox.renderOrder = 999;
+        heatBox.position.copy(ctr);
+        c.scene.add(heatBox);
+        c.heatMeshes.push(heatBox);
+
+        // Debug: log heatmap alignment info
+        console.log(
+          `[Heatmap] "${obj.objectName}" center=(${ctr.x.toFixed(2)}, ${ctr.y.toFixed(2)}, ${ctr.z.toFixed(2)})`,
+          `size=(${sz.x.toFixed(2)}, ${sz.y.toFixed(2)}, ${sz.z.toFixed(2)})`,
+          `intensity=${obj.intensity.toFixed(2)}`,
+        );
+      }
+      const pts = [
+        ...(obj.collisions ?? []).map((x: any) => ({
+          pos: x.position,
+          score: x.score ?? 0,
+          tier: x.riskTier,
+        })),
+        ...(obj.collisionPositions ?? []).map((p: any) => ({
+          pos: p,
+          score: 0,
+          tier: "safe",
+        })),
+      ];
+      pts.forEach(({ pos, score, tier }) => {
+        if (!Array.isArray(pos) || pos.length < 3) return;
+        const sev = score >= 50 || tier === "critical" || tier === "dangerous";
+        const col = sev
+          ? new THREE.Color(1, 0.1, 0.1)
+          : new THREE.Color(1, 0.6, 0);
+        const sph = new THREE.Mesh(
+          new THREE.SphereGeometry(sev ? 0.16 : 0.11, 12, 12),
+          new THREE.MeshStandardMaterial({
+            color: col,
+            emissive: col,
+            emissiveIntensity: 1.6,
+            transparent: true,
+            opacity: 0.9,
+            depthWrite: false,
+          }),
+        );
+        sph.renderOrder = 999;
+        const wPos = toWorldSpace(pos, off);
+        // FIX #9: Add to scene directly (not model) — same fix as heatbox
+        sph.position.copy(wPos);
+        sph.userData.severe = sev;
+        sph.userData.base = 0.9;
+        c.scene.add(sph);
+        c.heatMeshes.push(sph);
+      });
+    });
+  }, [heatmapData, showHeatmap]);
+
+  useEffect(() => {
+    if (!showHeatmap || !ctx.current) return;
+    const c = ctx.current;
+    let id: number;
+    const pulse = () => {
+      id = requestAnimationFrame(pulse);
+      const t = Date.now() * 0.004;
+      c.heatMeshes.forEach((m: THREE.Mesh) => {
+        if (!m.userData.severe) return;
+        const b = 0.5 + Math.sin(t) * 0.5;
+        const pulseMat = m.material as THREE.MeshStandardMaterial;
+        pulseMat.opacity = m.userData.base * b;
+        pulseMat.emissiveIntensity = 1 + b * 1.5;
+      });
+    };
+    pulse();
+    return () => cancelAnimationFrame(id);
+  }, [showHeatmap, heatmapData]);
+
+  // ── Live positions ────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (!ctx.current) return;
+    const c = ctx.current;
+    const offXYZ = c.offsetXYZ as THREE.Vector3;
+    const frameDt = 1 / 60;
+
+    // Debug: log offset once when live positions first arrive
+    if (liveAgentPositions?.length && !c._liveOffsetLogged) {
+      c._liveOffsetLogged = true;
+      console.log(
+        `[Canvas3D LIVE] offsetXYZ=${offXYZ ? `(${offXYZ.x.toFixed(3)}, ${offXYZ.y.toFixed(3)}, ${offXYZ.z.toFixed(3)})` : "UNDEFINED"}`,
+        `| first agent pos=[${liveAgentPositions[0]?.position}]`,
+        `| world=${offXYZ ? `(${(liveAgentPositions[0]?.position?.[0] - offXYZ.x).toFixed(3)}, ${(liveAgentPositions[0]?.position?.[2] - offXYZ.z).toFixed(3)})` : "N/A"}`,
+      );
+    }
+
+    if (!liveAgentPositions?.length) {
+      c.liveFigures.forEach((fh: FigureHandle) => {
+        c.scene.remove(fh.root);
+        fh.driver.dispose();
+      });
+      c.liveFigures = [];
+      return;
+    }
+    if (c.liveFigures.length === 0) {
+      liveAgentPositions.forEach((a, i) => {
+        if (!a?.position || a.position.some(isNaN)) return;
+        const color = AGENT_PALETTE[i % AGENT_PALETTE.length];
+        const driver = createDriver(a.ageGroupId ?? "early_toddler", i, color);
+        const handle: FigureHandle = {
+          driver,
+          root: driver.root,
+          agentId: a.agentId,
+          ageId: a.ageGroupId ?? "early_toddler",
+          color,
+          walkCycle: 0,
+          currentlyWading: false,
+          lastFloorY: 0,
+          trailPoints: [],
+          trailLine: null,
+          arrowHelper: null,
+          capsuleHelper: null,
+        };
+        driver.root.traverse((o: THREE.Object3D) => o.layers.set(0));
+        const wp = toWorldSpace(a.position, offXYZ);
+        const realHeight = driver.registryEntry?.realHeight ?? 0.8;
+        const finalY = resolveAgentY(
+          c,
+          wp,
+          realHeight,
+          "idle",
+          enableFloorSnap,
+        );
+        handle.lastFloorY = finalY;
+        driver.root.position.set(wp.x, finalY, wp.z);
+        c.scene.add(driver.root);
+        c.liveFigures.push(handle);
+      });
+      return;
+    }
+    liveAgentPositions.forEach((a, i) => {
+      if (!a?.position || i >= c.liveFigures.length) return;
+      const fh = c.liveFigures[i] as FigureHandle;
+      const tgt = toWorldSpace(a.position, offXYZ);
+      const realHeight = fh.driver.registryEntry?.realHeight ?? 0.8;
+
+      const dx = tgt.x - fh.root.position.x;
+      const dz = tgt.z - fh.root.position.z;
+      const dist = Math.sqrt(dx * dx + dz * dz);
+
+      // FIX-M3: Infer action from movement speed instead of hardcoding "walk"
+      const liveAction = dist > 0.02 ? "run" : dist > 0.005 ? "walk" : "idle";
+
+      const rawY = resolveAgentY(
+        c,
+        tgt,
+        realHeight,
+        liveAction,
+        enableFloorSnap,
+      );
+      // Smooth transitions for live positions (interpolate Y only slightly)
+      const finalY = fh.root.position.y + (rawY - fh.root.position.y) * 0.2;
+      fh.lastFloorY = rawY;
+
+      fh.root.position.set(tgt.x, finalY, tgt.z);
+
+      if (dist > 0.001) {
+        const targetRotation = Math.atan2(dx, dz);
+        // System C: Rotation Smoothing (Frontend)
+        fh.root.rotation.y = dampAngle(
+          fh.root.rotation.y,
+          targetRotation,
+          10,
+          frameDt,
+        );
+      }
+      const lodLevel = getLOD(fh.root, c.camera);
+      if (lodLevel !== "far") {
+        fh.driver.update(frameDt, { a: liveAction, v: 0 });
+      }
+    });
+  }, [liveAgentPositions]);
+
+  // ─── Playback tick ────────────────────────────────────────────────────────
+  function tick(c: any, p: typeof propsRef.current, dt: number) {
+    const {
+      simulationPlayback: sp,
+      playbackPaused: paused,
+      selectedAgentId: selId,
+      onPlaybackUpdate: onU,
+      enableFloorSnap,
+    } = p;
+    if (!sp?.trajectories?.length) return;
+
+    const fps = sp.config?.fps ?? 60;
+    const dur = sp.config?.duration ?? 30;
+    const total = fps * dur;
+
+    if (!paused) {
+      c.currentFrame = Math.floor(((Date.now() - c.playStart) / 1000) * fps);
+      if (c.currentFrame >= total) {
+        c.currentFrame = 0;
+        c.playStart = Date.now();
+      }
+    } else {
+      c.currentFrame = c.pausedAt;
+    }
+
+    const prog = total > 0 ? c.currentFrame / total : 0;
+    let curAction = "idle";
+    let selPos: THREE.Vector3 | null = null;
+
+    c.figures.forEach((fh: FigureHandle) => {
+      const traj = fh.trajectory;
+      const aLog = fh.actionLog;
+      if (!traj?.length) return;
+
+      const exact = prog * (traj.length - 1);
+      const i0 = Math.floor(exact);
+      const i1 = Math.min(i0 + 1, traj.length - 1);
+      const f = exact - i0;
+      const p0 = traj[i0],
+        p1 = traj[i1];
+      if (!p0 || !p1) return;
+
+      // Interpolate position (CENTER coordinates from physics engine)
+      const simPos = [
+        p0[0] + (p1[0] - p0[0]) * f,
+        p0[1] + (p1[1] - p0[1]) * f,
+        p0[2] + (p1[2] - p0[2]) * f,
+      ];
+
+      // Facing direction
+      const dx = simPos[0] - (fh.lx ?? simPos[0]);
+      const dz = simPos[2] - (fh.lz ?? simPos[2]);
+      const spd = Math.sqrt(dx * dx + dz * dz);
+      if (spd > 0.001) {
+        const targetRotation = Math.atan2(dx, dz);
+        // System C: Rotation Smoothing (Frontend)
+        fh.root.rotation.y = dampAngle(
+          fh.root.rotation.y,
+          targetRotation,
+          10,
+          dt,
+        );
+      }
+      fh.lx = simPos[0];
+      fh.lz = simPos[2];
+
+      // Action entry
+      let entry: ActionEntry | null = null;
+      if (aLog?.length) {
+        const li = Math.min(
+          Math.floor(prog * (aLog.length - 1)),
+          aLog.length - 1,
+        );
+        entry = aLog[li] ?? null;
+      }
+      const action = entry?.a ?? (spd > 0.003 ? "walk" : "idle");
+      fh.currentlyWading = !!entry?.wadingIn;
+
+      // FIX-BUG01B: Convert physics center → Three.js world, then decode foot Y
+      const offXYZ = c.offsetXYZ as THREE.Vector3;
+      const worldPos = toWorldSpace(simPos, offXYZ); // worldPos.y = centerY - box3.min.y
+      const realHeight = fh.driver.registryEntry?.realHeight ?? 0.8;
+
+      const finalY = resolveAgentY(
+        c,
+        worldPos,
+        realHeight,
+        action,
+        enableFloorSnap,
+      );
+      fh.lastFloorY = finalY;
+
+      // Debug logging for infant (only 2% of frames to avoid spam)
+      if (fh.ageId === "infant" && Math.random() < 0.02) {
+        const backendBaseY = worldPos.y - realHeight / 2;
+        console.log(
+          `[Infant] h=${fh.driver.currentHeight.toFixed(3)} ` +
+            `centerY_3js=${worldPos.y.toFixed(3)} backendFoot=${backendBaseY.toFixed(3)} ` +
+            `finalY=${finalY.toFixed(3)} action=${action}`,
+        );
+      }
+
+      // FIX #3: Smooth Y lerp for all actions to prevent 1-frame floor snap jitter
+      // (The user reported characters jumping up and down erratically)
+      const climbActions = [
+        "climb_on",
+        "climb",
+        "climb_approach",
+        "climb_reach",
+        "climb_pull",
+        "climb_mount",
+        "step_up",
+        "step_down",
+      ];
+      const isClimbing = climbActions.includes(action);
+      const isFalling = ["falling", "free_fall", "fall_forward"].includes(
+        action,
+      );
+
+      // Use slower lerp for climbing, faster lerp for normal movement to hide jitter, no lerp for falling
+      const lerpFactor = isFalling ? 1.0 : isClimbing ? 0.25 : 0.4;
+
+      const smoothY =
+        fh.root.position.y + (finalY - fh.root.position.y) * lerpFactor;
+      fh.root.position.set(worldPos.x, smoothY, worldPos.z);
+
+      const lodLevel = getLOD(fh.root, c.camera);
+      if (lodLevel !== "far") {
+        fh.driver.update(dt, entry ?? { a: action, e: "neutral", v: 0 });
+      }
+
+      if (selId !== null && fh.agentId === selId) {
+        curAction = action;
+        selPos = fh.root.position.clone();
+        drawLabel(
+          c,
+          selId,
+          action,
+          entry?.wadingIn ? "wading" : (entry?.e ?? "neutral"),
+          fh,
+        );
+
+        // Vẽ trail từ đỉnh đầu agent, mỗi 3 frame thêm 1 điểm
+        if (c.currentFrame % 3 === 0) {
+          const headY =
+            fh.root.position.y + (fh.driver.currentHeight ?? realHeight);
+          const headPt = new THREE.Vector3(
+            fh.root.position.x,
+            headY,
+            fh.root.position.z,
+          );
+
+          // Chỉ thêm nếu agent đã di chuyển đủ xa (tránh duplicate points khi đứng yên)
+          const last = fh.trailPoints[fh.trailPoints.length - 1];
+          if (!last || last.distanceTo(headPt) > 0.02) {
+            fh.trailPoints.push(headPt.clone());
+            if (fh.trailPoints.length > 600) fh.trailPoints.shift(); // giới hạn độ dài trail
+          }
+
+          if (fh.trailPoints.length >= 2) {
+            if (!fh.trailLine) {
+              // Tạo line lần đầu khi có đủ 2 điểm
+              fh.trailLine = new THREE.Line(
+                new THREE.BufferGeometry().setFromPoints(fh.trailPoints),
+                new THREE.LineBasicMaterial({
+                  color: fh.color,
+                  transparent: true,
+                  opacity: 0.85,
+                  depthTest: false, // Trail luôn hiện, không bị che bởi đồ vật
+                }),
+              );
+              fh.trailLine.renderOrder = 999;
+              c.scene.add(fh.trailLine);
+            } else {
+              // Cập nhật geometry với điểm mới
+              (fh.trailLine.geometry as THREE.BufferGeometry).setFromPoints(
+                fh.trailPoints,
+              );
+              (
+                fh.trailLine.geometry.attributes
+                  .position as THREE.BufferAttribute
+              ).needsUpdate = true;
+            }
+          }
+        }
+
+        // System F: Debug Target Direction Arrow
+        if (!fh.arrowHelper) {
+          fh.arrowHelper = new THREE.ArrowHelper(
+            new THREE.Vector3(0, 0, 1),
+            fh.root.position,
+            1.2,
+            fh.color,
+            0.3,
+            0.3,
+          );
+          fh.arrowHelper.renderOrder = 1000;
+          c.scene.add(fh.arrowHelper);
+        }
+        // Always point Arrow towards movement or targetRotation
+        const lookDir = new THREE.Vector3(dx, 0, dz);
+        if (lookDir.lengthSq() > 0.0001) {
+          fh.arrowHelper.setDirection(lookDir.normalize());
+        } else {
+          // If no movement, fallback to current facing rot
+          fh.arrowHelper.setDirection(
+            new THREE.Vector3(
+              Math.sin(fh.root.rotation.y),
+              0,
+              Math.cos(fh.root.rotation.y),
+            ),
+          );
+        }
+        fh.arrowHelper.position.copy(fh.root.position);
+        fh.arrowHelper.position.y += 0.1; // Float slightly above foot level
+        fh.arrowHelper.visible = !!showBoundingBoxes;
+
+        // System G: Debug Capsule Collider
+        if (!fh.capsuleHelper) {
+          const capHeight = fh.driver.registryEntry?.realHeight ?? 1.1;
+          const capRad =
+            (fh.driver.registryEntry as any)?.capsuleRadius ?? 0.15;
+
+          const geometry = new THREE.CapsuleGeometry(capRad, capHeight, 4, 8);
+          const material = new THREE.MeshBasicMaterial({
+            color: 0x00ff00,
+            transparent: true,
+            opacity: 0.5,
+            wireframe: true,
+          });
+          fh.capsuleHelper = new THREE.Mesh(geometry, material);
+          fh.capsuleHelper.renderOrder = 999;
+          c.scene.add(fh.capsuleHelper);
+        }
+        fh.capsuleHelper.position.copy(fh.root.position);
+        fh.capsuleHelper.position.y +=
+          (fh.driver.registryEntry?.realHeight ?? 1.1) / 2;
+        fh.capsuleHelper.visible = !!showBoundingBoxes;
+      } else {
+        if (fh.arrowHelper) fh.arrowHelper.visible = false;
+        if (fh.capsuleHelper) fh.capsuleHelper.visible = false;
+      }
+    });
+
+    if (selPos) c.controls.target.lerp(selPos, 0.06);
+    if (onU) onU({ progress: prog, action: curAction, time: prog * dur });
+  }
+
+  // ─── Label drawing ────────────────────────────────────────────────────────
+  function drawLabel(
+    c: any,
+    selId: number,
+    action: string,
+    extra: string,
+    fh: FigureHandle,
+  ) {
+    let spr = c.labels.find(
+      (s: any) => s.userData?.forAgent === selId,
+    ) as THREE.Sprite | null;
+    if (!spr) {
+      const cv = document.createElement("canvas");
+      cv.width = 280;
+      cv.height = 70;
+      const tx = new THREE.CanvasTexture(cv);
+      tx.minFilter = THREE.LinearFilter;
+      spr = new THREE.Sprite(
+        new THREE.SpriteMaterial({
+          map: tx,
+          transparent: true,
+          depthTest: false,
+          depthWrite: false,
+        }),
+      );
+      spr!.renderOrder = 1000;
+      spr!.scale.set(1.4, 0.35, 1);
+      spr!.userData = { forAgent: selId, canvas: cv, tex: tx };
+      c.scene.add(spr);
+      c.labels.push(spr);
+    }
+    const cv2 = spr!.userData.canvas as HTMLCanvasElement;
+    const c2 = cv2.getContext("2d")!;
+    c2.clearRect(0, 0, 280, 70);
+    c2.fillStyle =
+      extra === "wading" ? "rgba(10,40,180,0.82)" : "rgba(10,10,30,0.78)";
+    c2.beginPath();
+    (c2 as any).roundRect?.(8, 6, 264, 58, 14) ?? c2.rect(8, 6, 264, 58);
+    c2.fill();
+    c2.font = "bold 24px system-ui, sans-serif";
+    c2.fillStyle = "#fff";
+    c2.textAlign = "center";
+    c2.textBaseline = "middle";
+    c2.fillText(
+      extra === "wading" ? "🌊 wading" : `${ICONS[action] ?? "🔹"} ${action}`,
+      140,
+      35,
+      256,
+    );
+    (spr!.userData.tex as THREE.CanvasTexture).needsUpdate = true;
+    const labelY = fh.root.position.y + fh.driver.currentHeight + 0.15;
+    spr!.position.set(fh.root.position.x, labelY, fh.root.position.z);
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  return (
+    <div
+      ref={containerRef}
+      className="relative w-full h-full"
+      style={{ minHeight: 400, background: "#111520" }}
+    >
+      {loadStatus && (
+        <div className="absolute top-4 left-4 z-10 bg-black/70 text-white px-4 py-2 rounded-xl text-sm font-bold backdrop-blur-sm">
+          {loadStatus}
+          {loadPct !== null && (
+            <div className="mt-1 w-40 h-1.5 bg-gray-700 rounded-full overflow-hidden">
+              <div
+                className="h-full bg-cyan-400 transition-all"
+                style={{ width: `${loadPct}%` }}
+              />
+            </div>
+          )}
+        </div>
+      )}
+      <div className="absolute bottom-3 right-3 z-10 text-[10px] text-white/25 font-mono select-none">
+        LMB Orbit · RMB Pan · Scroll Zoom
+      </div>
+    </div>
+  );
+};
+export default Canvas3D;

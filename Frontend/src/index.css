@@ -1,0 +1,262 @@
+@import url("https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Inter:wght@300;400;500;600;700&display=swap");
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --color-primary: #ec4899;
+  --color-secondary: #8b5cf6;
+  --color-accent: #f43f5e;
+  --color-bg-light: #fdf2f8;
+
+  --glass-bg: rgba(255, 255, 255, 0.55);
+  --glass-border: rgba(255, 255, 255, 0.5);
+  --glass-shadow: rgba(0, 0, 0, 0.05);
+}
+
+body {
+  font-family: "Outfit", "Inter", sans-serif;
+  background-color: var(--color-bg-light);
+  color: #334155;
+}
+
+/* ─── Premium Glassmorphism ───────────────────────────────────────────────── */
+.glass-panel {
+  background: linear-gradient(
+    135deg,
+    rgba(255, 255, 255, 0.72) 0%,
+    rgba(255, 255, 255, 0.38) 100%
+  );
+  backdrop-filter: blur(24px) saturate(180%);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, 0.55);
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.06),
+    0 2px 8px rgba(0, 0, 0, 0.04),
+    inset 0 1px 0 rgba(255, 255, 255, 0.9),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.2);
+  border-radius: 20px;
+}
+
+/* ─── Header Glass ────────────────────────────────────────────────────────── */
+.header-glass {
+  background: rgba(253, 242, 248, 0.82);
+  backdrop-filter: blur(32px) saturate(200%);
+  -webkit-backdrop-filter: blur(32px) saturate(200%);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.7);
+  box-shadow:
+    0 1px 0 rgba(236, 72, 153, 0.06),
+    0 4px 24px rgba(0, 0, 0, 0.04);
+}
+
+/* ─── 3D Perspective Container ────────────────────────────────────────────── */
+.perspective-container {
+  perspective: 1200px;
+  transform-style: preserve-3d;
+}
+
+/* ─── Noise Texture Overlay ───────────────────────────────────────────────── */
+.noise-overlay::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0.025;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E");
+  background-repeat: repeat;
+  background-size: 128px 128px;
+}
+
+/* ─── Bubble Button Animation ─────────────────────────────────────────────── */
+.bubble-btn {
+  position: relative;
+  overflow: hidden;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.bubble-btn::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 0;
+  height: 0;
+  background: rgba(255, 255, 255, 0.25);
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  transition:
+    width 0.6s ease,
+    height 0.6s ease,
+    opacity 0.6s ease;
+  opacity: 1;
+}
+
+.bubble-btn:hover::after {
+  width: 400px;
+  height: 400px;
+  opacity: 0;
+}
+
+/* ─── Card 3D Tilt Effect ─────────────────────────────────────────────────── */
+.card-3d {
+  transition:
+    box-shadow 0.4s ease,
+    border-color 0.4s ease;
+  transform-style: preserve-3d;
+  will-change: transform;
+}
+
+.card-3d:hover {
+  box-shadow:
+    0 24px 48px rgba(236, 72, 153, 0.14),
+    0 8px 16px rgba(0, 0, 0, 0.06);
+  border-color: rgba(255, 255, 255, 0.95);
+}
+
+/* ─── Card Hover (Simple fallback) ───────────────────────────────────────── */
+.card-hover {
+  transition:
+    transform 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275),
+    box-shadow 0.4s ease,
+    border-color 0.4s ease;
+}
+
+.card-hover:hover {
+  transform: translateY(-8px) scale(1.02);
+  box-shadow: 0 20px 40px rgba(236, 72, 153, 0.12);
+  border-color: rgba(255, 255, 255, 0.9);
+}
+
+/* ─── Animated Background Orbs ────────────────────────────────────────────── */
+@keyframes float-orb-1 {
+  0%,
+  100% {
+    transform: translate(0, 0) scale(1);
+  }
+  33% {
+    transform: translate(40px, -60px) scale(1.08);
+  }
+  66% {
+    transform: translate(-30px, 30px) scale(0.95);
+  }
+}
+
+@keyframes float-orb-2 {
+  0%,
+  100% {
+    transform: translate(0, 0) scale(1);
+  }
+  40% {
+    transform: translate(-50px, 40px) scale(1.05);
+  }
+  70% {
+    transform: translate(30px, -30px) scale(0.97);
+  }
+}
+
+@keyframes float-orb-3 {
+  0%,
+  100% {
+    transform: translate(0, 0) scale(1);
+  }
+  50% {
+    transform: translate(20px, 50px) scale(1.1);
+  }
+}
+
+.orb-1 {
+  animation: float-orb-1 18s ease-in-out infinite;
+}
+.orb-2 {
+  animation: float-orb-2 22s ease-in-out infinite;
+}
+.orb-3 {
+  animation: float-orb-3 26s ease-in-out infinite;
+}
+
+/* ─── Nav Link Underline Animation ───────────────────────────────────────── */
+.nav-link-underline {
+  position: relative;
+}
+
+.nav-link-underline::after {
+  content: "";
+  position: absolute;
+  bottom: -4px;
+  left: 50%;
+  right: 50%;
+  height: 2px;
+  background: linear-gradient(90deg, #ec4899, #f43f5e);
+  border-radius: 2px;
+  transition:
+    left 0.25s ease,
+    right 0.25s ease;
+}
+
+.nav-link-underline:hover::after {
+  left: 0;
+  right: 0;
+}
+
+/* ─── Mesh Gradient Background ────────────────────────────────────────────── */
+@keyframes mesh-pan {
+  0% {
+    background-position: 0% 0%;
+  }
+  25% {
+    background-position: 100% 0%;
+  }
+  50% {
+    background-position: 100% 100%;
+  }
+  75% {
+    background-position: 0% 100%;
+  }
+  100% {
+    background-position: 0% 0%;
+  }
+}
+
+.mesh-bg {
+  background-color: #fdf2f8;
+  background-image:
+    radial-gradient(at 40% 20%, hsla(330, 100%, 94%, 1) 0px, transparent 55%),
+    radial-gradient(at 80% 0%, hsla(349, 100%, 96%, 1) 0px, transparent 50%),
+    radial-gradient(at 0% 50%, hsla(289, 100%, 93%, 1) 0px, transparent 50%),
+    radial-gradient(at 80% 50%, hsla(340, 100%, 95%, 1) 0px, transparent 55%),
+    radial-gradient(at 0% 100%, hsla(320, 100%, 95%, 1) 0px, transparent 50%),
+    radial-gradient(at 80% 100%, hsla(350, 100%, 96%, 1) 0px, transparent 50%),
+    radial-gradient(at 0% 0%, hsla(300, 100%, 95%, 1) 0px, transparent 50%);
+  background-size: 150% 150%;
+  animation: mesh-pan 45s ease-in-out infinite;
+}
+
+/* ─── Premium Scrollbar ───────────────────────────────────────────────────── */
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: linear-gradient(
+    180deg,
+    rgba(236, 72, 153, 0.25),
+    rgba(244, 63, 94, 0.25)
+  );
+  border-radius: 10px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(
+    180deg,
+    rgba(236, 72, 153, 0.5),
+    rgba(244, 63, 94, 0.5)
+  );
+}
+
+/* ─── Smooth scroll ───────────────────────────────────────────────────────── */
+html {
+  scroll-behavior: smooth;
+}

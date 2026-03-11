@@ -1,0 +1,42 @@
+[
+  {
+    "id": "1770653042680",
+    "name": "Updated User",
+    "email": "test@example.com",
+    "password": "ef92b778bafe771e89245b89ecbc08a44a4e166c06659911881f383d4473e94f",
+    "createdAt": "2026-02-09T16:04:02.682Z",
+    "token": "97b8d73663fa080a978b7da5cfca58323940fd5dfb4a99943dfae0c490ed9db8",
+    "lastLogin": "2026-02-22T18:20:57.596Z",
+    "updatedAt": "2026-02-09T16:04:02.761Z"
+  },
+  {
+    "id": "1770653152999",
+    "name": "Updated User",
+    "email": "test1770653152919@example.com",
+    "password": "ef92b778bafe771e89245b89ecbc08a44a4e166c06659911881f383d4473e94f",
+    "createdAt": "2026-02-09T16:05:52.999Z",
+    "token": null,
+    "lastLogin": "2026-02-09T16:05:53.023Z",
+    "updatedAt": "2026-02-09T16:05:53.048Z"
+  },
+  {
+    "id": "1770654841810",
+    "name": "Updated User",
+    "email": "test1770654841686@example.com",
+    "password": "ef92b778bafe771e89245b89ecbc08a44a4e166c06659911881f383d4473e94f",
+    "createdAt": "2026-02-09T16:34:01.812Z",
+    "token": null,
+    "lastLogin": "2026-02-09T16:34:01.839Z",
+    "updatedAt": "2026-02-09T16:34:01.861Z"
+  },
+  {
+    "id": "1770656043071",
+    "name": "Updated User",
+    "email": "test1770656042959@example.com",
+    "password": "ef92b778bafe771e89245b89ecbc08a44a4e166c06659911881f383d4473e94f",
+    "createdAt": "2026-02-09T16:54:03.071Z",
+    "token": null,
+    "lastLogin": "2026-02-09T16:54:03.110Z",
+    "updatedAt": "2026-02-09T16:54:03.143Z"
+  }
+]

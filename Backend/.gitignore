@@ -1,0 +1,9 @@
+node_modules/
+.env
+simulations/*.json
+uploads/
+parsed/*.json
+.DS_Store
+server.log
+settings.txt
+PATH.txt
