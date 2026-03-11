@@ -14,18 +14,18 @@ The project aims to help developers, researchers, educators, and safety experts 
 
 # Table of Contents
 
-- Overview
-- Motivation
-- Research Background
-- Key Features
-- Architecture
-- Project Structure
-- Getting Started
-- Usage
-- Roadmap
-- Contributing
-- License
-- Author
+- [Overview](#overview)
+- [Motivation](#motivation)
+- [Research Background](#research-background)
+- [Key Features](#key-features)
+- [Architecture](#architecture)
+- [Project Structure](#project-structure)
+- [Getting Started](#getting-started)
+- [Usage](#usage)
+- [Roadmap](#roadmap)
+- [Contributing](#contributing)
+- [License](#license)
+- [Author](#author)
 
 ---
 
@@ -72,12 +72,12 @@ This project aims to create a **sandbox environment for experimenting with child
 
 Simulation-based environments are widely used in safety research, education, and human behavior studies.
 
-Research shows that simulated environments allow people to **experience realistic safety scenarios without real-world danger**, improving both understanding and training outcomes. :contentReference[oaicite:1]{index=1}  
+Research shows that simulated environments allow people to **experience realistic safety scenarios without real-world danger**, improving both understanding and training outcomes.
 
 For example:
 
-- Virtual environments have been used to train children in **road safety and hazard recognition**. :contentReference[oaicite:2]{index=2}  
-- Simulation-based training systems are used to **identify home safety risks and prevent injuries among young children**. :contentReference[oaicite:3]{index=3}  
+- Virtual environments have been used to train children in **road safety and hazard recognition**.
+- Simulation-based training systems help identify **home safety risks and prevent injuries among young children**.
 - Research institutions also use simulators to study **child behavior and decision-making in risky environments**.
 
 Inspired by these approaches, **Child Safety Simulator** aims to provide an open platform for experimentation, learning, and safety system development.
@@ -85,8 +85,6 @@ Inspired by these approaches, **Child Safety Simulator** aims to provide an open
 ---
 
 # Key Features
-
-Current and planned features include:
 
 ### Simulation Environment
 
@@ -118,59 +116,59 @@ Current and planned features include:
 
 Below is a simplified architecture of the simulator system.
 
-
+```
 +-----------------------------+
-| User Interface |
+|        User Interface       |
 +--------------+--------------+
-|
-v
+               |
+               v
 +-----------------------------+
-| Scenario Manager |
-| (Load / Create Scenarios) |
+|      Scenario Manager       |
+| (Load / Create Scenarios)   |
 +--------------+--------------+
-|
-v
+               |
+               v
 +-----------------------------+
-| Simulation Environment |
-| - Environment Model |
-| - Agent Behavior |
-| - Event System |
+|    Simulation Environment   |
+| - Environment Model         |
+| - Agent Behavior            |
+| - Event System              |
 +--------------+--------------+
-|
-v
+               |
+               v
 +-----------------------------+
-| Risk Evaluation |
-| - Hazard Detection |
-| - Behavior Analysis |
-| - Outcome Metrics |
+|      Risk Evaluation        |
+| - Hazard Detection          |
+| - Behavior Analysis         |
+| - Outcome Metrics           |
 +--------------+--------------+
-|
-v
+               |
+               v
 +-----------------------------+
-| Output Data |
-| - Logs |
-| - Metrics |
-| - Reports |
+|         Output Data         |
+| - Logs                      |
+| - Metrics                   |
+| - Reports                   |
 +-----------------------------+
-
+```
 
 ---
 
 # Project Structure
 
-
+```
 child-safety-simulator
 │
-├── src/ # Core simulation logic
-├── scenarios/ # Safety scenarios
-├── assets/ # Environment assets
-├── docs/ # Documentation
-├── tests/ # Test cases
+├── src/                 # Core simulation logic
+├── scenarios/           # Safety scenarios
+├── assets/              # Environment assets
+├── docs/                # Documentation
+├── tests/               # Test cases
 │
 ├── README.md
 ├── LICENSE
 └── requirements.txt
-
+```
 
 ---
 
@@ -180,102 +178,114 @@ child-safety-simulator
 
 ```bash
 git clone https://github.com/KivicDu/child-safety-simulator.git
-
 cd child-safety-simulator
-Install Dependencies
+```
+
+## Install Dependencies
+
+```bash
 pip install -r requirements.txt
-Usage
+```
+
+---
+
+# Usage
 
 Run the simulator:
 
+```bash
 python main.py
+```
 
 Run a specific scenario:
 
+```bash
 python run_scenario.py
+```
 
-Create new scenarios inside the scenarios/ directory.
+You can create custom safety scenarios in the `scenarios/` directory.
 
-Roadmap
+---
 
-Future development plans:
+# Roadmap
 
-Phase 1
+## Phase 1
+- Basic simulation environment
+- Scenario management system
+- Risk event detection
 
-Basic simulation environment
+## Phase 2
+- AI-driven behavior simulation
+- Data analytics and visualization
+- Advanced scenario editor
 
-Scenario management system
+## Phase 3
+- Machine learning integration
+- Real-world environment modeling
+- Web-based simulation interface
 
-Risk event detection
+## Long-Term Vision
 
-Phase 2
+- Child safety research platform
+- Educational simulation tool
+- AI safety experimentation environment
 
-AI-driven behavior simulation
+---
 
-Data analytics and visualization
+# Contributing
 
-Advanced scenario editor
+Contributions are welcome!
 
-Phase 3
+1. Fork the repository
 
-Machine learning integration
+2. Create a new branch
 
-Real-world environment modeling
-
-Web-based simulation interface
-
-Long-Term Vision
-
-Child safety research platform
-
-Educational simulation tool
-
-AI safety experimentation environment
-
-Contributing
-
-Contributions are welcome.
-
-If you'd like to contribute:
-
-Fork the repository
-
-Create a feature branch
-
+```bash
 git checkout -b feature/new-feature
+```
 
-Commit changes
+3. Commit your changes
 
+```bash
 git commit -m "Add new feature"
+```
 
-Push to your fork
+4. Push to your fork
 
+```bash
 git push origin feature/new-feature
+```
 
-Open a Pull Request
+5. Open a Pull Request
 
-License
+Please ensure your code follows the project's coding style and includes documentation where necessary.
 
-This project is licensed under the MIT License.
+---
+
+# License
+
+This project is licensed under the **MIT License**.
 
 You are free to use, modify, and distribute this software under the terms of the license.
 
-Author
+---
+
+# Author
 
 Maintained by:
 
-KivicDu
+**KivicDu**
 
-GitHub
+GitHub  
 https://github.com/KivicDu
 
-If you find this project useful, consider giving it a ⭐ on GitHub.
+---
 
-Support the Project
+# Support the Project
 
-If you like this project:
+If you find this project helpful:
 
-⭐ Star the repository
-🍴 Fork the project
-🤝 Contribute improvements
+⭐ Star the repository  
+🍴 Fork the project  
+🤝 Contribute improvements  
 📢 Share with others
