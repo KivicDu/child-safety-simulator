@@ -43,7 +43,6 @@ const LoadingPage = () => (
 
 function AnimatedRoutes() {
   const location = useLocation();
-  const navigate = location.state?.from || "/"; // Placeholder if needed
 
   useEffect(() => {
     const initAuth = async () => {
