@@ -275,11 +275,9 @@ const Simulator = () => {
           id: simId,
           progress: status.progress || 0,
           status: status.status || "running",
-          // FIX: Use live collisionEventsCount from status during simulation since events array is 202-empty
-          totalEvents:
-            status.status === "complete"
-              ? events.length
-              : status.collisionEventsCount || 0,
+          // FIX-C3: Use collisionEventsCount consistently — it counts ALL collisions,
+          // whereas events array from /events endpoint only contains hazard events (score≥15).
+          totalEvents: status.collisionEventsCount || events.length,
           events,
           timestamp: Date.now(),
         });

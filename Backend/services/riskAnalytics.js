@@ -15,6 +15,28 @@ class RiskAnalytics {
     this.accidentEvents = [];
     this.gridResolution = 0.5; // 0.5m squares
     this.maxEvents = 500;      // cap to prevent memory issues
+
+    // [BUG-18 FIX] Near-miss threshold is now agent-height-proportional.
+    // Old: hardcoded 0.15m for all ages. For a school-age child (1.2m tall) this
+    // is only 12.5% of body height — misses many close-call events.
+    // For an infant (0.5m tall) 0.15m = 30% of height — slightly over-sensitive.
+    // Formula: 0.10 + agentHeight * 0.12 (matches biomechanical "personal space" literature).
+    // Default fallback: 0.15m (for code paths that don't pass agent height).
+    this._nearMissBaseThreshold = 0.10;
+    this._nearMissHeightCoeff   = 0.12;
+    this._defaultNearMissThreshold = 0.15;
+  }
+
+  /**
+   * Get the near-miss threshold for a specific agent height (or default).
+   * @param {number|null} agentHeight - Agent height in metres
+   * @returns {number} threshold in metres
+   */
+  getNearMissThreshold(agentHeight = null) {
+    if (!agentHeight || !Number.isFinite(agentHeight)) {
+      return this._defaultNearMissThreshold;
+    }
+    return this._nearMissBaseThreshold + agentHeight * this._nearMissHeightCoeff;
   }
 
   /**

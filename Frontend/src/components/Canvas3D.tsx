@@ -590,7 +590,9 @@ const Canvas3D: React.FC<Props> = ({
     const FLOOR_CLEARANCE = realHeight * 0.04; // ~4% chiều cao (~1–2cm)
 
     // backendBaseY = vị trí bàn chân theo backend physics (foot-level trong Three.js world)
-    const backendBaseY = worldPos.y - realHeight / 2;
+    // FIX-BUG-M11: Backend now exports feet Y directly. 
+    // worldPos.y is ALREADY the foot level in Three.js world space. DO NOT subtract realHeight/2.
+    const backendBaseY = worldPos.y; 
     const sceneFloorY = c.physicsFloorY ?? 0;
 
     const SNAP_ACTIONS = new Set([
@@ -616,13 +618,17 @@ const Canvas3D: React.FC<Props> = ({
 
         // Rule 1: Ray hit THẤP HƠN backend foot → agent đang lơ lửng → kéo xuống.
         // Ngưỡng 2.0m thay vì 0.5m cũ: đảm bảo catch được cả khi lệch scale lớn.
-        // Guard trên chỉ loại trừ ray hit âm vô cực (geometry lỗi).
+        // Tuy nhiên, không cho phép lún sâu quá 5cm xuống dưới sàn gốc.
         if (rayY < backendBaseY - 0.05 && rayY > backendBaseY - 2.0) {
-          return rayY + FLOOR_CLEARANCE;
+          // Chỉ kéo xuống nếu tia ray chỉ thấp hơn một chút xíu (snapping)
+          // Nếu ray hit quá thấp, coi như lỗi hình học và dùng mặc định.
+          if (rayAboveBackend > -0.15) {
+             return rayY + FLOOR_CLEARANCE;
+          }
         }
 
-        // Rule 2: Ray hit GẦN backend foot (trong 0.10m) → dùng ray để giảm jitter sàn
-        if (Math.abs(rayAboveBackend) < 0.1) {
+        // Rule 2: Ray hit GẦN backend foot (trong 0.15m) → dùng ray để giảm jitter sàn
+        if (Math.abs(rayAboveBackend) < 0.15) {
           return rayY + FLOOR_CLEARANCE;
         }
 
@@ -797,7 +803,7 @@ const Canvas3D: React.FC<Props> = ({
         if (!Array.isArray(pos) || pos.length < 3) return;
         const sph = new THREE.Mesh(geo, mat.clone());
         const wp = toWorldSpace(pos, off);
-        // Collision points are foot-level positions (not center)
+        // Collision points are physics contact positions (world-space, not foot or center)
         sph.position.copy(wp);
         c.scene.add(sph);
         c.hitSpheres.push(sph);
@@ -1044,6 +1050,7 @@ const Canvas3D: React.FC<Props> = ({
 
       // FIX-M3: Infer action from movement speed instead of hardcoding "walk"
       const liveAction = dist > 0.02 ? "run" : dist > 0.005 ? "walk" : "idle";
+      const actual_spd = dist / frameDt;
 
       const rawY = resolveAgentY(
         c,
@@ -1070,7 +1077,7 @@ const Canvas3D: React.FC<Props> = ({
       }
       const lodLevel = getLOD(fh.root, c.camera);
       if (lodLevel !== "far") {
-        fh.driver.update(frameDt, { a: liveAction, v: 0 });
+        fh.driver.update(frameDt, { a: liveAction, v: actual_spd });
       }
     });
   }, [liveAgentPositions]);
@@ -1169,10 +1176,9 @@ const Canvas3D: React.FC<Props> = ({
 
       // Debug logging for infant (only 2% of frames to avoid spam)
       if (fh.ageId === "infant" && Math.random() < 0.02) {
-        const backendBaseY = worldPos.y - realHeight / 2;
         console.log(
           `[Infant] h=${fh.driver.currentHeight.toFixed(3)} ` +
-            `centerY_3js=${worldPos.y.toFixed(3)} backendFoot=${backendBaseY.toFixed(3)} ` +
+            `footY_3js=${worldPos.y.toFixed(3)} ` +
             `finalY=${finalY.toFixed(3)} action=${action}`,
         );
       }
@@ -1201,9 +1207,11 @@ const Canvas3D: React.FC<Props> = ({
         fh.root.position.y + (finalY - fh.root.position.y) * lerpFactor;
       fh.root.position.set(worldPos.x, smoothY, worldPos.z);
 
+      const actual_spd = dt > 0 ? spd / dt : 0;
+
       const lodLevel = getLOD(fh.root, c.camera);
       if (lodLevel !== "far") {
-        fh.driver.update(dt, entry ?? { a: action, e: "neutral", v: 0 });
+        fh.driver.update(dt, entry ?? { a: action, e: "neutral", v: actual_spd });
       }
 
       if (selId !== null && fh.agentId === selId) {

@@ -304,6 +304,10 @@ class PhysicsEngine {
       const corrected = controller.computedMovement();
 
       const pos = rigidBody.translation();
+      if (Math.random() < 0.05) {
+        console.log(`[MoveDebug] pos: ${pos.x.toFixed(3)}, ${pos.y.toFixed(3)}, ${pos.z.toFixed(3)} | desired: ${desiredMove.x.toFixed(3)}, ${desiredMove.y.toFixed(3)}, ${desiredMove.z.toFixed(3)} | corrected: ${corrected.x.toFixed(3)}, ${corrected.y.toFixed(3)}, ${corrected.z.toFixed(3)}`);
+      }
+
       const newPos = {
         x: pos.x + corrected.x,
         y: pos.y + corrected.y,
@@ -608,6 +612,113 @@ class PhysicsEngine {
         centerOffsetY: -halfH + legLength / 2 + radius * 0.75,
       },
     ];
+  }
+
+  // ── ConvexHull Collider for mesh-accurate collision ────────────────────
+  /**
+   * Creates a convex hull collider from raw vertex data.
+   * Returns null if Rapier cannot compute a hull (degenerate vertices).
+   *
+   * @param {object} world
+   * @param {Float32Array|number[]} vertices  - [x0,y0,z0, x1,y1,z1, ...] in world space
+   * @param {number[]} center                 - [cx, cy, cz] rigid body position
+   * @param {boolean} isStatic
+   * @param {boolean} isSensor
+   * @returns {{ body, collider } | null}
+   */
+  createConvexHullCollider(world, vertices, center, isStatic = true, isSensor = false) {
+    if (!vertices || vertices.length < 12) return null; // need at least 4 points
+
+    const bodyDesc = isStatic
+      ? this.rapier.RigidBodyDesc.fixed()
+      : this.rapier.RigidBodyDesc.dynamic();
+    bodyDesc.setTranslation(center[0], center[1], center[2]);
+    const body = world.createRigidBody(bodyDesc);
+
+    // Use original vertices and offset using collider translation
+    const rawVerts = vertices instanceof Float32Array ? vertices : new Float32Array(vertices);
+    let colliderDesc = this.rapier.ColliderDesc.convexHull(rawVerts);
+
+    // FALLBACK: Rapier returns null for degenerate / coplanar vertex sets
+    if (!colliderDesc) {
+      console.warn('[PhysicsEngine] convexHull returned null — degenerate vertices');
+      world.removeRigidBody(body);
+      return null;
+    }
+
+    // Offset the collider to local space
+    colliderDesc.setTranslation(-center[0], -center[1], -center[2]);
+
+    let activeEvents = this.rapier.ActiveEvents.COLLISION_EVENTS;
+    if (isSensor) activeEvents |= this.rapier.ActiveEvents.INTERSECTION_EVENTS;
+
+    colliderDesc
+      .setFriction(0.6)
+      .setRestitution(0.0)
+      .setCollisionGroups(0x00010001)
+      .setActiveEvents(activeEvents);
+    if (isSensor) colliderDesc.setSensor(true);
+
+    const collider = world.createCollider(colliderDesc, body);
+    return { body, collider };
+  }
+
+  // ── Decomposed (Compound) ConvexHull Collider ─────────────────────────
+  /**
+   * Creates a compound rigid body with one convex hull per primitive vertex set.
+   * Each hull is offset relative to bodyCenter so parts are positioned correctly.
+   * Returns null if ALL primitive hulls fail.
+   *
+   * @param {object} world
+   * @param {Array<Float32Array|number[]>} primitiveVertices  - array of vertex sets
+   * @param {number[]} bodyCenter                             - [cx, cy, cz]
+   * @param {boolean} isStatic
+   * @param {boolean} isSensor
+   * @returns {{ body, colliders: Collider[], collider: Collider } | null}
+   */
+  createDecomposedCollider(world, primitiveVertices, bodyCenter, isStatic = true, isSensor = false) {
+    if (!primitiveVertices || primitiveVertices.length === 0) return null;
+
+    const bodyDesc = isStatic
+      ? this.rapier.RigidBodyDesc.fixed()
+      : this.rapier.RigidBodyDesc.dynamic();
+    bodyDesc.setTranslation(bodyCenter[0], bodyCenter[1], bodyCenter[2]);
+    const body = world.createRigidBody(bodyDesc);
+
+    let activeEvents = this.rapier.ActiveEvents.COLLISION_EVENTS;
+    if (isSensor) activeEvents |= this.rapier.ActiveEvents.INTERSECTION_EVENTS;
+
+    const colliders = [];
+
+    for (const primVerts of primitiveVertices) {
+      if (!primVerts || primVerts.length < 12) continue; // need ≥4 points
+
+      // Use original vertices and offset using collider translation
+      const rawVerts = primVerts instanceof Float32Array ? primVerts : new Float32Array(primVerts);
+      let desc = this.rapier.ColliderDesc.convexHull(rawVerts);
+      
+      if (!desc) continue; // skip degenerate primitives
+
+      // Offset the collider to local space
+      desc.setTranslation(-bodyCenter[0], -bodyCenter[1], -bodyCenter[2]);
+
+      desc
+        .setFriction(0.6)
+        .setRestitution(0.0)
+        .setCollisionGroups(0x00010001)
+        .setActiveEvents(activeEvents);
+      if (isSensor) desc.setSensor(true);
+
+      colliders.push(world.createCollider(desc, body));
+    }
+
+    if (colliders.length === 0) {
+      console.warn('[PhysicsEngine] All primitive hulls failed — decomposed collider returning null');
+      world.removeRigidBody(body);
+      return null;
+    }
+
+    return { body, colliders, collider: colliders[0] };
   }
 }
 

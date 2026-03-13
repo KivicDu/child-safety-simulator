@@ -116,7 +116,11 @@ function getRandomSpawnPosition(bbox, floorHeight, ageGroup, exclusionZones, max
 // Chạy 1 lần trước spawn loop. Mỗi ô được verify bằng downward raycast thật.
 function buildWalkableGrid(world, bb, floorHeight, agentHeight, capsuleRadius,
                            handleToCollider, isFloor, rapier) {
-  const GRID_STEP  = 0.35; // độ phân giải lưới ~35cm
+  // [BUG-13 FIX] Old: hardcoded 0.35m step → for small rooms (~3m) this gave only
+  // ~8 cells/dimension, missing narrow walkways. For large rooms (>20m) it was fine.
+  // Fix: scale step to roomDiameter/60 (min 0.2m, max 0.5m).
+  const _bbDiag = bb ? Math.hypot(bb.max[0]-bb.min[0], bb.max[2]-bb.min[2]) : 10;
+  const GRID_STEP  = Math.max(0.2, Math.min(0.5, _bbDiag / 60));
   const margin     = capsuleRadius * 2;
   const castFromY  = floorHeight + agentHeight + 0.5;
   const walkable   = [];
@@ -137,8 +141,12 @@ function buildWalkableGrid(world, bb, floorHeight, agentHeight, capsuleRadius,
       const hitY = castFromY - toi;
 
       // [FIX CEILING BUG] Ceiling guard: chỉ accept hit nằm trong khoảng sàn hợp lệ.
-      // hitY > floorHeight + 1m → bề mặt quá cao (trần hoặc đồ vật cao) → bỏ qua.
-      const MAX_VALID_FLOOR_Y = floorHeight + 1.0;
+      // [BUG-04 FIX] Old: MAX_VALID_FLOOR_Y = floorHeight + 1.0m hardcoded.
+      // Rooms > 3m tall have multi-level furniture (bunk beds, lofts, climbing frames)
+      // with legitimate surface heights 1.0–1.5m above floor → grid incorrectly
+      // excluded them. Fix: scale threshold to 35% of room height (min 1.0m).
+      const sceneRoomHeight = (world._bb?.max?.[1] ?? bb?.max?.[1] ?? floorHeight + 3.0) - floorHeight;
+      const MAX_VALID_FLOOR_Y = floorHeight + Math.max(1.0, sceneRoomHeight * 0.35);
       if (hitY > MAX_VALID_FLOOR_Y) continue;
 
       // Chỉ thêm vào walkable nếu tia chạm sàn thật (không phải mặt trên đồ vật)
@@ -171,10 +179,11 @@ function checkSpawnPoint(x, z, world, floorHeight, agentHeight, capsuleRadius,
     const toi     = hit.toi ?? hit.timeOfImpact;
     const hitY    = castFromY - toi;
 
-    // [FIX CEILING BUG] Ceiling guard: hitY không được vượt quá floorHeight + 1m.
-    // Nếu không có guard này: raycast từ floorHeight+agentH+0.5 có thể hit trần (nếu
-    // trần có physics collider) trước khi reach sàn → actualFloorY = trần → agent bay.
-    const MAX_VALID_FLOOR_Y = floorHeight + 1.0;
+    // [FIX CEILING BUG] Ceiling guard: hitY không được vượt quá floorHeight + X m.
+    // [BUG-04 FIX] Scale threshold to 35% of room height (min 1.0m) — same logic as
+    // buildWalkableGrid, to avoid rejecting legitimate high-surface spawn points.
+    const _spawnRoomH = (sceneData?.boundingBox?.max?.[1] ?? floorHeight + 3.0) - floorHeight;
+    const MAX_VALID_FLOOR_Y = floorHeight + Math.max(1.0, _spawnRoomH * 0.35);
     if (hitY > MAX_VALID_FLOOR_Y) {
       // Hit là trần hoặc bề mặt cao bất thường → từ chối điểm này
       return { valid: false, actualFloorY: floorHeight };
@@ -339,6 +348,24 @@ export const startSimulation = async (req, res) => {
             if (c.boundingBox.max[1] <= floorHeight + 0.12) return true;
             // Thảm mỏng nằm ngay trên sàn → cũng coi là sàn
             if (objHeight <= 0.15 && c.boundingBox.max[1] <= floorHeight + 0.25) return true;
+
+            // [BUG-07 FIX] Geometry-based fallback for non-English GLB mesh names
+            // (e.g. Japanese/Chinese/Vietnamese room exports: 床, nền nhà, Boden, etc.)
+            // An object is floor-like if:
+            //   1. It is very flat  (height < 10cm) AND
+            //   2. Its centroid is near floorHeight (within 20cm) AND
+            //   3. Its horizontal footprint is large relative to the room
+            const bb = sceneData.boundingBox;
+            if (bb && objHeight < 0.10) {
+              const centroidY = (c.boundingBox.min[1] + c.boundingBox.max[1]) / 2;
+              const xSpan = c.boundingBox.max[0] - c.boundingBox.min[0];
+              const zSpan = c.boundingBox.max[2] - c.boundingBox.min[2];
+              const roomXSpan = bb.max[0] - bb.min[0];
+              const roomZSpan = bb.max[2] - bb.min[2];
+              const coverRatio = (xSpan / Math.max(roomXSpan, 0.01)) *
+                                 (zSpan / Math.max(roomZSpan, 0.01));
+              if (Math.abs(centroidY - floorHeight) < 0.20 && coverRatio > 0.25) return true;
+            }
           }
 
           return false;
@@ -368,7 +395,8 @@ export const startSimulation = async (req, res) => {
             const fColl = world.createCollider(
               physicsEngine.rapier.ColliderDesc.cuboid(100, 0.05, 100)
                 .setFriction(0.9)
-                .setRestitution(0.0),
+                .setRestitution(0.0)
+                .setCollisionGroups(0x00010001),
               fBody
             );
             explicitFloorHandle = fColl.handle;
@@ -418,7 +446,9 @@ export const startSimulation = async (req, res) => {
               const desc = physicsEngine.rapier.RigidBodyDesc.fixed().setTranslation(w.x, w.y, w.z);
               const body = world.createRigidBody(desc);
               const wallCollider = world.createCollider(
-                physicsEngine.rapier.ColliderDesc.cuboid(w.hx, w.hy, w.hz).setFriction(0.5),
+                physicsEngine.rapier.ColliderDesc.cuboid(w.hx, w.hy, w.hz)
+                  .setFriction(0.5)
+                  .setCollisionGroups(0x00010001),
                 body
               );
               // Đăng ký tường vào map để spawn check không nhầm tường là obstacle
@@ -533,13 +563,12 @@ export const startSimulation = async (req, res) => {
             spawnPos = [cx, actualFloorY, cz];
           }
 
-          // [FIX P1] Clearance 0.02 → 0.05m.
-          // Report formula: surfaceY + height/2 + 0.05 clearance.
-          // 0.02m was insufficient — thin-floor floating-point rounding caused
-          // the capsule's legs to overlap the mesh by 1-2mm, triggering a
-          // physics separation impulse → agent bounced upward every frame.
-          // 0.05m gives 5cm air gap that KCC snap-to-ground then closes smoothly.
-          spawnPos[1] = actualFloorY + 0.05;
+          // [FIX P1] Clearance 0.05 → 0.15m.
+          // Report formula: surfaceY + height/2 + 0.15 clearance.
+          // 0.05m was insufficient for the 0.04m KCC offset + collision margins on Mesh Hulls.
+          // 0.15m ensures a clear air-gap so the KCC `snapToGround` can cleanly attach
+          // without triggering an infinite intersection lock on the first frame.
+          spawnPos[1] = actualFloorY + 0.15;
 
           if (i < 3) {
             console.log(`[SPAWN DEBUG] Agent ${i}: floorHeight=${floorHeight.toFixed(4)}, actualFloorY=${actualFloorY.toFixed(4)}, finalY=${spawnPos[1].toFixed(4)}, XZ=[${spawnPos[0].toFixed(2)}, ${spawnPos[2].toFixed(2)}]`);
@@ -745,9 +774,21 @@ export const startSimulation = async (req, res) => {
                   : 1.0;
                 agentVelMagnitude *= stateMultiplier;
 
-                // Cap velocity để KCC jitter không tạo ra va chạm giả với severity cao
+                // [BUG-09 FIX] Cap velocity to age-appropriate top speed × 1.2.
+                // Old: getRealisticVelocity('run') * 1.5 returns ~2m/s for all ages.
+                // For infant (crawl max ~0.25m/s) this allowed cap = ~3m/s = 20× normal,
+                // letting KCC jitter generate ghost injuries at infant-speed simulations.
+                // Fix: use a per-age cap based on locomotion type.
                 if (hitAgent.state !== 'FALLING') {
-                  const maxExpectedSpeed = hitAgent.getRealisticVelocity('run') * 1.5;
+                  const _ageProfile = hitAgent._ageProfile;
+                  let topSpeed;
+                  if (_ageProfile?.velocityProfile) {
+                    const vp = _ageProfile.velocityProfile;
+                    topSpeed = (vp.run ?? vp.walk ?? vp.crawl)?.mean ?? hitAgent.getRealisticVelocity('run');
+                  } else {
+                    topSpeed = hitAgent.getRealisticVelocity('run');
+                  }
+                  const maxExpectedSpeed = topSpeed * 1.2;
                   if (agentVelMagnitude > maxExpectedSpeed) {
                     agentVelMagnitude = maxExpectedSpeed;
                   }

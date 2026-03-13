@@ -634,7 +634,7 @@ export class SkeletonDriver implements IFigureDriver {
     this._t('forearmR_x', -elbowBend);
 
     // ── Spine ─────────────────────────────────────────────────────────────
-    if (isCrawl)      { this._t('spine_x',  1.10); this._t('spine_y', 0); }
+    if (isCrawl)      { this._t('spine_x',  0.70); this._t('spine_y', 0); }  // FIX-W3: 40° natural crawl lean
     else if (isRun)   { this._t('spine_x',  0.18); this._t('spine_y', s * 0.10); }
     else if (isFall)  { this._t('spine_x',  0.52); this._t('spine_y', 0); }
     else if (isClimb) { this._t('spine_x', -0.26); this._t('spine_y', 0); }

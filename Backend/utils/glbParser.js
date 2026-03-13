@@ -1,4 +1,3 @@
-
 import fs from 'fs/promises';
 import path from 'path';
 import { NodeIO } from '@gltf-transform/core';
@@ -158,6 +157,85 @@ const MathUtils = {
   }
 };
 
+// ── Farthest-point sampling ─────────────────────────────────────────────────
+// Reduces a vertex array to ≤maxCount points while preserving shape extremes.
+// Algorithm: greedy — start from vertex farthest from centroid, then always
+// pick the vertex farthest from all already-selected vertices.
+function farthestPointSample(verts, maxCount = 256) {
+  const n = verts.length / 3;
+  if (n <= maxCount) return verts; // already small enough
+
+  // Compute centroid
+  let cx = 0, cy = 0, cz = 0;
+  for (let i = 0; i < verts.length; i += 3) {
+    cx += verts[i]; cy += verts[i + 1]; cz += verts[i + 2];
+  }
+  cx /= n; cy /= n; cz /= n;
+
+  // Find first point: farthest from centroid
+  const minDist = new Float32Array(n).fill(Infinity);
+  let bestIdx = 0, bestDist = -1;
+  for (let i = 0; i < n; i++) {
+    const dx = verts[i * 3] - cx, dy = verts[i * 3 + 1] - cy, dz = verts[i * 3 + 2] - cz;
+    const d = dx * dx + dy * dy + dz * dz;
+    if (d > bestDist) { bestDist = d; bestIdx = i; }
+  }
+
+  const selected = [bestIdx];
+  // Update minDist from first selected point
+  for (let i = 0; i < n; i++) {
+    const dx = verts[i * 3] - verts[bestIdx * 3];
+    const dy = verts[i * 3 + 1] - verts[bestIdx * 3 + 1];
+    const dz = verts[i * 3 + 2] - verts[bestIdx * 3 + 2];
+    minDist[i] = dx * dx + dy * dy + dz * dz;
+  }
+
+  // Greedily select farthest points
+  while (selected.length < maxCount) {
+    bestIdx = 0; bestDist = -1;
+    for (let i = 0; i < n; i++) {
+      if (minDist[i] > bestDist) { bestDist = minDist[i]; bestIdx = i; }
+    }
+    if (bestDist <= 0) break; // all remaining points are coincident
+    selected.push(bestIdx);
+    minDist[bestIdx] = 0;
+    // Update minDist
+    for (let i = 0; i < n; i++) {
+      const dx = verts[i * 3] - verts[bestIdx * 3];
+      const dy = verts[i * 3 + 1] - verts[bestIdx * 3 + 1];
+      const dz = verts[i * 3 + 2] - verts[bestIdx * 3 + 2];
+      const d = dx * dx + dy * dy + dz * dz;
+      if (d < minDist[i]) minDist[i] = d;
+    }
+  }
+
+  const out = new Float32Array(selected.length * 3);
+  for (let i = 0; i < selected.length; i++) {
+    const si = selected[i];
+    out[i * 3]     = verts[si * 3];
+    out[i * 3 + 1] = verts[si * 3 + 1];
+    out[i * 3 + 2] = verts[si * 3 + 2];
+  }
+  return out;
+}
+
+// ── Collider strategy inference ─────────────────────────────────────────────
+// Determines the best collision shape type for each scene object.
+function inferColliderStrategy(nameLower, primitiveCount) {
+  // Planes / floors / walls / ceilings → simple cuboid
+  if (/floor|ground|plane|rug|carpet|mat($|[_\s])/.test(nameLower))     return 'cuboid';
+  if (/^wall|[_\s]wall|wallpaper|ceiling|plafond|roof/.test(nameLower)) return 'cuboid';
+  // Furniture with internal voids → compound colliders (per-primitive decomposition)
+  if (/table|desk|nightstand/.test(nameLower))                          return 'compound';
+  if (/chair|stool|bench|armchair/.test(nameLower))                     return 'compound';
+  if (/shelf|bookcase|cabinet|wardrobe|dresser/.test(nameLower))        return 'compound';
+  if (/bed(?!side)|bunk|crib|cot/.test(nameLower))                     return 'compound';
+  // Many primitives hint at complex geometry
+  if (primitiveCount >= 4)                                              return 'compound';
+  // Default: single convex hull
+  return 'convexHull';
+}
+
 class GLBParser {
   
   async parse(glbPath) {
@@ -289,6 +367,57 @@ class GLBParser {
                 };
               }
             }
+
+            // ── MESH COLLISION: Extract & transform vertex data per primitive ──
+            const perPrimVerts = [];
+            let totalVertCount = 0;
+            for (const prim of primitives) {
+              const posAttr = prim.getAttribute('POSITION');
+              if (!posAttr) continue;
+              const rawArr = posAttr.getArray();
+              if (!rawArr || rawArr.length < 9) continue; // need ≥3 verts
+
+              // Transform vertices from local to world space
+              const worldVerts = new Float32Array(rawArr.length);
+              for (let vi = 0; vi < rawArr.length; vi += 3) {
+                const wp = MathUtils.applyMatrixToPoint(worldMatrix, [
+                  rawArr[vi], rawArr[vi + 1], rawArr[vi + 2]
+                ]);
+                worldVerts[vi]     = wp[0];
+                worldVerts[vi + 1] = wp[1];
+                worldVerts[vi + 2] = wp[2];
+              }
+
+              // Farthest-point sample each primitive to ≤256 vertices
+              const sampled = farthestPointSample(worldVerts, 256);
+              perPrimVerts.push(Array.from(sampled));
+              totalVertCount += sampled.length / 3;
+            }
+
+            const nameLower = (nodeName || `Object_${objects.length}`).toLowerCase();
+            const colliderStrategy = inferColliderStrategy(nameLower, primitives.length);
+
+            // Decide: merge primitives or keep separate
+            let collisionVertices = null;
+            let collisionPrimitives = null;
+            if (perPrimVerts.length > 0) {
+              if (colliderStrategy === 'compound' && perPrimVerts.length > 1) {
+                // Compound: keep per-primitive for decomposed colliders
+                collisionPrimitives = perPrimVerts;
+              } else if (totalVertCount <= 512 / 3 * 3 || perPrimVerts.length === 1) {
+                // Merge into single vertex set
+                const merged = [];
+                for (const pv of perPrimVerts) merged.push(...pv);
+                // Re-sample merged set if > 256 verts
+                const mergedArr = new Float32Array(merged);
+                collisionVertices = Array.from(
+                  farthestPointSample(mergedArr, 256)
+                );
+              } else {
+                // Too many verts to merge → keep per-primitive
+                collisionPrimitives = perPrimVerts;
+              }
+            }
             
             const newObject = {
               id: `obj_${objects.length}`,
@@ -301,7 +430,11 @@ class GLBParser {
               obb: obbData,           // New structured OBB!
               proxyColliders: [],     // Array of attached proxies
               primitiveCount: primitives.length,
-              material: materialData
+              material: materialData,
+              // Mesh collision fields (new)
+              colliderStrategy,
+              ...(collisionVertices  ? { collisionVertices }  : {}),
+              ...(collisionPrimitives ? { collisionPrimitives } : {}),
             };
             
             objects.push(newObject);

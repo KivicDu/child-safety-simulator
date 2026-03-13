@@ -1,0 +1,5 @@
+Y=0.35 moveX=1
+Y=0.4 moveX=1
+Y=0.45 moveX=1
+Y=0.5 moveX=1
+Y=0.6 moveX=1

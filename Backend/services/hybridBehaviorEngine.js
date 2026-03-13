@@ -361,12 +361,18 @@ class HybridBehaviorEngine {
       return false;
     }
 
-    // Validate each behavior has required fields
+    // [BUG-02 FIX] Validate each behavior has required fields.
+    // A behavior is valid if it has EITHER:
+    //   (a) a non-empty sequence array (compound behavior), OR
+    //   (b) a direct action field (leaf behavior — touch_object, mouth_object, climb_attempt, etc.)
+    // Previously, only (a) was accepted → all flat/leaf behaviors were silently rejected,
+    // reducing injury event count by 30–50% and causing agents to never mouth/climb objects.
     for (const behavior of response.behaviors) {
-      if (!behavior.sequence || !Array.isArray(behavior.sequence)) {
+      const hasSequence = behavior.sequence && Array.isArray(behavior.sequence) && behavior.sequence.length > 0;
+      const isLeaf = !!behavior.action;
+      if (!hasSequence && !isLeaf) {
         return false;
       }
-      
       if (!behavior.behaviorId || !behavior.probability) {
         return false;
       }
@@ -380,23 +386,43 @@ class HybridBehaviorEngine {
       return [];
     }
 
+    // [BUG-02 FIX] Leaf behaviors have a direct `action` field but no `sequence`.
+    // Previously, `.filter(b => b.sequence.length > 0)` removed ALL leaf behaviors
+    // (touch_object, mouth_object, climb_attempt, etc.) — dropping 30-50% of
+    // interaction behaviors. Leaf behaviors are now passed through as-is.
     return behaviors.map(behavior => {
-      // Ensure required fields
-      return {
+      const isLeaf = !behavior.sequence && !!behavior.action;
+
+      const normalized = {
         behaviorId: behavior.behaviorId || `ai_behavior_${Date.now()}`,
         description: behavior.description || 'AI-generated behavior',
         probability: Math.max(0, Math.min(1, behavior.probability || 0.5)),
-        sequence: (behavior.sequence || []).map(step => {
+        ...behavior,
+      };
+
+      if (!isLeaf) {
+        normalized.sequence = (behavior.sequence || []).map(step => {
           let action = step.action || 'walk';
-          // Force infants to crawl if AI generated walk/run
           if (ageGroup.ageGroup === 'infant' && (action === 'walk' || action === 'run' || action === 'sprint' || action === 'walk_to' || action === 'walk_random')) {
             action = 'crawl';
           }
           return { ...step, action };
-        }),
-        ...behavior
-      };
-    }).filter(b => b.sequence.length > 0); // Remove invalid behaviors
+        });
+      } else {
+        if (ageGroup.ageGroup === 'infant') {
+          const a = normalized.action;
+          if (a === 'walk' || a === 'run' || a === 'sprint' || a === 'walk_to' || a === 'walk_random') {
+            normalized.action = 'crawl';
+          }
+        }
+      }
+
+      return normalized;
+    }).filter(b => {
+      const hasSequence = b.sequence && Array.isArray(b.sequence) && b.sequence.length > 0;
+      const isLeaf = !b.sequence && !!b.action;
+      return hasSequence || isLeaf;
+    });
   }
 
   validateRareEvents(events, ageGroup) {

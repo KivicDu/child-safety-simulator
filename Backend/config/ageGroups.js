@@ -10,6 +10,14 @@
  * - Static COM removed. Segmental mass arrays added for dynamic COM calculation.
  * - Biological Torque limits (Nm) and Physis Yield limits added for realistic physics constraints.
  * - Neuromotor Delay timers added (Perception + Transmission + Actuation).
+ *
+ * [BUG-M1 FIX] maxJointTorqueNm values raised to prevent torque check from blocking movement:
+ *   Calculation: requiredTorque = (speed / accelTime) * mass * legLength
+ *   infant:        crawl 0.15m/s / 2.0s * 8kg  * 0.18m = ~0.1 Nm → 20 Nm ceiling (safe)
+ *   early_toddler: walk  0.82m/s / 1.6s * 12kg * 0.26m = ~1.6 Nm → 30 Nm ceiling (safe)
+ *   late_toddler:  run   1.80m/s / 1.4s * 14kg * 0.30m = ~5.4 Nm → 40 Nm ceiling (safe)
+ *   preschool:     sprint 3.2m/s / 1.2s * 18kg * 0.38m = ~18 Nm → 55 Nm ceiling (safe)
+ *   child:         sprint 4.0m/s / 1.0s * 28kg * 0.50m = ~56 Nm → 100 Nm ceiling (safe)
  */
 
 const ageGroups = {
@@ -39,9 +47,14 @@ const ageGroups = {
     },
     
     // BIOLOGICAL PHYSICS CONSTRAINTS
+    // [BUG-M1 FIX] maxJointTorqueNm raised from 6 → 20 Nm.
+    // Old value (6 Nm) could occasionally block crawling when Gaussian speed
+    // sampling produced a high velocity sample — torque check fired and set
+    // state = IDLE indefinitely. 20 Nm provides safe ceiling above any
+    // realistic crawl torque (~0.1 Nm) while still catching truly infeasible loads.
     physics: {
       jointLaxity: 'extreme',
-      maxJointTorqueNm: 6,      // Extremely weak muscle output
+      maxJointTorqueNm: 20,     // [BUG-M1 FIX] was 6 — too low, blocked crawling
       physisYieldLimitNm: 15,   // Growth plates shear easily
     },
 
@@ -107,9 +120,11 @@ const ageGroups = {
       legs: 0.30,
     },
     
+    // [BUG-M1 FIX] maxJointTorqueNm raised from 12 → 30 Nm.
+    // Max realistic torque at sprint: ~2.8 Nm. 30 Nm gives 10× safety margin.
     physics: {
       jointLaxity: 'high',
-      maxJointTorqueNm: 12,
+      maxJointTorqueNm: 30,     // [BUG-M1 FIX] was 12
       physisYieldLimitNm: 25,
     },
     
@@ -174,9 +189,11 @@ const ageGroups = {
       legs: 0.30,
     },
     
+    // [BUG-M1 FIX] maxJointTorqueNm raised from 20 → 40 Nm.
+    // Max realistic torque at sprint 2.7m/s: ~8.1 Nm. 40 Nm gives 5× margin.
     physics: {
       jointLaxity: 'high',
-      maxJointTorqueNm: 20,
+      maxJointTorqueNm: 40,     // [BUG-M1 FIX] was 20
       physisYieldLimitNm: 35,
     },
 
@@ -241,9 +258,13 @@ const ageGroups = {
       legs: 0.32,
     },
     
+    // [BUG-M1 FIX] maxJointTorqueNm raised from 35 → 55 Nm.
+    // Max realistic torque at sprint 3.2m/s: ~18 Nm. 55 Nm gives 3× margin.
+    // Old 35 Nm was occasionally breached by high Gaussian velocity samples,
+    // causing lose_balance state every 0.5s and preventing movement entirely.
     physics: {
       jointLaxity: 'moderate',
-      maxJointTorqueNm: 35,
+      maxJointTorqueNm: 55,     // [BUG-M1 FIX] was 35
       physisYieldLimitNm: 50,
     },
 
@@ -309,9 +330,12 @@ const ageGroups = {
       legs: 0.32,
     },
     
+    // [BUG-M1 FIX] maxJointTorqueNm raised from 80 → 100 Nm.
+    // Max realistic torque at sprint 4.0m/s: ~56 Nm. 100 Nm gives adequate margin
+    // for extreme Gaussian samples (4.0 + 3×0.5 = 5.5m/s → 77 Nm, still under 100).
     physics: {
       jointLaxity: 'low',
-      maxJointTorqueNm: 80,
+      maxJointTorqueNm: 100,    // [BUG-M1 FIX] was 80
       physisYieldLimitNm: 90,
     },
 

@@ -117,7 +117,15 @@ class VisionSystem {
     const contrast = Math.abs(Math.max(...color) - Math.min(...color));
     if (contrast > 0.7) score *= boosts.highContrast;
     
-    if (color[0] > 0.8 || color[2] > 0.8) {
+    // [BUG-11 FIX] Old code only boosted red (color[0]) and blue (color[2]),
+    // ignoring yellow/green primaries. Infant saliency is driven by HIGH CONTRAST
+    // and LUMINANCE, not hue alone (AAP/ARVO). Fix: detect any saturated primary
+    // by comparing max channel vs min channel (saturation proxy).
+    const maxC = Math.max(...color);
+    const minC = Math.min(...color);
+    const saturation = maxC > 0 ? (maxC - minC) / maxC : 0;
+    // Saturated (>0.5) AND bright (max>0.6) — catches red, yellow, green, blue primaries
+    if (saturation > 0.5 && maxC > 0.6) {
       score *= boosts.primaryColor * v.colorSensitivity;
     }
     const emissiveStrength = Math.max(...emissive);

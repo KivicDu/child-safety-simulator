@@ -33,6 +33,22 @@ const ANTHROPOMETRY: Record<string, Anthropometry> = {
     shoulderWidth: 0.22, hipWidth: 0.10,
     skinColor: 0xf5cba7, outfitColor: 0x93c5fd, accentColor: 0x3b82f6,
   },
+  // FIX-C1: Backend sends 'early_toddler' — proportions interpolated from WHO/CDC 50th percentile (1-2y)
+  early_toddler: {
+    realHeight: 0.82, headRadius: 0.076, neckLength: 0.046,
+    torsoLength: 0.258, torsoRadius: 0.076,
+    legLength: 0.370, armLength: 0.210,
+    shoulderWidth: 0.20, hipWidth: 0.09,
+    skinColor: 0xf5cba7, outfitColor: 0x93c5fd, accentColor: 0x3b82f6,
+  },
+  // FIX-C1: Backend sends 'late_toddler' — proportions for 2-3y (longer legs, leaner torso)
+  late_toddler: {
+    realHeight: 0.94, headRadius: 0.073, neckLength: 0.053,
+    torsoLength: 0.30, torsoRadius: 0.082,
+    legLength: 0.440, armLength: 0.250,
+    shoulderWidth: 0.22, hipWidth: 0.10,
+    skinColor: 0xf5cba7, outfitColor: 0xa5b4fc, accentColor: 0x6366f1,
+  },
   preschool: {
     realHeight: 1.10, headRadius: 0.070, neckLength: 0.060,
     torsoLength: 0.34, torsoRadius: 0.090,
@@ -49,6 +65,14 @@ const ANTHROPOMETRY: Record<string, Anthropometry> = {
   },
   // FIX: Backend sends 'school' as ageGroupId — alias to school_age
   school: {
+    realHeight: 1.30, headRadius: 0.065, neckLength: 0.070,
+    torsoLength: 0.40, torsoRadius: 0.100,
+    legLength: 0.700, armLength: 0.400,
+    shoulderWidth: 0.30, hipWidth: 0.14,
+    skinColor: 0xf5cba7, outfitColor: 0xc4b5fd, accentColor: 0x8b5cf6,
+  },
+  // FIX-C1: Backend sends 'child' (6-10y) — same measurements as school_age
+  child: {
     realHeight: 1.30, headRadius: 0.065, neckLength: 0.070,
     torsoLength: 0.40, torsoRadius: 0.100,
     legLength: 0.700, armLength: 0.400,
@@ -474,10 +498,10 @@ export class ProceduralFigure {
     } else if (isCrawl) {
       // Crawl: hip fully flexed ~90°, alternating fore/aft
       // anatomy: hip flexion up to 90° is fine for crawl position
-      this._setTarget('hipL_x',  -(0.90 + s * 0.32));   // −52° ± 18°  (was −60°±29° OVER limit)
-      this._setTarget('hipR_x',  -(0.90 - s * 0.32));
-      this._setTarget('kneeL_x',  1.22 - s * 0.28);      // 70° ± 16° knee flex (was 34°-52° too low)
-      this._setTarget('kneeR_x',  1.22 + s * 0.28);
+      this._setTarget('hipL_x',  -(1.22 + s * 0.32));   // −70° ± 18° for a lower hip profile
+      this._setTarget('hipR_x',  -(1.22 - s * 0.32));
+      this._setTarget('kneeL_x',  1.57 - s * 0.28);     // 90° ± 16° knee flex down to ground
+      this._setTarget('kneeR_x',  1.57 + s * 0.28);
     } else if (isFall) {
       // Fall / stumble: legs slightly bent backward (natural stumble reflex)
       const flail = Math.sin(this.cycle * 5) * 0.28; // slightly slower flail, less extreme
@@ -661,8 +685,8 @@ export class ProceduralFigure {
     } else if (isCrawl) {
       // Crawl: arms reach forward alternately (weight-bearing, elbow straight)
       // Shoulder swings ±26° around −90° (arms pointing forward/down)
-      this._setTarget('shL_x', -(1.40 - s * 0.45));  // −80°±26°  (was −(PI/2±0.45) = ok but using correct value)
-      this._setTarget('shR_x', -(1.40 + s * 0.45));
+      this._setTarget('shL_x', -(1.57 - s * 0.35));  // -90° pointing down
+      this._setTarget('shR_x', -(1.57 + s * 0.35));
     } else if (isFall) {
       // Fall: arms instinctively fly up/forward to ~90°-100°
       // FIX-A: was -PI*0.8 = −144°. Correct reflex is forward-upward, not backward.
@@ -767,7 +791,7 @@ export class ProceduralFigure {
     this._setTarget('shR_z',  dynamicAbduct);
 
     // Elbow bend per action
-    let elbowBend = isRun ? 0.60 : isWalk ? 0.30 : isCrawl ? 0.05 : isClimb ? 0.52
+    let elbowBend = isRun ? 0.60 : isWalk ? 0.30 : isCrawl ? 0.0 : isClimb ? 0.52
       : isHurt ? (action === 'hurt_light' ? 1.05 : action === 'hurt_medium' ? 1.40 : 0.52)
       : isCrying ? 1.40 : isGetUp ? (1.57 * (1 - Math.min(1, this.cycle * 0.8)))
       : isSlide ? 0.17
@@ -785,7 +809,7 @@ export class ProceduralFigure {
 
     // ── Spine ─────────────────────────────────────────────────────────────
     if (isCrawl) {
-      this._setTarget('spine_x',  1.10);
+      this._setTarget('spine_x',  0.70);   // FIX-W3: 40° natural crawl lean (was 63° — too extreme for infant)
       this._setTarget('spine_y',  0);
     } else if (isRun) {
       this._setTarget('spine_x',  0.18);
@@ -1187,10 +1211,4 @@ export function createFigure(
   return new ProceduralFigure(ageGroupId, agentId, accentColor);
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Agent palette (shared with Canvas3D)
-// ─────────────────────────────────────────────────────────────────────────────
-export const AGENT_PALETTE = [
-  0x00e5ff, 0x69f0ae, 0xffab40, 0xec407a, 0xce93d8,
-  0x42a5f5, 0xd4e157, 0xff7043, 0x26c6da, 0xef5350,
-];
+// FIX-N5: AGENT_PALETTE removed — canonical export is in Figuredriver.ts

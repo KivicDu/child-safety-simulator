@@ -126,12 +126,28 @@ class InjuryCalculator {
     // Infants have softer bones (factor 1.475), preteens have rigid bones (1.0)
     const boneDensityFactor = ageGroup.boneDensityFactor || 1.0;
 
+    // [BUG-15 FIX] Add anatomical site density multiplier.
+    // Old: single boneDensityFactor for all body parts regardless of anatomy.
+    // Real bone density varies significantly by site (Kalkwarf HJ et al. 2007,
+    // JBMR; Mora S et al. 2001, Bone). Wrist cortical bone is ~25% thinner than
+    // femoral midshaft in children; skull/head = reference (densest per-area).
+    // Multipliers: head=1.0 (reference), wrist=0.75, femur=0.85, spine/torso=0.90.
+    const LOCATION_DENSITY = {
+      head:   1.00,   // skull — thickest flat bone, reference
+      torso:  0.90,   // ribs + spine — somewhat less dense than skull
+      legs:   0.85,   // femur/tibia — long bones, good cortical thickness
+      wrist:  0.75,   // distal radius — thinnest cortical shell in children
+      arm:    0.80,   // radius/ulna mid-shaft
+      unknown: 0.90,  // conservative default
+    };
+    const locationDensityMultiplier = LOCATION_DENSITY[bodyPart] ?? LOCATION_DENSITY.unknown;
+
     const rawScore = (
       this.WEIGHTS.hic * normalizedHIC +
       this.WEIGHTS.impactForce * normalizedForce +
       this.WEIGHTS.sharpness * (sharpnessScore * 100) +
       this.WEIGHTS.fallHeight * (fallHeightScore * 100)
-    ) * boneDensityFactor; // Apply physiological bone softness across all mechanical impacts
+    ) * boneDensityFactor / locationDensityMultiplier; // harder bones = less injury
 
     const ageAdjustedScore = calculateAgeAdjustedInjury(rawScore, ageGroupId, bodyPart);
     let finalScore = Math.max(0, Math.min(100, ageAdjustedScore));

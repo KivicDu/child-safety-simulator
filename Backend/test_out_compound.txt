@@ -1,0 +1,10 @@
+Bed frame - primCount:1 hasPrims:false hasVerts:true
+Bed - primCount:3 hasPrims:true hasVerts:false
+Bookshelf - primCount:2 hasPrims:true hasVerts:false
+Table - primCount:2 hasPrims:true hasVerts:false
+Book.002 - primCount:4 hasPrims:true hasVerts:false
+Book.001 - primCount:4 hasPrims:true hasVerts:false
+Coffe table - primCount:1 hasPrims:false hasVerts:true
+Book.003 - primCount:4 hasPrims:true hasVerts:false
+Book - primCount:4 hasPrims:true hasVerts:false
+Chair - primCount:2 hasPrims:true hasVerts:false

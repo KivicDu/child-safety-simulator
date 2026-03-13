@@ -13,7 +13,7 @@
 
 export const detectScale = (sceneData) => {
   if (!sceneData || !sceneData.objects) {
-    return { factor: 1.0, detectedBy: 'fallback_empty_scene', maxDimMeters: 0 };
+    return { factor: 1.0, detectedBy: 'fallback_empty_scene', maxDimMeters: 0, confidence: 0.1 };
   }
 
   const objects = sceneData.objects;
@@ -32,7 +32,7 @@ export const detectScale = (sceneData) => {
     console.log(`[ScaleAuthority] Measured height: ${height.toFixed(2)} units`);
     console.log(`[ScaleAuthority] Applied scale factor: ${factor.toFixed(4)}`);
     
-    return { factor, detectedBy: 'priority_1_calibration_anchor' };
+    return { factor, detectedBy: 'priority_1_calibration_anchor', confidence: 1.0 };
   }
 
   // Helper to calculate height of an object
@@ -65,7 +65,7 @@ export const detectScale = (sceneData) => {
           console.log(`[ScaleAuthority] Target detection: Door Heuristic (Priority 2)`);
           console.log(`[ScaleAuthority] Measured height: ${rawHeight.toFixed(2)} units (matched as ${range.unit})`);
           console.log(`[ScaleAuthority] Applied scale factor: ${factor.toFixed(4)}`);
-          return { factor, detectedBy: 'priority_2_door_heuristic' };
+          return { factor, detectedBy: 'priority_2_door_heuristic', confidence: 0.9 };
         }
       }
     }
@@ -120,7 +120,7 @@ export const detectScale = (sceneData) => {
     console.log(`[ScaleAuthority] Target detection: Semantic Furniture Detection (Priority 3)`);
     console.log(`[ScaleAuthority] Measured ${matchesCount.toFixed(1)} weighted furniture items.`);
     console.log(`[ScaleAuthority] Averaged scale factor (snapped): ${finalFactor.toFixed(4)}`);
-    return { factor: finalFactor, detectedBy: 'priority_3_furniture_heuristic' };
+    return { factor: finalFactor, detectedBy: 'priority_3_furniture_heuristic', confidence: 0.75 };
   }
 
   // ─────────────────────────────────────────────────────────────────
@@ -135,7 +135,7 @@ export const detectScale = (sceneData) => {
  */
 function _legacyDetectSceneScale(bbox) {
   if (!bbox || !bbox.min || !bbox.max) {
-    return { factor: 1.0, detectedBy: 'fallback_empty_bbox', maxDimMeters: 0 };
+    return { factor: 1.0, detectedBy: 'fallback_empty_bbox', maxDimMeters: 0, confidence: 0.1 };
   }
 
   const width = Math.abs(bbox.max[0] - bbox.min[0]) || 0;
@@ -145,7 +145,7 @@ function _legacyDetectSceneScale(bbox) {
   const maxHorizontal = Math.max(width, depth);
   const vertical = height;
 
-  if (maxHorizontal === 0) return { factor: 1.0, detectedBy: 'fallback_zero_size', maxDimMeters: 0 };
+  if (maxHorizontal === 0) return { factor: 1.0, detectedBy: 'fallback_zero_size', maxDimMeters: 0, confidence: 0.1 };
 
   const UNIT_CONVERSIONS = [
     { unit: 'feet',        factor: 0.3048 },
@@ -193,6 +193,7 @@ function _legacyDetectSceneScale(bbox) {
   if (best) {
     console.log(`[ScaleAuthority] Target detection: Backward BBox Logic (Priority 4)`);
     console.log(`[ScaleAuthority] Applied scale factor: ${best.factor}`);
+    if (best) best.confidence = 0.5;
     return best;
   }
 
@@ -206,7 +207,8 @@ function _legacyDetectSceneScale(bbox) {
   return {
     factor: fallbackFactor,
     detectedBy: 'absolute_fallback',
-    maxDimMeters: 8.0
+    maxDimMeters: 8.0,
+    confidence: 0.2
   };
 }
 

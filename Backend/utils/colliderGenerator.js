@@ -137,6 +137,13 @@ const colliderGenerator = {
   /**
    * Generate Rapier colliders for all scene objects.
    *
+   * Strategy routing (v3 — mesh collision):
+   *   1. Soft objects → sensor cuboid (unchanged)
+   *   2. colliderStrategy === 'cuboid' or no mesh data → OBB/AABB (unchanged)
+   *   3. colliderStrategy === 'compound' + collisionPrimitives → decomposed convexHull
+   *   4. colliderStrategy === 'convexHull' + collisionVertices → single convexHull
+   *   5. All mesh paths fall back to AABB/OBB on failure
+   *
    * @param {object}       sceneData     - parsed scene JSON (objects[], boundingBox, floor)
    * @param {object}       world         - Rapier world instance
    * @param {object}       physicsEngine - physicsEngine singleton
@@ -149,6 +156,8 @@ const colliderGenerator = {
     let obbCount  = 0;
     let aabbCount = 0;
     let softCount = 0;
+    let chCount   = 0;   // convex hull
+    let compCount = 0;   // compound (decomposed)
     let skipCount = 0;
 
     for (const obj of sceneData.objects) {
@@ -176,15 +185,11 @@ const colliderGenerator = {
         const isSoft    = isSoftObject(nameLower, obj.type);
 
         // ── Affordances ───────────────────────────────────────────────────
-        // Priority 5 support: use scene-provided affordances if available,
-        // else infer from name + dimensions.
         const affordances = Array.isArray(obj.affordances) && obj.affordances.length > 0
           ? obj.affordances
           : inferAffordances(obj, nameLower);
 
         // ── Thin surface thickening ───────────────────────────────────────
-        // Rugs, mats, and thin floors must have at least 0.05m physics thickness
-        // so KCC snap-to-ground always finds a rest contact plane.
         const rawHeight = max[1] - min[1];
         const isFloorLike = (
           obj.type === 'floor' ||
@@ -194,47 +199,13 @@ const colliderGenerator = {
 
         // ── Collider creation ─────────────────────────────────────────────
         let colliderEntry = null;
+        const strategy = obj.colliderStrategy || 'cuboid';
 
-        // [FIX P2] OBB-first: if object has a meaningful rotation, use OBB.
-        // A rotated sofa creates "corner walls" when using AABB — the ghost
-        // geometry extends beyond the visual mesh, blocking movement in empty
-        // space. OBB tightly hugs the visual geometry instead.
-        const hasRotation = !isIdentityQuat(obj.rotation ?? obj.obb?.rotation);
-        const hasExplicitOBB = !!obj.obb;
-
-        if ((hasRotation || hasExplicitOBB) && !isSoft) {
-          // ── OBB path ──────────────────────────────────────────────────
-          const obbDesc = hasExplicitOBB ? obj.obb : buildOBBDescriptor(obj);
-
-          // Ensure minimum vertical thickness
-          if (obbDesc.extents[1] < 0.025) obbDesc.extents[1] = 0.025;
-
-          const proxyColliders = obj.proxyColliders ?? null;
-
-          const rapierObj = physicsEngine.createCompoundOBBCollider(
-            world, obbDesc, proxyColliders, true, false
-          );
-
-          // collidersArr: all sub-colliders (for handleToCollider map)
-          const collidersArr = rapierObj.colliders ?? (rapierObj.collider ? [rapierObj.collider] : []);
-
-          colliderEntry = {
-            id:          obj.id,
-            name:        obj.name || obj.id,
-            type:        obj.type || 'object',
-            boundingBox: obj.boundingBox,
-            collider:    rapierObj.collider,
-            collidersArr,
-            isSoft:      false,
-            isOBB:       true,
-            affordances,
-          };
-          obbCount++;
-
-        } else if (isSoft) {
-          // ── Sensor / soft path ────────────────────────────────────────
+        // ────────────────────────────────────────────────────────────────
+        // PATH 1: Soft objects (sensors) — unchanged
+        // ────────────────────────────────────────────────────────────────
+        if (isSoft) {
           const bbox = { ...obj.boundingBox };
-          // Thicken thin soft objects to ensure sensor overlap
           if ((bbox.max[1] - bbox.min[1]) < 0.05) {
             bbox.max[1] = bbox.min[1] + 0.05;
           }
@@ -251,31 +222,129 @@ const colliderGenerator = {
           };
           softCount++;
 
-        } else {
-          // ── AABB path (axis-aligned, no meaningful rotation) ───────────
-          const bbox = {
-            min: [...min],
-            max: [...max],
-          };
+        // ────────────────────────────────────────────────────────────────
+        // PATH 2: Compound (decomposed multi-hull) — NEW
+        // ────────────────────────────────────────────────────────────────
+        } else if (strategy === 'compound' && obj.collisionPrimitives && obj.collisionPrimitives.length > 1) {
+          const bboxCenter = [
+            (min[0] + max[0]) / 2,
+            (min[1] + max[1]) / 2,
+            (min[2] + max[2]) / 2,
+          ];
 
-          // Thin surface thickening
-          if (isFloorLike && (bbox.max[1] - bbox.min[1]) < 0.05) {
-            // Pad downward to preserve surface top face position
-            bbox.min[1] = bbox.max[1] - 0.05;
+          // Convert plain arrays to Float32Arrays for Rapier
+          const primVerts = obj.collisionPrimitives.map(pv =>
+            pv instanceof Float32Array ? pv : new Float32Array(pv)
+          );
+
+          const rapierObj = physicsEngine.createDecomposedCollider(
+            world, primVerts, bboxCenter, true, false
+          );
+
+          if (rapierObj) {
+            const collidersArr = rapierObj.colliders ?? [rapierObj.collider];
+            colliderEntry = {
+              id:          obj.id,
+              name:        obj.name || obj.id,
+              type:        obj.type || 'object',
+              boundingBox: obj.boundingBox,
+              collider:    rapierObj.collider,
+              collidersArr,
+              isSoft:      false,
+              isCompound:  true,
+              affordances,
+            };
+            compCount++;
           }
+          // if null → fall through to AABB/OBB fallback below
 
-          const rapierObj = physicsEngine.createBoxCollider(world, bbox, true, false);
+        // ────────────────────────────────────────────────────────────────
+        // PATH 3: Single ConvexHull — NEW
+        // ────────────────────────────────────────────────────────────────
+        } else if (strategy === 'convexHull' && obj.collisionVertices && obj.collisionVertices.length >= 12) {
+          const bboxCenter = [
+            (min[0] + max[0]) / 2,
+            (min[1] + max[1]) / 2,
+            (min[2] + max[2]) / 2,
+          ];
 
-          colliderEntry = {
-            id:          obj.id,
-            name:        obj.name || obj.id,
-            type:        obj.type || 'object',
-            boundingBox: obj.boundingBox,
-            collider:    rapierObj.collider,
-            isSoft:      false,
-            affordances,
-          };
-          aabbCount++;
+          const verts = obj.collisionVertices instanceof Float32Array
+            ? obj.collisionVertices
+            : new Float32Array(obj.collisionVertices);
+
+          const rapierObj = physicsEngine.createConvexHullCollider(
+            world, verts, bboxCenter, true, false
+          );
+
+          if (rapierObj) {
+            colliderEntry = {
+              id:          obj.id,
+              name:        obj.name || obj.id,
+              type:        obj.type || 'object',
+              boundingBox: obj.boundingBox,
+              collider:    rapierObj.collider,
+              isSoft:      false,
+              isConvexHull: true,
+              affordances,
+            };
+            chCount++;
+          }
+          // if null → fall through to AABB/OBB fallback below
+        }
+
+        // ────────────────────────────────────────────────────────────────
+        // PATH 4: AABB/OBB fallback — original logic (also catches
+        //         failed convexHull/compound and cuboid strategy)
+        // ────────────────────────────────────────────────────────────────
+        if (!colliderEntry && !isSoft) {
+          const hasRotation = !isIdentityQuat(obj.rotation ?? obj.obb?.rotation);
+          const hasExplicitOBB = !!obj.obb;
+
+          if ((hasRotation || hasExplicitOBB)) {
+            // ── OBB path ──────────────────────────────────────────────────
+            const obbDesc = hasExplicitOBB ? obj.obb : buildOBBDescriptor(obj);
+            if (obbDesc.extents[1] < 0.025) obbDesc.extents[1] = 0.025;
+
+            const proxyColliders = obj.proxyColliders ?? null;
+            const rapierObj = physicsEngine.createCompoundOBBCollider(
+              world, obbDesc, proxyColliders, true, false
+            );
+
+            const collidersArr = rapierObj.colliders ?? (rapierObj.collider ? [rapierObj.collider] : []);
+
+            colliderEntry = {
+              id:          obj.id,
+              name:        obj.name || obj.id,
+              type:        obj.type || 'object',
+              boundingBox: obj.boundingBox,
+              collider:    rapierObj.collider,
+              collidersArr,
+              isSoft:      false,
+              isOBB:       true,
+              affordances,
+            };
+            obbCount++;
+
+          } else {
+            // ── AABB path ─────────────────────────────────────────────────
+            const bbox = { min: [...min], max: [...max] };
+            if (isFloorLike && (bbox.max[1] - bbox.min[1]) < 0.05) {
+              bbox.min[1] = bbox.max[1] - 0.05;
+            }
+
+            const rapierObj = physicsEngine.createBoxCollider(world, bbox, true, false);
+
+            colliderEntry = {
+              id:          obj.id,
+              name:        obj.name || obj.id,
+              type:        obj.type || 'object',
+              boundingBox: obj.boundingBox,
+              collider:    rapierObj.collider,
+              isSoft:      false,
+              affordances,
+            };
+            aabbCount++;
+          }
         }
 
         if (colliderEntry) colliders.push(colliderEntry);
@@ -286,10 +355,18 @@ const colliderGenerator = {
       }
     }
 
+    // ── Runtime diagnostics ─────────────────────────────────────────────────
+    const totalColliderCount = colliders.reduce((sum, c) =>
+      sum + (c.collidersArr ? c.collidersArr.length : 1), 0);
+
     console.log(
-      `[ColliderGen] Generated ${colliders.length} colliders` +
-      ` (OBB: ${obbCount}, AABB: ${aabbCount}, Soft: ${softCount}, Skip: ${skipCount})`
+      `[ColliderGen] Generated ${colliders.length} objects → ${totalColliderCount} colliders` +
+      ` (ConvexHull: ${chCount}, Compound: ${compCount}, OBB: ${obbCount}, ` +
+      `AABB: ${aabbCount}, Soft: ${softCount}, Skip: ${skipCount})`
     );
+    if (totalColliderCount > 400) {
+      console.warn(`[ColliderGen] ⚠️ High collider count (${totalColliderCount}) — may impact performance`);
+    }
 
     return colliders;
   },
