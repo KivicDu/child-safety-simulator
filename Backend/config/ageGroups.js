@@ -34,7 +34,7 @@ const ageGroups = {
     
     // ANTHROPOMETRY & SEGMENTAL MASS (Dynamic COM foundation)
     anthropometry: {
-      headRadius: 0.12,
+      headRadius: 0.073, // WHO HC-for-age p50 12mo: 46cm → r=46/(2π)=0.073m
       torsoLength: 0.28,
       armLength: 0.16,
       legLength: 0.18,
@@ -94,6 +94,15 @@ const ageGroups = {
     fallDamageMultiplier: 1.5,
     hicThreshold: { safe: 200, warning: 390, critical: 600, dangerous: 800 },
     explorationMode: 'mouth_first',
+    vision: {
+      eyeLevel: { crawling: 0.20, standing: null },
+      fovHorizontal: 100,
+      fovVertical: 60,
+      maxScanDistance: 1.5,
+      peripheralVision: 0.20,
+      colorSensitivity: 0.60,
+      focusMode: 'near',
+    },
   },
 
   early_toddler: {
@@ -108,7 +117,7 @@ const ageGroups = {
     surfaceAreaFactor: 2.0,
     
     anthropometry: {
-      headRadius: 0.11,
+      headRadius: 0.077, // WHO HC-for-age p50 18mo: 48cm → r=0.077m
       torsoLength: 0.30,
       armLength: 0.22,
       legLength: 0.26,
@@ -149,11 +158,11 @@ const ageGroups = {
     motorControl: { coordinationNoise: 0.5, motorPlanningError: 0.3 },
     
     velocityProfile: {
-      walk:    { mean: 0.45, stdDev: 0.12 }, // Extremely unstable, high stdDev
+      walk:    { mean: 0.72, stdDev: 0.14 }, // Adolph et al. 2012: 12-18mo p50=0.72m/s
       crawl:   { mean: 0.17, stdDev: 0.04 },
       fall:    { mean: 1.20, stdDev: 0.30 },
     },
-    speed: 0.45,
+    speed: 0.72,
     gaitStability: 0.3, // "High Guard" arm position
     stumbleProbability: 0.20, // Toddlers fall 17 times/hour (Adolph 2012)
     
@@ -163,6 +172,15 @@ const ageGroups = {
     fallDamageMultiplier: 1.4,
     hicThreshold: { safe: 300, warning: 570, critical: 800, dangerous: 1100 },
     explorationMode: 'touch_everything',
+    vision: {
+      eyeLevel: { crawling: 0.30, standing: 0.65 },
+      fovHorizontal: 150,
+      fovVertical: 90,
+      maxScanDistance: 2.5,
+      peripheralVision: 0.35,
+      colorSensitivity: 0.80,
+      focusMode: 'near',
+    },
   },
 
   late_toddler: {
@@ -177,7 +195,7 @@ const ageGroups = {
     surfaceAreaFactor: 1.6,
     
     anthropometry: {
-      headRadius: 0.10,
+      headRadius: 0.079, // WHO HC-for-age p50 30mo: 49.5cm → r=0.079m
       torsoLength: 0.32,
       armLength: 0.26,
       legLength: 0.30,
@@ -219,7 +237,7 @@ const ageGroups = {
     
     velocityProfile: {
       walk:    { mean: 0.60, stdDev: 0.10 },
-      run:     { mean: 1.10, stdDev: 0.20 }, // Stiff running
+      run:     { mean: 1.84, stdDev: 0.28 }, // Whitall & Getchell 1995: 2-3yo p50≈1.84m/s
       fall:    { mean: 1.60, stdDev: 0.40 },
     },
     speed: 0.60,
@@ -232,6 +250,15 @@ const ageGroups = {
     fallDamageMultiplier: 1.35,
     hicThreshold: { safe: 350, warning: 620, critical: 900, dangerous: 1200 },
     explorationMode: 'touch_everything',
+    vision: {
+      eyeLevel: { crawling: 0.32, standing: 0.75 },
+      fovHorizontal: 170,
+      fovVertical: 110,
+      maxScanDistance: 3.5,
+      peripheralVision: 0.45,
+      colorSensitivity: 0.90,
+      focusMode: 'full',
+    },
   },
 
   preschool: {
@@ -246,7 +273,7 @@ const ageGroups = {
     surfaceAreaFactor: 1.4,
     
     anthropometry: {
-      headRadius: 0.09,
+      headRadius: 0.082, // WHO HC-for-age p50 4yo: 51.5cm → r=0.082m
       torsoLength: 0.34,
       armLength: 0.32,
       legLength: 0.38,
@@ -290,8 +317,8 @@ const ageGroups = {
 
     velocityProfile: {
       walk:    { mean: 0.95, stdDev: 0.15 },
-      run:     { mean: 1.50, stdDev: 0.25 },
-      sprint:  { mean: 2.20, stdDev: 0.30 },
+      run:     { mean: 2.10, stdDev: 0.30 }, // Stansfield et al. 2006: 3-5yo
+      sprint:  { mean: 2.80, stdDev: 0.35 },
       fall:    { mean: 2.20, stdDev: 0.50 },
     },
     speed: 0.95,
@@ -304,6 +331,15 @@ const ageGroups = {
     fallDamageMultiplier: 1.3,
     hicThreshold: { safe: 400, warning: 700, critical: 1000, dangerous: 1400 },
     explorationMode: 'imaginative_play',
+    vision: {
+      eyeLevel: { crawling: null, standing: 0.85 },
+      fovHorizontal: 185,
+      fovVertical: 120,
+      maxScanDistance: 5.0,
+      peripheralVision: 0.60,
+      colorSensitivity: 1.00,
+      focusMode: 'full',
+    },
   },
 
   child: {
@@ -318,7 +354,7 @@ const ageGroups = {
     surfaceAreaFactor: 1.1,
     
     anthropometry: {
-      headRadius: 0.07,
+      headRadius: 0.085, // WHO HC-for-age p50 8yo: 53.5cm → r=0.085m
       torsoLength: 0.40,
       armLength: 0.40,
       legLength: 0.50,
@@ -361,8 +397,8 @@ const ageGroups = {
 
     velocityProfile: {
       walk:    { mean: 1.24, stdDev: 0.19 },
-      run:     { mean: 2.40, stdDev: 0.40 },
-      sprint:  { mean: 3.50, stdDev: 0.50 },
+      run:     { mean: 3.00, stdDev: 0.45 }, // Normative gait analysis 6-10yo
+      sprint:  { mean: 4.20, stdDev: 0.55 },
       fall:    { mean: 3.00, stdDev: 0.60 },
     },
     speed: 1.24,
@@ -375,6 +411,15 @@ const ageGroups = {
     fallDamageMultiplier: 1.2,
     hicThreshold: { safe: 500, warning: 850, critical: 1200, dangerous: 1600 },
     explorationMode: 'active_play',
+    vision: {
+      eyeLevel: { crawling: null, standing: 1.05 },
+      fovHorizontal: 195,
+      fovVertical: 130,
+      maxScanDistance: 7.0,
+      peripheralVision: 0.80,
+      colorSensitivity: 1.00,
+      focusMode: 'full',
+    },
   }
 };
 
@@ -407,12 +452,18 @@ export function getRealisticVelocity(ageGroupId, actionType, elapsedRatio = 0) {
 export function getAgeGroup(id) { return ageGroups[id] || null; }
 export function getAllAgeGroups() { return Object.values(ageGroups); }
 export function getAgeGroupIds() { return Object.keys(ageGroups); }
-export function calculateAgeAdjustedInjury(baseInjury, ageGroupId, bodyPart) {
+// [BUG-INJ-7 FIX] calculateAgeAdjustedInjury — fix dead-code fallDamageMultiplier.
+// Old: `bodyPart === 'fall'` NEVER matched (bodyPart is always head/torso/arm/legs/wrist/shoulder).
+// New: accepts optional `isFalling` boolean (from collisionEvent.isFalling).
+//      Falls are detected via isFalling=true (set by agent.js free_fall/fall_forward states).
+//      This enables age-specific fall damage multipliers (infant 1.5×, child 1.2×)
+//      to correctly amplify injury on all fall events, not just non-existent 'fall' bodyPart.
+export function calculateAgeAdjustedInjury(baseInjury, ageGroupId, bodyPart, isFalling = false) {
   const group = getAgeGroup(ageGroupId);
   if (!group) return baseInjury;
   let adjusted = baseInjury;
-  if (bodyPart === 'head') adjusted *= group.headSensitivity;
-  if (bodyPart === 'fall') adjusted *= group.fallDamageMultiplier;
+  if (bodyPart === 'head')     adjusted *= (group.headSensitivity || 1.0);
+  if (isFalling)               adjusted *= (group.fallDamageMultiplier || 1.0);  // [BUG-INJ-7 FIX]
   return adjusted;
 }
 

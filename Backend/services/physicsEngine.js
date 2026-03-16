@@ -101,11 +101,16 @@ class PhysicsEngine {
       activeEvents = activeEvents | this.rapier.ActiveEvents.INTERSECTION_EVENTS;
     }
 
+    // [BUG-A FIX] fixed↔kinematic collision events cần KINEMATIC_FIXED opt-in
+    const activeColTypes = this.rapier.ActiveCollisionTypes.DEFAULT
+      | this.rapier.ActiveCollisionTypes.KINEMATIC_FIXED;
+
     let colliderDesc = this.rapier.ColliderDesc
       .cuboid(size[0], size[1], size[2])
       .setFriction(0.6)
       .setRestitution(0.0)
-      .setActiveEvents(activeEvents);
+      .setActiveEvents(activeEvents)
+      .setActiveCollisionTypes(isSensor ? this.rapier.ActiveCollisionTypes.DEFAULT : activeColTypes);
     if (isSensor) colliderDesc = colliderDesc.setSensor(true);
 
     const collider = world.createCollider(colliderDesc, rigidBody);
@@ -126,6 +131,10 @@ class PhysicsEngine {
       activeEvents = activeEvents | this.rapier.ActiveEvents.INTERSECTION_EVENTS;
     }
 
+    // [BUG-A FIX] fixed↔kinematic collision events cần KINEMATIC_FIXED opt-in
+    const _obbActiveColTypes = this.rapier.ActiveCollisionTypes.DEFAULT
+      | this.rapier.ActiveCollisionTypes.KINEMATIC_FIXED;
+
     const colliders = [];
 
     if (proxyColliders && proxyColliders.length > 0) {
@@ -134,7 +143,8 @@ class PhysicsEngine {
           .cuboid(proxy.extents[0], proxy.extents[1], proxy.extents[2])
           .setFriction(0.6)
           .setRestitution(0.0)
-          .setActiveEvents(activeEvents);
+          .setActiveEvents(activeEvents)
+          .setActiveCollisionTypes(isSensor ? this.rapier.ActiveCollisionTypes.DEFAULT : _obbActiveColTypes);
 
         if (isSensor) colliderDesc = colliderDesc.setSensor(true);
 
@@ -152,7 +162,8 @@ class PhysicsEngine {
         .cuboid(obbData.extents[0], obbData.extents[1], obbData.extents[2])
         .setFriction(0.6)
         .setRestitution(0.0)
-        .setActiveEvents(activeEvents);
+        .setActiveEvents(activeEvents)
+        .setActiveCollisionTypes(isSensor ? this.rapier.ActiveCollisionTypes.DEFAULT : _obbActiveColTypes);
 
       if (isSensor) colliderDesc = colliderDesc.setSensor(true);
 
@@ -303,10 +314,14 @@ class PhysicsEngine {
       controller.computeColliderMovement(collider, desiredMove);
       const corrected = controller.computedMovement();
 
+      // [PERF-FIX-5] MoveDebug log đã disabled.
+      // if (Math.random() < 0.05) {
+      //   const pos = rigidBody.translation();
+      //   console.log(`[MoveDebug] ...`);
+      // }
+
+      // pos phải được khai báo ở đây (độc lập với MoveDebug block ở trên)
       const pos = rigidBody.translation();
-      if (Math.random() < 0.05) {
-        console.log(`[MoveDebug] pos: ${pos.x.toFixed(3)}, ${pos.y.toFixed(3)}, ${pos.z.toFixed(3)} | desired: ${desiredMove.x.toFixed(3)}, ${desiredMove.y.toFixed(3)}, ${desiredMove.z.toFixed(3)} | corrected: ${corrected.x.toFixed(3)}, ${corrected.y.toFixed(3)}, ${corrected.z.toFixed(3)}`);
-      }
 
       const newPos = {
         x: pos.x + corrected.x,
@@ -364,6 +379,7 @@ class PhysicsEngine {
     let contactData = null;
     let maxDepth    = -Infinity;
 
+    // Method 1: contactPair — works for dynamic/dynamic and some kinematic/fixed pairs
     try {
       world.contactPair(collider1, collider2, (manifold) => {
         const numContacts = manifold.numContacts();
@@ -393,8 +409,28 @@ class PhysicsEngine {
       });
     } catch (_) {}
 
-    if (!contactData) {
-      try {
+    if (contactData) return contactData;
+
+    // Method 2: intersectColliders — works for kinematic+trimesh pairs where
+    // contactPair returns no manifold. Uses shape overlap test instead.
+    // [CONTACT-FIX] Rapier contactPair does NOT reliably generate manifolds for
+    // kinematic_position_based ↔ fixed_trimesh pairs (known Rapier limitation).
+    // intersectColliders is a broader overlap test that always works for these pairs.
+    try {
+      let hasIntersection = false;
+      world.intersectionPair(collider1, collider2, (intersecting) => {
+        hasIntersection = intersecting;
+      });
+
+      // intersectionPair didn't work — try contactsWith as alternative
+      if (!hasIntersection) {
+        world.contactsWith(collider1, (other) => {
+          if (other.handle === collider2.handle) hasIntersection = true;
+        });
+      }
+
+      if (hasIntersection) {
+        // Use geometric fallback: midpoint between collider centers
         const p1 = collider1.parent();
         const p2 = collider2.parent();
         if (p1 && p2) {
@@ -402,17 +438,37 @@ class PhysicsEngine {
           const dx = t1.x - t2.x, dy = t1.y - t2.y, dz = t1.z - t2.z;
           const len = Math.sqrt(dx * dx + dy * dy + dz * dz) || 1;
           const nx = dx / len, ny = dy / len, nz = dz / len;
-          const shift = Math.min(0.1, len * 0.2);
-          contactData = {
+          const shift = Math.min(0.15, len * 0.3);
+          return {
             position: [t2.x + nx * shift, t2.y + ny * shift, t2.z + nz * shift],
             normal: [nx, ny, nz],
-            depth: 0,
+            depth: 0.01,
             contactCount: 1,
-            source: 'geometric',
+            source: 'intersection',
           };
         }
-      } catch (_) {}
-    }
+      }
+    } catch (_) {}
+
+    // Method 3: Pure geometric fallback using parent body translations
+    try {
+      const p1 = collider1.parent();
+      const p2 = collider2.parent();
+      if (p1 && p2) {
+        const t1 = p1.translation(), t2 = p2.translation();
+        const dx = t1.x - t2.x, dy = t1.y - t2.y, dz = t1.z - t2.z;
+        const len = Math.sqrt(dx * dx + dy * dy + dz * dz) || 1;
+        const nx = dx / len, ny = dy / len, nz = dz / len;
+        const shift = Math.min(0.1, len * 0.2);
+        contactData = {
+          position: [t2.x + nx * shift, t2.y + ny * shift, t2.z + nz * shift],
+          normal: [nx, ny, nz],
+          depth: 0,
+          contactCount: 1,
+          source: 'geometric',
+        };
+      }
+    } catch (_) {}
 
     return contactData;
   }
@@ -480,22 +536,23 @@ class PhysicsEngine {
     if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) return floorFallback;
 
     try {
-      // [FIX P1] Origin = exact y, no hidden offset.
-      // Old code used y + 0.3 → hitY = (y+0.3) - toi → systematic error.
-      const origin    = { x, y, z };
-      const direction = { x: 0, y: -1, z: 0 };
-      const ray  = new this.rapier.Ray(origin, direction);
+      if (!world || isNaN(x) || isNaN(y) || isNaN(z)) return floorFallback;
 
-      const excludeKinematic = 2;
-      const hit  = world.castRay(ray, maxDistance, true, undefined, excludeKinematic, undefined, agentBodyToIgnore, undefined);
+      const ray = new this.rapier.Ray({ x, y, z }, { x: 0, y: -1, z: 0 });
+      
+      // [FIX] rapier3d-compat@0.19.3 uses flat argument signature for filtering:
+      // castRay(ray, maxToi, solid, filterFlags, filterGroups, excludeCollider, excludeRigidBody)
+      // Using 0x2 (EXCLUDE_KINEMATIC) ensures we ignore all agents (which are kinematic).
+      const hit = world.castRay(ray, maxDistance, true, 2);
 
-      const t = hit ? (hit.toi !== undefined ? hit.toi : hit.timeOfImpact) : null;
-      if (t !== null && t !== undefined) {
-        // hitY = origin.y + direction.y * t = y - t  (since direction.y = -1)
+      if (hit) {
+        const t = hit.toi ?? hit.timeOfImpact ?? 0;
         const hitY = y - t;
-        return hitY;
+        return Math.max(hitY, floorFallback);
       }
-    } catch (_) {}
+    } catch (err) {
+      console.warn(`[PhysicsEngine] getFloorHeightAt error: ${err.message}`);
+    }
     return floorFallback;
   }
 
@@ -614,7 +671,247 @@ class PhysicsEngine {
     ];
   }
 
-  // ── ConvexHull Collider for mesh-accurate collision ────────────────────
+  // ── Trimesh Collider — mesh-accurate static collision ─────────────────
+  /**
+   * Creates a static trimesh (triangle mesh) collider that exactly matches the
+   * original 3D mesh geometry — no convex approximation, no phantom walls.
+   *
+   * WHY TRIMESH INSTEAD OF CONVEX HULL:
+   *   Convex hull wraps a concave object (chair, table) with an inflated shell,
+   *   creating invisible walls in open spaces (e.g. the gap under a table).
+   *   Trimesh uses the exact triangles, so collision matches the visual mesh 1:1.
+   *   Trade-off: trimesh is ~2× slower per query than convex hull, but for
+   *   a typical indoor scene with <200 objects this is negligible.
+   *
+   * IMPORTANT: Rapier trimesh is ONLY valid for fixed/static bodies.
+   *   Dynamic objects must use convex hull or compound convex.
+   *
+   * @param {object}        world
+   * @param {number[]|Float32Array} vertices - flat [x0,y0,z0, x1,y1,z1, ...] in world space
+   * @param {number[]|Uint32Array}  indices  - flat [i0,i1,i2, ...] triangle indices
+   * @param {number[]}      center           - [cx,cy,cz] rigid body world position
+   * @param {boolean}       isSensor
+   * @returns {{ body, collider } | null}
+   */
+  createTrimeshCollider(world, vertices, indices, center, isSensor = false) {
+    if (!vertices || vertices.length < 9)  return null;  // need ≥ 3 vertices
+    if (!indices  || indices.length  < 3)  return null;  // need ≥ 1 triangle
+
+    const bodyDesc = this.rapier.RigidBodyDesc.fixed()
+      .setTranslation(center[0], center[1], center[2]);
+    const body = world.createRigidBody(bodyDesc);
+
+    // Convert to typed arrays (Rapier requires Float32Array / Uint32Array)
+    const rawVerts   = vertices instanceof Float32Array ? vertices : new Float32Array(vertices);
+    const rawIndices = indices  instanceof Uint32Array  ? indices  : new Uint32Array(indices);
+
+    // Offset vertices to body-local space (body origin = center)
+    const localVerts = new Float32Array(rawVerts.length);
+    for (let i = 0; i < rawVerts.length; i += 3) {
+      localVerts[i]     = rawVerts[i]     - center[0];
+      localVerts[i + 1] = rawVerts[i + 1] - center[1];
+      localVerts[i + 2] = rawVerts[i + 2] - center[2];
+    }
+
+    // ── [RC#2 FIX] Double-sided trimesh ─────────────────────────────────────
+    // Rapier trimesh is ONE-SIDED by default: castRay only hits the FRONT face
+    // (the side the face normal points toward). GLB floor meshes exported from
+    // Blender/Maya frequently have normals pointing DOWN (CW winding when viewed
+    // from above) — a downward ray from above hits the BACK face and is IGNORED.
+    //
+    // Consequence: confirmFloorSurface → 0 hits → confirmedFloorY stays at
+    // estimate, buildWalkableGrid → 0 cells, all agents fall through last-resort,
+    // KCC ground detection fails, _vertVel accumulates → agents escape UP.
+    //
+    // Fix: duplicate every triangle with reversed winding (i2, i1, i0).
+    // This makes the mesh double-sided: castRay hits it from both directions.
+    // Memory cost: 2× index array (vertices unchanged). For a 1000-tri floor
+    // mesh: extra 6000 bytes — negligible.
+    //
+    // Alternative (newer Rapier API): ColliderDesc.trimesh(verts, indices, TriMeshFlags.ORIENTED)
+    // but this flag is not available in all rapier3d-compat versions.
+    const triCount     = rawIndices.length / 3;
+    const doubleSided  = new Uint32Array(rawIndices.length * 2);
+    doubleSided.set(rawIndices, 0);                          // original winding
+    for (let t = 0; t < triCount; t++) {
+      const base   = t * 3;
+      const dest   = rawIndices.length + base;
+      doubleSided[dest]     = rawIndices[base + 2];         // reversed: i2, i1, i0
+      doubleSided[dest + 1] = rawIndices[base + 1];
+      doubleSided[dest + 2] = rawIndices[base];
+    }
+
+    let colliderDesc = this.rapier.ColliderDesc.trimesh(localVerts, doubleSided);
+    if (!colliderDesc) {
+      console.warn('[PhysicsEngine] trimesh returned null — degenerate geometry, falling back');
+      world.removeRigidBody(body);
+      return null;
+    }
+
+    let activeEvents = this.rapier.ActiveEvents.COLLISION_EVENTS;
+    if (isSensor) activeEvents |= this.rapier.ActiveEvents.INTERSECTION_EVENTS;
+
+    // [BUG-A FIX] Trimesh là fixed body, agent là kinematic body.
+    // Rapier mặc định KHÔNG fire collision events cho fixed↔kinematic pairs.
+    // Phải set KINEMATIC_FIXED trên collider để opt-in vào loại pair này.
+    // Không set → drainCollisionEvents() không bao giờ nhận được pair nào
+    // → contactCandidates = 0 mãi mãi dù agents đang va chạm thực sự.
+    const activeColTypes = this.rapier.ActiveCollisionTypes.DEFAULT
+      | this.rapier.ActiveCollisionTypes.KINEMATIC_FIXED;
+
+    colliderDesc
+      .setFriction(0.6)
+      .setRestitution(0.0)
+      .setActiveEvents(activeEvents)
+      .setActiveCollisionTypes(activeColTypes);
+    if (isSensor) colliderDesc.setSensor(true);
+
+    const collider = world.createCollider(colliderDesc, body);
+    return { body, collider };
+  }
+
+  // ── Best-fit Collider: Trimesh > ConvexHull > OBB > AABB ──────────────
+  /**
+   * Tự động chọn collider tốt nhất cho một scene object.
+   * Ưu tiên: Trimesh (mesh gốc) > ConvexHull > OBB > AABB
+   *
+   * [COLLISION-ACCURACY FIX] AABB và OBB đều là xấp xỉ — chúng tạo ra
+   * "phantom walls" trong không gian rỗng (ví dụ: gầm bàn, ghế rỗng).
+   * Trimesh dùng triangle mesh gốc → collision 1:1 với visual mesh.
+   *
+   * @param {object} world
+   * @param {object} sceneObject  - object từ sceneData.objects có .collisionMesh, .boundingBox, .obb
+   * @param {boolean} isSensor
+   * @returns {{ body, collider, collidersArr?, type: string } | null}
+   */
+  createBestFitCollider(world, sceneObject, isSensor = false) {
+    const bbox = sceneObject.boundingBox;
+
+    // ── Priority 1: Trimesh từ collisionMesh (mesh-accurate) ──────────────
+    if (sceneObject.collisionMesh?.vertices && sceneObject.collisionMesh?.indices) {
+      const { vertices, indices } = sceneObject.collisionMesh;
+      if (vertices.length >= 9 && indices.length >= 3) {
+        const center = bbox ? [
+          (bbox.min[0] + bbox.max[0]) / 2,
+          (bbox.min[1] + bbox.max[1]) / 2,
+          (bbox.min[2] + bbox.max[2]) / 2,
+        ] : [0, 0, 0];
+        const result = this.createTrimeshCollider(world, vertices, indices, center, isSensor);
+        if (result) return { ...result, collidersArr: [result.collider], type: 'trimesh' };
+      }
+    }
+
+    // ── Priority 2: ConvexHull từ mesh vertices (xấp xỉ lồi) ─────────────
+    if (sceneObject.collisionMesh?.vertices && sceneObject.collisionMesh.vertices.length >= 12) {
+      const center = bbox ? [
+        (bbox.min[0] + bbox.max[0]) / 2,
+        (bbox.min[1] + bbox.max[1]) / 2,
+        (bbox.min[2] + bbox.max[2]) / 2,
+      ] : [0, 0, 0];
+      const result = this.createConvexHullCollider(world, sceneObject.collisionMesh.vertices, center, true, isSensor);
+      if (result) return { ...result, collidersArr: [result.collider], type: 'convex_hull' };
+    }
+
+    // ── Priority 3: OBB (Oriented Bounding Box) nếu có rotation data ─────
+    if (sceneObject.obb?.center && sceneObject.obb?.extents) {
+      const result = this.createCompoundOBBCollider(
+        world, sceneObject.obb, sceneObject.proxyColliders || [], true, isSensor
+      );
+      if (result) return { ...result, collidersArr: result.colliders || [result.collider], type: 'obb' };
+    }
+
+    // ── Priority 4: AABB fallback (bounding box đơn giản) ─────────────────
+    if (bbox) {
+      const result = this.createBoxCollider(world, bbox, true, isSensor);
+      if (result) return { ...result, collidersArr: [result.collider], type: 'aabb' };
+    }
+
+    return null;
+  }
+  /**
+   * After scene colliders are created, fire a 3×3 grid of downward raycasts
+   * across the room center to find the EXACT top surface of the physics floor.
+   *
+   * Why needed:
+   *   floor.height from glbParser = bounding box yMax. But the trimesh/convex
+   *   collider surface may be a few mm different due to mesh curvature or
+   *   floating-point. Using the raycast-confirmed Y for spawn guarantees the
+   *   agent's feet land on the physics surface, not slightly above/below it.
+   *
+   * @param {object} world        - Rapier world (must have floor collider already)
+   * @param {object} bb           - scene bounding box {min, max}
+   * @param {number} estimatedFloorY - initial estimate (from floor.height)
+   * @returns {number} confirmedFloorY
+   */
+  confirmFloorSurface(world, bb, estimatedFloorY) {
+    if (!world || !bb) return estimatedFloorY;
+
+    // [FLOOR-CONFIRM FIX v2] castFromY tăng lên +5.0 thay vì +3.0.
+    // Với scene có furniture cao (giường, tủ đứng), ray từ +3.0 có thể bắt đầu
+    // ngay trong furniture → hit surface của furniture thay vì floor.
+    const castFromY = estimatedFloorY + 5.0;
+    const maxDist   = 7.0;
+    const tolerance = 0.40;
+
+    // 3×3 grid centred on room + 4 corners (tổng 13 điểm)
+    // [BUG-D FIX] Center phòng thường bị furniture che (giường ở giữa phòng ngủ)
+    // → toàn bộ 9 grid points miss floor → confirmFloorSurface giữ estimate.
+    // Fix: thêm 4 corner points ở 10% trong từ mép → ít bị furniture che hơn.
+    const cx = (bb.min[0] + bb.max[0]) / 2;
+    const cz = (bb.min[2] + bb.max[2]) / 2;
+    const sw = (bb.max[0] - bb.min[0]) * 0.25;
+    const sd = (bb.max[2] - bb.min[2]) * 0.25;
+    const mx = (bb.max[0] - bb.min[0]) * 0.10;  // 10% margin from edge
+    const mz = (bb.max[2] - bb.min[2]) * 0.10;
+
+    const samplePoints = [];
+    // 3×3 center grid
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dz = -1; dz <= 1; dz++) {
+        samplePoints.push([cx + dx * sw, cz + dz * sd]);
+      }
+    }
+    // 4 corners (near edges, less likely blocked by furniture)
+    samplePoints.push([bb.min[0] + mx, bb.min[2] + mz]);
+    samplePoints.push([bb.max[0] - mx, bb.min[2] + mz]);
+    samplePoints.push([bb.min[0] + mx, bb.max[2] - mz]);
+    samplePoints.push([bb.max[0] - mx, bb.max[2] - mz]);
+
+    const sampleHits = [];
+    for (const [x, z] of samplePoints) {
+      try {
+        const ray = new this.rapier.Ray({ x, y: castFromY, z }, { x: 0, y: -1, z: 0 });
+        const hit = world.castRay(ray, maxDist, true, 2);
+        if (hit) {
+          const hitY = castFromY - (hit.toi ?? 0);
+          if (Math.abs(hitY - estimatedFloorY) < tolerance) {
+            sampleHits.push(hitY);
+          }
+        }
+      } catch (_) {}
+    }
+
+    if (sampleHits.length === 0) {
+      console.warn(`[PhysicsEngine] confirmFloorSurface: no hits within ±${tolerance}m of estimate ${estimatedFloorY.toFixed(4)} — keeping estimate`);
+      return estimatedFloorY;
+    }
+
+    // Cluster: find median group within 3cm of each other
+    sampleHits.sort((a, b) => a - b);
+    let bestCluster = [sampleHits[0]];
+    let bestSize    = 1;
+    for (let i = 0; i < sampleHits.length; i++) {
+      const cluster = sampleHits.filter(h => Math.abs(h - sampleHits[i]) < 0.03);
+      if (cluster.length > bestSize) {
+        bestCluster = cluster;
+        bestSize    = cluster.length;
+      }
+    }
+
+    const confirmedY = bestCluster.reduce((s, v) => s + v, 0) / bestCluster.length;
+    console.log(`[PhysicsEngine] ✅ Floor surface confirmed by raycast: Y=${confirmedY.toFixed(4)}m (${bestSize}/${sampleHits.length} hits in cluster, estimate was ${estimatedFloorY.toFixed(4)})`);
+    return confirmedY;
+  }
   /**
    * Creates a convex hull collider from raw vertex data.
    * Returns null if Rapier cannot compute a hull (degenerate vertices).
@@ -652,11 +949,16 @@ class PhysicsEngine {
     let activeEvents = this.rapier.ActiveEvents.COLLISION_EVENTS;
     if (isSensor) activeEvents |= this.rapier.ActiveEvents.INTERSECTION_EVENTS;
 
+    // [BUG-A FIX] fixed↔kinematic collision events cần KINEMATIC_FIXED opt-in
+    const _chActiveColTypes = this.rapier.ActiveCollisionTypes.DEFAULT
+      | this.rapier.ActiveCollisionTypes.KINEMATIC_FIXED;
+
+    // NOTE: No setCollisionGroups — keep default groups so castRay queries hit this.
     colliderDesc
       .setFriction(0.6)
       .setRestitution(0.0)
-      .setCollisionGroups(0x00010001)
-      .setActiveEvents(activeEvents);
+      .setActiveEvents(activeEvents)
+      .setActiveCollisionTypes(isSensor ? this.rapier.ActiveCollisionTypes.DEFAULT : _chActiveColTypes);
     if (isSensor) colliderDesc.setSensor(true);
 
     const collider = world.createCollider(colliderDesc, body);
@@ -688,6 +990,10 @@ class PhysicsEngine {
     let activeEvents = this.rapier.ActiveEvents.COLLISION_EVENTS;
     if (isSensor) activeEvents |= this.rapier.ActiveEvents.INTERSECTION_EVENTS;
 
+    // [BUG-A FIX] fixed↔kinematic collision events cần KINEMATIC_FIXED opt-in
+    const _dcActiveColTypes = this.rapier.ActiveCollisionTypes.DEFAULT
+      | this.rapier.ActiveCollisionTypes.KINEMATIC_FIXED;
+
     const colliders = [];
 
     for (const primVerts of primitiveVertices) {
@@ -702,11 +1008,12 @@ class PhysicsEngine {
       // Offset the collider to local space
       desc.setTranslation(-bodyCenter[0], -bodyCenter[1], -bodyCenter[2]);
 
+      // NOTE: No setCollisionGroups — keep default groups so castRay queries hit this.
       desc
         .setFriction(0.6)
         .setRestitution(0.0)
-        .setCollisionGroups(0x00010001)
-        .setActiveEvents(activeEvents);
+        .setActiveEvents(activeEvents)
+        .setActiveCollisionTypes(isSensor ? this.rapier.ActiveCollisionTypes.DEFAULT : _dcActiveColTypes);
       if (isSensor) desc.setSensor(true);
 
       colliders.push(world.createCollider(desc, body));

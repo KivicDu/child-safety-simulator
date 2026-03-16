@@ -221,18 +221,82 @@ function farthestPointSample(verts, maxCount = 256) {
 
 // ── Collider strategy inference ─────────────────────────────────────────────
 // Determines the best collision shape type for each scene object.
+// ── Collision strategy decision table ────────────────────────────────────────
+//
+// Strategy hierarchy (from most to least accurate):
+//
+//   'compound'   — Multiple convex hulls, one per mesh primitive.
+//                  Best for objects with INTERNAL VOIDS (table with 4 legs, chair,
+//                  open cabinet) where a single hull would enclose empty space and
+//                  create invisible walls the agent cannot walk through.
+//                  Cost: N Rapier colliders per object. Use only when needed.
+//
+//   'convexHull' — Single convex hull wrapping ALL primitives merged together.
+//                  Best for solid objects with no significant concavities
+//                  (lamp base, rounded vase, ball, solid door).
+//                  Overestimates for L/U-shaped geometry but cheaper than compound.
+//
+//   'cuboid'     — AABB / OBB box. No mesh data used at runtime.
+//                  Best for flat architectural surfaces (floor, wall, ceiling) and
+//                  thin geometry where hull tessellation would produce near-planar
+//                  hulls anyway. Always falls back to this if mesh data is absent.
+//
+// Key insight for child-safety simulation:
+//   Wrong collision shapes cause two classes of errors that corrupt injury data:
+//     A. Agent clips THROUGH solid furniture → no injury recorded (false negative)
+//     B. Agent blocked by phantom AABB space in empty areas (e.g. table leg gap) →
+//        navigation breaks and agent never reaches the hazard
+//   Compound strategy minimises BOTH classes for all open-frame furniture.
+//
 function inferColliderStrategy(nameLower, primitiveCount) {
-  // Planes / floors / walls / ceilings → simple cuboid
+  // ── Flat architectural surfaces → plain AABB/OBB, no mesh needed ──────────
   if (/floor|ground|plane|rug|carpet|mat($|[_\s])/.test(nameLower))     return 'cuboid';
   if (/^wall|[_\s]wall|wallpaper|ceiling|plafond|roof/.test(nameLower)) return 'cuboid';
-  // Furniture with internal voids → compound colliders (per-primitive decomposition)
-  if (/table|desk|nightstand/.test(nameLower))                          return 'compound';
-  if (/chair|stool|bench|armchair/.test(nameLower))                     return 'compound';
-  if (/shelf|bookcase|cabinet|wardrobe|dresser/.test(nameLower))        return 'compound';
-  if (/bed(?!side)|bunk|crib|cot/.test(nameLower))                     return 'compound';
-  // Many primitives hint at complex geometry
-  if (primitiveCount >= 4)                                              return 'compound';
-  // Default: single convex hull
+
+  // ── Open-frame furniture (internal voids) → compound convex hulls ─────────
+  // Tables / desks: top surface + 4 legs = 5 primitives, single hull would be
+  // a large rectangular prism blocking leg-gap space the child walks through.
+  if (/table|desk|nightstand|sideboard|dresser/.test(nameLower))         return 'compound';
+
+  // Chairs / stools: seat + back + 4 legs. Compound lets the child reach under.
+  if (/chair|stool|bench|armchair|seat|throne/.test(nameLower))          return 'compound';
+
+  // Storage with doors/shelves: many internal planes, voids matter.
+  if (/shelf|shelve|bookcase|rack|cabinet|wardrobe|cupboard/.test(nameLower)) return 'compound';
+
+  // Beds / cribs: frame + slats, child can crawl under or between bars.
+  if (/bed(?!side)|bunk|crib|cot|cradle/.test(nameLower))               return 'compound';
+
+  // Sofa / couch: base frame + seat cushion volume; arms + legs create voids.
+  // A single hull treats the entire sofa as a solid block — child can never
+  // reach under the sofa (missed choking-hazard scenario).
+  if (/sofa|couch|loveseat|ottoman/.test(nameLower))                     return 'compound';
+
+  // Stairs: each tread + riser; a hull of the whole staircase blocks the air
+  // under the staircase where small children can crawl and get stuck.
+  if (/stair|step(?!s)|tread|riser|ladder/.test(nameLower))             return 'compound';
+
+  // Radiators / heaters: fins + body; compound prevents the large bounding-box
+  // phantom blocking the zone in front of the radiator.
+  if (/radiator|heater|baseboard|convector/.test(nameLower))             return 'compound';
+
+  // ── Complex single-piece geometry → single convex hull ────────────────────
+  // Lamps: curved base and shade — a single convex hull is a reasonable
+  // approximation and avoids N separate colliders for N shade polygons.
+  if (/lamp|light|chandelier|sconce|lantern/.test(nameLower))            return 'convexHull';
+
+  // Plants / vases: organic shapes, single hull is close enough.
+  if (/plant|vase|pot|planter|flower/.test(nameLower))                   return 'convexHull';
+
+  // Doors: single flat rigid surface, hull == box == cuboid but hull is safer
+  // when the door has an inset panel that makes the AABB slightly over-sized.
+  if (/door(?!way)|gate|hatch/.test(nameLower))                          return 'convexHull';
+
+  // ── Primitive count heuristic ─────────────────────────────────────────────
+  // 4+ primitives in a single node almost always means open-frame geometry.
+  if (primitiveCount >= 4)                                               return 'compound';
+
+  // ── Default: single convex hull ───────────────────────────────────────────
   return 'convexHull';
 }
 
@@ -368,9 +432,13 @@ class GLBParser {
               }
             }
 
-            // ── MESH COLLISION: Extract & transform vertex data per primitive ──
+            // ── MESH COLLISION: Extract & transform vertex data + indices per primitive ──
+            // For trimesh (exact mesh collision), we need BOTH vertices AND indices.
+            // For convex hull fallback, we only need vertices (sampled).
             const perPrimVerts = [];
+            const perPrimMesh  = []; // { vertices: Float32Array, indices: Uint32Array } — for trimesh
             let totalVertCount = 0;
+
             for (const prim of primitives) {
               const posAttr = prim.getAttribute('POSITION');
               if (!posAttr) continue;
@@ -388,7 +456,30 @@ class GLBParser {
                 worldVerts[vi + 2] = wp[2];
               }
 
-              // Farthest-point sample each primitive to ≤256 vertices
+              // ── Extract triangle indices for trimesh ──────────────────────
+              // Rapier trimesh needs a flat Uint32Array of [i0,i1,i2, i0,i1,i2, ...]
+              // Primitives without indices → implicit sequential triangles.
+              let worldIndices = null;
+              const indAttr = prim.getIndices();
+              if (indAttr) {
+                const rawIdx = indAttr.getArray();
+                // Re-map indices relative to this primitive (vertices start at 0)
+                // The getArray() returns 0-based indices into the POSITION array already.
+                worldIndices = new Uint32Array(rawIdx.length);
+                for (let ii = 0; ii < rawIdx.length; ii++) worldIndices[ii] = rawIdx[ii];
+              } else {
+                // Non-indexed: every 3 vertices form a triangle
+                const triCount = (rawArr.length / 3);
+                worldIndices = new Uint32Array(triCount);
+                for (let ii = 0; ii < triCount; ii++) worldIndices[ii] = ii;
+              }
+
+              // Store exact mesh for trimesh collision (no vertex reduction needed)
+              if (worldVerts.length >= 9 && worldIndices.length >= 3) {
+                perPrimMesh.push({ vertices: worldVerts, indices: worldIndices });
+              }
+
+              // Farthest-point sample each primitive to ≤256 vertices (for hull fallback)
               const sampled = farthestPointSample(worldVerts, 256);
               perPrimVerts.push(Array.from(sampled));
               totalVertCount += sampled.length / 3;
@@ -397,24 +488,52 @@ class GLBParser {
             const nameLower = (nodeName || `Object_${objects.length}`).toLowerCase();
             const colliderStrategy = inferColliderStrategy(nameLower, primitives.length);
 
-            // Decide: merge primitives or keep separate
+            // ── Build merged trimesh across all primitives ─────────────────
+            // For trimesh collision we merge all primitives into a single indexed mesh.
+            // This allows Rapier to use exact mesh topology (no convex approximation).
+            let collisionMesh = null;
+            if (perPrimMesh.length > 0) {
+              let totalVerts = 0;
+              let totalTris  = 0;
+              for (const pm of perPrimMesh) {
+                totalVerts += pm.vertices.length / 3;
+                totalTris  += pm.indices.length / 3;
+              }
+              // Cap to avoid memory/perf issues on extremely dense meshes
+              const MAX_TRIMESH_VERTS = 4000;
+              const MAX_TRIMESH_TRIS  = 8000;
+              if (totalVerts <= MAX_TRIMESH_VERTS && totalTris <= MAX_TRIMESH_TRIS) {
+                const mergedVerts   = new Float32Array(totalVerts * 3);
+                const mergedIndices = new Uint32Array(totalTris  * 3);
+                let vOffset = 0, iOffset = 0, baseVert = 0;
+                for (const pm of perPrimMesh) {
+                  mergedVerts.set(pm.vertices, vOffset);
+                  for (let i = 0; i < pm.indices.length; i++) {
+                    mergedIndices[iOffset + i] = pm.indices[i] + baseVert;
+                  }
+                  baseVert  += pm.vertices.length / 3;
+                  vOffset   += pm.vertices.length;
+                  iOffset   += pm.indices.length;
+                }
+                collisionMesh = {
+                  vertices: Array.from(mergedVerts),
+                  indices:  Array.from(mergedIndices),
+                };
+              }
+            }
+
+            // ── Convex hull / compound vertex sets (fallback if trimesh unavailable) ──
             let collisionVertices = null;
             let collisionPrimitives = null;
             if (perPrimVerts.length > 0) {
               if (colliderStrategy === 'compound' && perPrimVerts.length > 1) {
-                // Compound: keep per-primitive for decomposed colliders
                 collisionPrimitives = perPrimVerts;
               } else if (totalVertCount <= 512 / 3 * 3 || perPrimVerts.length === 1) {
-                // Merge into single vertex set
                 const merged = [];
                 for (const pv of perPrimVerts) merged.push(...pv);
-                // Re-sample merged set if > 256 verts
                 const mergedArr = new Float32Array(merged);
-                collisionVertices = Array.from(
-                  farthestPointSample(mergedArr, 256)
-                );
+                collisionVertices = Array.from(farthestPointSample(mergedArr, 256));
               } else {
-                // Too many verts to merge → keep per-primitive
                 collisionPrimitives = perPrimVerts;
               }
             }
@@ -422,19 +541,19 @@ class GLBParser {
             const newObject = {
               id: `obj_${objects.length}`,
               name: nodeName || `Object_${objects.length}`,
-              // Backwards compatibility transforms for standard system
               transform: {
                 position: [worldMatrix[12], worldMatrix[13], worldMatrix[14]],
               },
-              boundingBox: worldBbox, // Kept for scaleNormalizer and legacy compatibility
-              obb: obbData,           // New structured OBB!
-              proxyColliders: [],     // Array of attached proxies
+              boundingBox: worldBbox,
+              obb: obbData,
+              proxyColliders: [],
               primitiveCount: primitives.length,
               material: materialData,
-              // Mesh collision fields (new)
+              // Mesh collision fields
               colliderStrategy,
-              ...(collisionVertices  ? { collisionVertices }  : {}),
-              ...(collisionPrimitives ? { collisionPrimitives } : {}),
+              ...(collisionMesh       ? { collisionMesh }       : {}),  // exact trimesh (preferred)
+              ...(collisionVertices   ? { collisionVertices }   : {}),  // convex hull fallback
+              ...(collisionPrimitives ? { collisionPrimitives } : {}),  // compound hull fallback
             };
             
             objects.push(newObject);

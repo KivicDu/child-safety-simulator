@@ -1,18 +1,8 @@
-// agent.js — v5.1 (BUG-M FIX RELEASE)
-// Changes vs v5:
-//  [BUG-M1 FIX] Torque values raised in ageGroups.js (see ageGroups.js changelog)
-//  [BUG-M3 FIX] targetPosition cleared in pickNextBehavior before each new non-stationary
-//               action to prevent stale target from previous action bleeding into next.
-//  [BUG-M5 FIX] handleCollision: severity threshold 15→25 to reduce spurious hurt chains.
-//               crying_sit duration 3.0s→1.5s; recoveryTimer trimmed proportionally.
-//  [BUG-M6 FIX] stuckCounter threshold 90→45 frames (1.5s→0.75s escape time).
-//  [BUG-M7 FIX] setRandomTarget: minDist floored at 1.5m via Math.max(1.5, bias*2.0).
-//  [BUG-M9 FIX] KCC offset unified to 0.04m for all age groups (was 0.15/0.10/0.05).
-
 import { getAgeGroup } from '../config/ageGroups.js';
 import physicsEngine from './physicsEngine.js';
 import { visionSystem } from './visionSystem.js';
 import { riskAnalytics } from './riskAnalytics.js';
+import { topplePredictor } from './topplepredictor.js';
 
 export const WADING_SCALE_FACTOR = 0.6;
 const MIN_WADING_SPEED  = 0.05;
@@ -310,6 +300,10 @@ class Agent {
     this.fallState     = null;
     this.stunTimer     = 0;
     this.pendingBounce = null;
+
+    // Integrated vertical velocity (m/s). Negative = downward.
+    // Reset to 0 when KCC reports grounded; accumulated by gravity (-9.81*dt) when airborne.
+    this._vertVel = 0.0;
 
     this.perceptionQueue = [];
     this.reactionTimer   = 0;
@@ -673,7 +667,21 @@ class Agent {
       const supportRadius = capsuleRadius * 1.5;
       const comDistX = dynamicCOM[0] - pos[0];
       const comDistZ = dynamicCOM[2] - pos[2];
-      const comDist = Math.hypot(comDistX, comDistZ);
+      const comDistXZ = Math.hypot(comDistX, comDistZ);
+
+      // [GEOM-3 FIX] Include vertical COM elevation in stability calculation.
+      // When comY rises above neutral (55% of height), the inverted-pendulum effect
+      // amplifies the XZ instability. The correction factor uses the principle that
+      // a taller pendulum needs less horizontal displacement to become unstable:
+      //   effectiveDist = comDistXZ × sqrt(1 + (comElevation / supportRadius)²)
+      // where comElevation = max(0, comY - neutralComY) (only elevations count).
+      const neutralComY   = pos[1] + (agData.height || 0.8) * 0.55;
+      const comY          = dynamicCOM[1];
+      const comElevation  = Math.max(0, comY - neutralComY);
+      // Pendulum scaling: sqrt(1 + (Δh/r)²) — small-angle approximation
+      const pendulumScale = Math.sqrt(1 + Math.pow(comElevation / Math.max(supportRadius, 0.01), 2));
+      const comDist       = comDistXZ * pendulumScale;
+
       let marginOfStability = supportRadius - comDist;
       const bCtrl = agData.balanceControl || { ankleGain: 0.5, hipGain: 0.5, recoveryStepLatency: 0.5, balanceNoise: 0.5 };
       const noise = (Math.random() * 2 - 1) * bCtrl.balanceNoise * 0.1;
@@ -733,7 +741,18 @@ class Agent {
     if (this.participatingInRareEvent && this.rareEventChain) { this.executeRareEventStep(deltaTime, colliders, bounds); return; }
 
     if (this.idleCooldown > 0) {
+      const prevCooldown = this.idleCooldown;
       this.idleCooldown = Math.max(0, this.idleCooldown - deltaTime);
+      // [BUG-3 FIX] Reset lastMovePos ngay khi idleCooldown về 0.
+      // Old: lastMovePos không được cập nhật trong suốt idle period → khi agent bắt
+      //      đầu movement episode mới, stuckDist = posNow − lastMovePos ≈ 0 trong khi
+      //      intendedDist ≈ 0.014m → isEffectivelyStuck = true ngay frame đầu tiên
+      //      → stuckCounter bắt đầu từ 1, khuếch đại cùng Bug #2.
+      // Fix: snapshot lastMovePos tại thời điểm transition idle→moving.
+      if (prevCooldown > 0 && this.idleCooldown === 0 && this.body) {
+        const pos = this.body.translation();
+        this.lastMovePos = [pos.x, pos.y, pos.z];
+      }
       this.state = 'IDLE';
       return;
     }
@@ -841,6 +860,21 @@ class Agent {
     this.behaviorTimer = 0;
   }
 
+
+  /**
+   * Compute the distance from AABB center to its surface in direction (nx, nz).
+   * Formula: projDist = |nx|*hx + |nz|*hz  (exact for axis-aligned box in XZ plane)
+   * This replaces max(hx,hz) which over-estimates approach distance for rectangular objects.
+   * @param {number} hx - half-extent in X
+   * @param {number} hz - half-extent in Z
+   * @param {number} nx - approach unit vector X (agent_to_center normalized)
+   * @param {number} nz - approach unit vector Z
+   * @returns {number} edge distance in metres
+   */
+  _aabbSurfaceDist(hx, hz, nx, nz) {
+    return Math.abs(nx) * hx + Math.abs(nz) * hz;
+  }
+
   _resolveActionTarget(action, parentBehavior, bounds) {
     const targetId = action.targetObjectId || parentBehavior?.targetObjectId;
     const targetType = action.target || parentBehavior?.targetTypes?.[0];
@@ -863,13 +897,19 @@ class Agent {
         const toCurLen = Math.hypot(toCurX, toCurZ) || 1;
         const hx = (obj.boundingBox.max[0] - obj.boundingBox.min[0]) / 2;
         const hz = (obj.boundingBox.max[2] - obj.boundingBox.min[2]) / 2;
-        const edgeRadius = Math.max(hx, hz);
-        const capsR = this.anthropometry ? (this.anthropometry.walkStride || 0.3) : 0.3;
-        const approachOffset = edgeRadius + capsR * 2.5;
+        // [GEOM-1 FIX] Project approach direction onto AABB surface (exact surface distance)
+        // Old: max(hx,hz) over-estimated distance by up to 2× for thin rectangular objects
+        // New: |nx|*hx + |nz|*hz = exact distance from center to surface in approach direction
+        const nx = toCurX / toCurLen;
+        const nz = toCurZ / toCurLen;
+        const edgeSurfaceDist = this._aabbSurfaceDist(hx, hz, nx, nz);
+        const capsR = this.anthropometry ? (this.anthropometry.capsuleRadius || 0.22) : 0.22;
+        // Stand 1.5× capsule radius away from actual object surface
+        const approachOffset = edgeSurfaceDist + capsR * 1.5;
         this.targetPosition = [
-          cx + (toCurX / toCurLen) * approachOffset,
+          cx + nx * approachOffset,
           obj.boundingBox.min[1],
-          cz + (toCurZ / toCurLen) * approachOffset,
+          cz + nz * approachOffset,
         ];
         return;
       }
@@ -921,13 +961,16 @@ class Agent {
         const toCurLen = Math.hypot(toCurX, toCurZ) || 1;
         const hx = (bestObj.boundingBox.max[0] - bestObj.boundingBox.min[0]) / 2;
         const hz = (bestObj.boundingBox.max[2] - bestObj.boundingBox.min[2]) / 2;
-        const edgeRadius = Math.max(hx, hz);
-        const capsR = this.anthropometry ? (this.anthropometry.walkStride || 0.3) : 0.3;
-        const approachOffset = edgeRadius + capsR * 2.5;
+        // [GEOM-1 FIX] AABB surface projection — exact edge distance in approach direction
+        const nx = toCurX / toCurLen;
+        const nz = toCurZ / toCurLen;
+        const edgeSurfaceDist = this._aabbSurfaceDist(hx, hz, nx, nz);
+        const capsR = this.anthropometry ? (this.anthropometry.capsuleRadius || 0.22) : 0.22;
+        const approachOffset = edgeSurfaceDist + capsR * 1.5;
         this.targetPosition = [
-          cx + (toCurX / toCurLen) * approachOffset,
+          cx + nx * approachOffset,
           bestObj.boundingBox.min[1],
-          cz + (toCurZ / toCurLen) * approachOffset,
+          cz + nz * approachOffset,
         ];
         return;
       }
@@ -954,16 +997,18 @@ class Agent {
             const toCurX = cur2[0] - cx;
             const toCurZ = cur2[2] - cz;
             const toCurLen = Math.hypot(toCurX, toCurZ) || 1;
-            const edgeR = Math.max(
-              (obj.boundingBox.max[0] - obj.boundingBox.min[0]) / 2,
-              (obj.boundingBox.max[2] - obj.boundingBox.min[2]) / 2
-            );
-            const capsR = this.anthropometry?.walkStride ?? 0.3;
-            const offset = edgeR + capsR * 2.0;
+            const hxW = (obj.boundingBox.max[0] - obj.boundingBox.min[0]) / 2;
+            const hzW = (obj.boundingBox.max[2] - obj.boundingBox.min[2]) / 2;
+            // [GEOM-1 FIX] AABB surface projection
+            const nxW = toCurX / toCurLen;
+            const nzW = toCurZ / toCurLen;
+            const edgeR = this._aabbSurfaceDist(hxW, hzW, nxW, nzW);
+            const capsR = this.anthropometry?.capsuleRadius ?? 0.22;
+            const offset = edgeR + capsR * 1.5;
             this.targetPosition = [
-              cx + (toCurX / toCurLen) * offset,
+              cx + nxW * offset,
               obj.boundingBox.min[1],
-              cz + (toCurZ / toCurLen) * offset,
+              cz + nzW * offset,
             ];
           } else {
             this.setRandomTarget(bounds);
@@ -1028,24 +1073,55 @@ class Agent {
       }
 
       case 'free_fall': {
+        // Physics-accurate fall via KCC + _vertVel.
+        // Old: normalized-time lerp with setSafeTranslation bypassed KCC → agent clipped
+        // through thin floors. Landing was timer-based, not physics-based.
+        // New: KCC owns vertical movement. Landing detected by isGrounded() — works on
+        // slopes and furniture surfaces without any hardcoded landing Y.
         this.state = 'FALLING';
         if (!this.body) break;
         const pos = this.body.translation();
+
         if (!this.fallState) {
           const currentFeetY = pos.y - this._agentHalfH;
-          const h = Math.max(0.1, currentFeetY - this.spawnY);
-          const landingY = this.spawnY + this._agentHalfH;
-          this.fallState = { startY: pos.y, targetY: landingY, fallHeight: h,
-            velocity: Math.sqrt(2*9.81*h), elapsed: 0, duration: Math.sqrt(2*h/9.81) };
+          const h = Math.max(0.05, currentFeetY - (this._knownFloorY ?? this.spawnY));
+          const landingY = (this._knownFloorY ?? this.spawnY) + this._agentHalfH;
+          // Prime _vertVel with energy-conserving initial speed: v0 = -sqrt(2*g*h)
+          // If already falling faster (e.g. tumbled off stairs), keep the larger magnitude.
+          const v0 = -Math.sqrt(2 * 9.81 * h);
+          this._vertVel = Math.min(this._vertVel, v0);
+          this.fallState = { startY: pos.y, targetY: landingY, fallHeight: h, elapsed: 0 };
         }
+
         this.fallState.elapsed += deltaTime;
-        const t2       = Math.min(this.fallState.elapsed / this.fallState.duration, 1.0);
-        const newY     = this.fallState.startY - this.fallState.fallHeight * t2 * t2;
-        this.setSafeTranslation({ x: pos.x, y: Math.max(this.fallState.targetY, newY), z: pos.z });
-        if (t2 >= 1.0) {
-          this.fallState = null; this.state = 'IDLE';
-          this.recoveryTimer = RECOVERY_DURATION;
-          this._setEmotion('crying');
+        this._vertVel = Math.max(this._vertVel - 9.81 * deltaTime, -20.0);
+
+        const _kccColl = this.collider ?? this.colliders?.legs ?? this.colliders?.torso ?? null;
+        if (_kccColl && this.controller) {
+          physicsEngine.moveAgentWithController(
+            this.world, this.controller, this.body, _kccColl,
+            { x: 0, y: this._vertVel * deltaTime, z: 0 },
+            deltaTime
+          );
+          if (physicsEngine.isGrounded(this.controller)) {
+            this._vertVel = 0.0;
+            this.fallState = null;
+            this.state = 'IDLE';
+            this.recoveryTimer = RECOVERY_DURATION;
+            this._setEmotion('crying');
+          }
+        } else {
+          // No KCC — legacy direct translation fallback
+          const dur = Math.max(0.01, Math.sqrt(2 * this.fallState.fallHeight / 9.81));
+          const t2  = Math.min(this.fallState.elapsed / dur, 1.0);
+          const newY = this.fallState.startY - this.fallState.fallHeight * t2 * t2;
+          this.setSafeTranslation({ x: pos.x, y: Math.max(this.fallState.targetY, newY), z: pos.z });
+          if (t2 >= 1.0) {
+            this._vertVel = 0.0;
+            this.fallState = null; this.state = 'IDLE';
+            this.recoveryTimer = RECOVERY_DURATION;
+            this._setEmotion('crying');
+          }
         }
         break;
       }
@@ -1103,6 +1179,7 @@ class Agent {
         // [BUG FIX] Check if we're actually near an object before pretending to pull
         const curPos = this.getPosition();
         let validInteractTarget = false;
+        let interactTargetObj = null;
         if (action.targetObjectId && colliders) {
           const tObj = colliders.find(c => c.id === action.targetObjectId);
           if (tObj && tObj.boundingBox) {
@@ -1112,6 +1189,7 @@ class Agent {
             const hz = (tObj.boundingBox.max[2] - tObj.boundingBox.min[2]) / 2;
             if (Math.hypot(cx - curPos[0], cz - curPos[2]) < Math.max(hx,hz) + 0.8) {
               validInteractTarget = true;
+              interactTargetObj = tObj;
             }
           }
         }
@@ -1125,6 +1203,7 @@ class Agent {
             const hz = (obj.boundingBox.max[2] - obj.boundingBox.min[2]) / 2;
             if (Math.hypot(cx - curPos[0], cz - curPos[2]) < Math.max(hx,hz) + 0.8) {
               validInteractTarget = true;
+              interactTargetObj = obj;
               break;
             }
           }
@@ -1136,6 +1215,42 @@ class Agent {
             this.currentBehavior.completed = true;
           }
           break; // Abort pulling the air
+        }
+
+        // ── [TOPPLE PREDICTION] ──────────────────────────────────────────────
+        // Khi agent bắt đầu push/pull, đánh giá ngay xem vật có thể đổ không.
+        // Chỉ đánh giá một lần (khi behaviorTimer gần 0) để tránh spam.
+        if (this.behaviorTimer < deltaTime * 3 && interactTargetObj) {
+          const agData = getAgeGroup(this.ageGroupId);
+          const toppleResult = topplePredictor.evaluate(
+            this, interactTargetObj, t, agData
+          );
+          if (toppleResult) {
+            this._lastToppleResult = toppleResult;
+            if (toppleResult.canTopple) {
+              // Log vào actionLog để frontend hiển thị
+              this.actionLog.push({
+                s: this.state,
+                a: 'topple_predicted',
+                obj: interactTargetObj.id,
+                objName: interactTargetObj.name || interactTargetObj.id,
+                mass: toppleResult.objectMass,
+                injuryScore: toppleResult.agentInjury?.injuryScore,
+                riskTier: toppleResult.agentInjury?.riskTier,
+                dangerLevel: toppleResult.objectDangerLevel,
+              });
+              // Emit vào riskAnalytics
+              if (toppleResult.agentInjury?.riskTier !== 'safe') {
+                riskAnalytics.recordEvent('near_miss', toppleResult.asCollisionEvent?.position || curPos, {
+                  agentId: this.id,
+                  ageGroup: this.ageGroupId,
+                  reason: 'topple_risk',
+                  objectId: interactTargetObj.id,
+                  severity: Math.ceil((toppleResult.agentInjury?.injuryScore || 0) / 20),
+                });
+              }
+            }
+          }
         }
 
         const agData = getAgeGroup(this.ageGroupId);
@@ -1253,7 +1368,8 @@ class Agent {
           const cz = (climbTarget.boundingBox.min[2] + climbTarget.boundingBox.max[2]) / 2;
           if (this.world) {
              const ray = new physicsEngine.rapier.Ray({ x: cx, y: objectTopY + 0.5, z: cz }, { x: 0, y: -1, z: 0 });
-             const hit = this.world.castRay(ray, objectTopY - this.spawnY + 1.0, true);
+             // [FIX] Use filterFlags = 2 (EXCLUDE_KINEMATIC) to ignore agents
+             const hit = this.world.castRay(ray, objectTopY - this.spawnY + 1.0, true, 2);
              if (hit) {
                const hitToi = hit.toi !== undefined ? hit.toi : hit.timeOfImpact;
                objectTopY = (objectTopY + 0.5) - hitToi;
@@ -1330,7 +1446,8 @@ class Agent {
     const dist = Math.sqrt(dx*dx + dz*dz);
     const arr  = this._getArrivalThreshold(actionType);
     if (dist < arr) {
-      this.targetPosition = null;
+      this.targetPosition  = null;
+      this._currentSpeed   = 0;   // [FIX MOVEMENT 1] reset ramp on arrival
       if (this.emotion === 'mischievous' && Math.random() < 0.2) this._setEmotion('excited');
       else this._clearEmotion();
       return;
@@ -1347,7 +1464,56 @@ class Agent {
       return;
     }
 
-    // BIOLOGICAL PHYSICS: Torque Limits on Movement
+    // ── [AUTO-CRAWL] Phát hiện clearance thấp — chuyển sang bò ─────────────
+    // Khi agent đang đi nhưng phía trước có vật thể mà khoảng hở < chiều cao đứng
+    // nhưng >= chiều cao bò → tự động chuyển sang 'crawl'.
+    // Logic: scan các solid obstacles trong radius 0.8m theo hướng đi.
+    // Nếu tìm thấy object có: min[1] (đáy) ≈ sàn VÀ max[1] < agentHeight * 0.85
+    // → agent cần bò để chui qua.
+    if (actionType === 'walk' || actionType === 'run') {
+      const agData = getAgeGroup(this.ageGroupId);
+      const agentH = agData?.height || 0.8;
+      const crawlH = (agData?.anthropometry?.legLength || agentH * 0.40) * 0.6; // chiều cao khi bò ~40cm
+
+      if (agData?.canCrawl !== false) {
+        const cur = this.getPosition();
+        const toTargetX = dx / (dist || 1);
+        const toTargetZ = dz / (dist || 1);
+
+        // Kiểm tra điểm 0.5m trước mặt theo hướng di chuyển
+        const probeX = cur[0] + toTargetX * 0.5;
+        const probeZ = cur[2] + toTargetZ * 0.5;
+
+        for (const obj of (this.availableObjects || [])) {
+          if (!obj.boundingBox || obj.isSoft) continue;
+          const bb = obj.boundingBox;
+          const objH = bb.max[1] - bb.min[1];
+
+          // Object phải: có độ cao vừa đủ để bò qua (crawlH < objH < agentH*0.85)
+          // VÀ đáy gần sàn (min[1] <= knownFloorY + 0.1)
+          // VÀ điểm probe nằm trong/gần object
+          const floorY = this._knownFloorY ?? 0;
+          const clearance = bb.max[1] - floorY; // khoảng hở từ sàn tới đáy ở mặt trên
+          const objBottom = bb.min[1];
+
+          if (
+            objBottom <= floorY + 0.15 &&          // đế object gần sàn
+            clearance >= crawlH &&                  // đủ chỗ để bò
+            clearance < agentH * 0.85 &&            // không đủ chỗ để đi thẳng
+            probeX > bb.min[0] - 0.3 && probeX < bb.max[0] + 0.3 &&
+            probeZ > bb.min[2] - 0.3 && probeZ < bb.max[2] + 0.3
+          ) {
+            // Chuyển sang crawl
+            if (this.currentBehavior) {
+              this.currentBehavior._savedActionType = actionType;
+              this.actionLog.push({ s: 'MOVING', a: 'auto_crawl', reason: 'low_clearance', obj: obj.id });
+            }
+            actionType = 'crawl';
+            break;
+          }
+        }
+      }
+    }
     const agTorqueData = getAgeGroup(this.ageGroupId);
     if (agTorqueData && agTorqueData.physics) {
       const legLength = agTorqueData.anthropometry?.legLength || 0.2;
@@ -1371,17 +1537,83 @@ class Agent {
 
     if (this.simTime < this.pauseUntil) return;
 
-    let speed = this.getRealisticVelocity(actionType);
+    let targetSpeed = this.getRealisticVelocity(actionType);
     const floorFriction = physicsEngine.getFrictionForMovement(actionType, 'hardwood');
-    speed *= (floorFriction / 0.5);
+    targetSpeed *= (floorFriction / 0.5);
 
     const prof = this._ageProfile;
     if (this.burstState && this.simTime < this.burstState.endTime) {
-      speed *= this.burstState.speedMult;
+      targetSpeed *= this.burstState.speedMult;
     }
 
-    const stumbleP = prof.stumbleProb || 0;
-    if (stumbleP > 0 && Math.random() < stumbleP) {
+    // ── [FIX MOVEMENT 1] Acceleration ramp ──────────────────────────────────
+    // Old: speed applied instantly each frame → agent teleports from 0 to full
+    //      speed in 1 frame (16ms), creating unphysical jerky starts/stops and
+    //      inflated initial acceleration that could trigger false stumble/fall.
+    // New: ramp _currentSpeed toward targetSpeed using age-appropriate accelTime.
+    //   accelTime: time (s) to reach full speed from rest (from ageGroups kinematics).
+    //   decelTime: time (s) to stop from full speed (shorter for abrupt stops).
+    {
+      const ag       = getAgeGroup(this.ageGroupId);
+      const accelTime = ag?.kinematics?.accelerationTime ?? 0.4;
+      const decelTime = accelTime * 0.5;  // decel is faster than accel for all ages
+
+      if (!Number.isFinite(this._currentSpeed)) this._currentSpeed = 0;
+
+      const delta = targetSpeed - this._currentSpeed;
+      // [BUG-1 FIX] decel branch PHẢI âm để giảm tốc đúng hướng.
+      // Old: (targetSpeed / decelTime) * deltaTime → luôn dương kể cả khi delta < 0
+      //      → _currentSpeed += dương khi cần giảm → speed tăng vô hạn.
+      // Fix: thêm dấu âm cho nhánh decel.
+      const rampRate = delta > 0
+        ? (targetSpeed / accelTime) * deltaTime   // accelerating ✓
+        : -(targetSpeed / decelTime) * deltaTime; // decelerating ✓ (âm → giảm speed)
+
+      if (Math.abs(delta) < Math.abs(rampRate)) {
+        this._currentSpeed = targetSpeed;
+      } else {
+        this._currentSpeed += rampRate;
+      }
+      this._currentSpeed = Math.max(0, this._currentSpeed);
+    }
+    const speed = this._currentSpeed;
+
+    // ── [FIX MOVEMENT 2] Gait cycle footfall oscillation ────────────────────
+    // Real walking produces a lateral sway tied to step frequency:
+    //   sway = sin(2π × stepFreq × t) × lateralAmplitude
+    // This is DIFFERENT from the existing wobbleDelta (which is a heading wobble).
+    // Footfall oscillation affects SPEED (slower mid-swing, faster at heel-strike)
+    // making movement look natural rather than constant-velocity robot glide.
+    // stepFreq ≈ 1 / (2 × stride_length / speed)  using Froude scaling.
+    {
+      const ag         = getAgeGroup(this.ageGroupId);
+      const legLen     = ag?.anthropometry?.legLength ?? (ag?.height ?? 0.8) * 0.40;
+      const minFreq    = 0.8;  // Hz (slow toddler trudge)
+      const maxFreq    = 3.5;  // Hz (fast child run)
+      // Froude-based step frequency: f ≈ sqrt(g / legLen) / (2π) × speedScale
+      const froude     = speed > 0.01 ? Math.min(1, speed / Math.max(0.1, targetSpeed)) : 0;
+      const stepFreq   = minFreq + froude * (maxFreq - minFreq);
+      if (!Number.isFinite(this._gaitPhase)) this._gaitPhase = Math.random() * Math.PI * 2;
+      this._gaitPhase += stepFreq * deltaTime * Math.PI * 2;
+
+      // Speed modulation: ±8% variation at heel-strike, negligible during crawl
+      const swayAmp = actionType === 'crawl' ? 0.02 : 0.08;
+      this._gaitSpeedMult = 1.0 + Math.sin(this._gaitPhase) * swayAmp;
+    }
+
+    // [BUG-PHYS-1 FIX] stumbleProb was per-frame probability, not per-second.
+    // Old: P(stumble/frame) = 0.000079  → depends on fps, not physical time.
+    // New: P(stumble/second) = stumbleProb × dt  → deterministic regardless of fps.
+    //
+    // Derived per-second rates from AGE_MOVEMENT_PROFILES:
+    //   infant:        0.000079 per frame × 60fps = 0.00474/s → ~211 stumbles/hour
+    //   early_toddler: 0.000069/frame              0.00414/s   ~242 s/hour  (Adolph 17/hr → ~0.0047/s ✓)
+    //   late_toddler:  0.000046/frame              0.00276/s   ~363 s/hour
+    //   preschool:     0.000037/frame              0.00222/s   ~450 s/hour
+    //   child:         0.000019/frame              0.00114/s   ~877 s/hour
+    // Values are already calibrated for /second; just multiply by deltaTime.
+    const stumbleP = (prof.stumbleProb || 0) * 60;  // convert stored per-frame to per-second rate
+    if (stumbleP > 0 && Math.random() < stumbleP * deltaTime) {
       this.behaviorQueue = [{ type: 'stumble', action: 'fall_forward', duration: 1.5, completed: false }];
       this.currentBehavior = null;
       return;
@@ -1450,20 +1682,31 @@ class Agent {
     const stats = this._getFatigueModifiedStats();
     let moveX, moveZ;
 
+    // Apply gait speed modulation (footfall oscillation — see [FIX MOVEMENT 2] above)
+    const gaitSpeed = speed * (this._gaitSpeedMult ?? 1.0);
+
     if (kin) {
       const desiredAngle = Math.atan2(steerZ, steerX);
       const angleDiff    = this._normalizeAngle(desiredAngle - this.currentHeading);
       const maxTurn      = stats.turnRate * deltaTime;
       this.currentHeading += Math.max(-maxTurn, Math.min(maxTurn, angleDiff));
-      const biasedSpeed = speed * (1.0 + kin.forwardBias * 0.3);
+      const biasedSpeed = gaitSpeed * (1.0 + kin.forwardBias * 0.3);
       const rawX = Math.cos(this.currentHeading) * biasedSpeed * deltaTime;
       const rawZ = Math.sin(this.currentHeading) * biasedSpeed * deltaTime;
-      const mf = kin.momentumFactor;
+
+      // ── [FIX MOVEMENT 3] Momentum blending improvement ────────────────────
+      // Old: always used fixed mf (momentumFactor) regardless of whether agent
+      //      was accelerating or decelerating → momentum persisted during braking
+      //      → agent overshot targets by 20-40cm every time.
+      // New: reduce mf to 0.05 when close to target (< 1.5m) to allow clean stops.
+      const mf = dist < 1.5
+        ? Math.min(0.05, kin.momentumFactor * 0.2)  // near target: minimal momentum
+        : kin.momentumFactor;
       moveX = rawX * (1 - mf) + (this.velocity[0] * deltaTime) * mf;
       moveZ = rawZ * (1 - mf) + (this.velocity[2] * deltaTime) * mf;
     } else {
-      moveX = steerX * speed * deltaTime;
-      moveZ = steerZ * speed * deltaTime;
+      moveX = steerX * gaitSpeed * deltaTime;
+      moveZ = steerZ * gaitSpeed * deltaTime;
     }
 
     const agObj = getAgeGroup(this.ageGroupId);
@@ -1511,11 +1754,29 @@ class Agent {
       // The floor blocks y:-0.05 from frame 0. No sinking. XZ movement works.
       const kccCollider = this.collider ?? this.colliders?.legs ?? this.colliders?.torso ?? null;
       if (kccCollider) {
+        // [BUG-2 FIX] _vertVel phải được tích hợp TRƯỚC khi gọi moveAgentWithController,
+        // nhưng isGrounded() phải được đọc SAU — vì computedGrounded() chỉ hợp lệ sau
+        // khi computeColliderMovement() được gọi bên trong moveAgentWithController.
+        // Old: đọc isGrounded() trước → nhận kết quả stale của frame trước
+        //      → _vertVel tích lũy xuống -20 m/s trong khi agent thực sự đang đứng
+        //      → KCC dùng hết collision budget để chống lực đẩy xuống → corrected XZ ≈ 0.
+
+        // Bước 1: dùng _vertVel hiện tại để tính desiredMove.y
         const corrected = physicsEngine.moveAgentWithController(
           this.world, this.controller, this.body, kccCollider,
-          { x: moveX, y: -0.05, z: moveZ },
+          { x: moveX, y: (this._vertVel || 0) * deltaTime, z: moveZ },
           deltaTime
         );
+
+        // Bước 2: SAU KHI move xong, đọc grounded state mới nhất rồi cập nhật _vertVel
+        const _isGrounded = physicsEngine.isGrounded(this.controller);
+        if (_isGrounded) {
+          this._vertVel = 0.0;
+          const _feetNow = this.body.translation().y - this._agentHalfH;
+          if (Number.isFinite(_feetNow)) this._knownFloorY = _feetNow;
+        } else {
+          this._vertVel = Math.max((this._vertVel || 0) - 9.81 * deltaTime, -20.0);
+        }
 
         const posNow = this.body.translation();
         const stuckDx = posNow.x - this.lastMovePos[0];
@@ -1586,7 +1847,8 @@ class Agent {
           }
 
           this.stuckCounter = 0;
-          this.targetPosition = null;
+          this.targetPosition  = null;
+          this._currentSpeed   = 0;  // [FIX MOVEMENT 1] reset ramp after escape
           this.state = 'IDLE';
           this.idleCooldown = 0.3 + Math.random() * 0.3;
         }
@@ -2150,15 +2412,29 @@ class Agent {
   }
 
   _buildSolidObstacles(bounds) {
-    const roomW = bounds ? Math.max(bounds.max[0] - bounds.min[0], bounds.max[2] - bounds.min[2]) : 10;
+    // [GEOM-2 FIX] roomW derived from actual bbox dimensions, not grid cell count.
+    // Old: max(cols, rows) × cellSize → underestimates non-square rooms.
+    // New: use bounds directly; fallback to grid estimate.
+    let roomW = 10;
+    if (bounds) {
+      roomW = Math.max(bounds.max[0] - bounds.min[0], bounds.max[2] - bounds.min[2]);
+    } else if (this._boundsInited) {
+      roomW = Math.max(
+        this.explorationMap.cols * this.explorationMap.cellSize,
+        this.explorationMap.rows * this.explorationMap.cellSize
+      );
+    }
     const floorY = this._knownFloorY ?? (bounds?.min[1] ?? 0);
     return (this.availableObjects || []).filter(obj => {
       if (!obj.boundingBox) return false;
       const { min, max } = obj.boundingBox;
       const objH = max[1] - min[1];
       const objW = Math.max(max[0] - min[0], max[2] - min[2]);
+      // Exclude room-spanning objects (walls, floor plane) — they're not obstacles
       if (objW > roomW * 0.75) return false;
+      // Exclude very thin objects (rugs, decals) — walkable
       if (objH < 0.20) return false;
+      // Exclude objects elevated above agent reach (ceiling fixtures, etc.)
       if (min[1] > floorY + 0.5) return false;
       return true;
     });
@@ -2244,14 +2520,26 @@ class Agent {
   }
 
   getVelocity() {
-    const [vx, vy, vz] = this.velocity;
-    return Math.sqrt(vx*vx + vy*vy + vz*vz);
+    // Include _vertVel (integrated gravity) in the magnitude.
+    // this.velocity[1] is always 0 (XZ locomotion only).
+    // Fall injuries need the actual Y component — without _vertVel
+    // a 0.5m fall records 0 m/s at contact → injury score = 0 (false negative).
+    const [vx, , vz] = this.velocity;
+    const vy = this._vertVel ?? 0;
+    return Math.sqrt(vx * vx + vy * vy + vz * vz);
+  }
+
+  getVelocityVector() {
+    const [vx, , vz] = this.velocity;
+    const vy = this._vertVel ?? 0;
+    return [vx, vy, vz];
   }
 
   getStatus() {
     return {
       id: this.id, ageGroupId: this.ageGroupId, state: this.state,
       position: this.getPosition(), velocity: this.getVelocity(),
+      velocityVector: this.getVelocityVector(),
       totalDistance: this.totalDistance, fatigue: this.fatigueLevel,
       gaitStability: this.gaitStability,
       behaviorsCompleted: this.behaviorQueue?.filter(b => b.completed).length ?? 0,

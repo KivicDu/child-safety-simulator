@@ -231,6 +231,31 @@ const ICONS: Record<string, string> = {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
+// BACKEND_HALF_H — offset để convert positions[i][1] sang feetY trong Three.js
+//
+// [BUG-M11 FIX đã áp dụng trong agent.js]:
+//   getPosition() trả về: [x, t.y − _agentHalfH, z]
+//     = [x, (feetY + halfH) − halfH, z]
+//     = [x, feetY_physics, z]   ← đã là feetY rồi
+//
+// Vì vậy:
+//   worldPos.y = positions[i][1] − offsetXYZ.y
+//              = feetY_physics − box3.min.y
+//              = feetY_3js   (KHÔNG cần trừ thêm)
+//
+// Ví dụ số (early_toddler, floorH=0.143m, box3.min.y=−0.155m):
+//   feetY_physics = 0.143 + 0.05 (clearance) = 0.193m
+//   positions[i][1] = 0.193m  (feetY — sau BUG-M11 fix)
+//   worldPos.y      = 0.193 − (−0.155) = 0.348m  = feetY_3js
+//   floor mesh 3js  = 0.143 − (−0.155) = 0.298m
+//   → feet 0.348 − 0.298 = 0.05m trên sàn ✓
+//
+// BACKEND_HALF_H removed — no longer needed.
+// agent.js BUG-M11 fix: getPosition() now returns feetY directly.
+// resolveAgentY uses worldPos.y as-is (= feetY_3js). No halfH subtraction needed.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Component
 // ─────────────────────────────────────────────────────────────────────────────
 const Canvas3D: React.FC<Props> = ({
@@ -451,35 +476,56 @@ const Canvas3D: React.FC<Props> = ({
 
         c.offsetXZ = new THREE.Vector2(ctr.x, ctr.z);
 
-        // rawFloorY = vị trí sàn trong Rapier physics space.
-        // Ưu tiên lấy từ sceneData (cùng nguồn với backend),
-        // fallback về box3.min.y (trước khi model repositioning).
-        const rawFloorY: number =
-          propsRef.current.sceneData?.floor?.height != null
-            ? (propsRef.current.sceneData.floor.height as number)
-            : box3.min.y;
+        // rawFloorY = floor Y in Rapier physics space (used to compute physicsFloorY).
+        // [SPAWN-ROOT FIX] Validate sceneData.floor.height before using it.
+        // glbParser may set floor.height = ceiling Y (bb.max[1]) instead of floor Y.
+        // Validation: floor must be in the bottom portion of the room.
+        const rawFloorY: number = (() => {
+          const sceneFloorH = propsRef.current.sceneData?.floor?.height;
+          if (sceneFloorH == null) return box3.min.y;
+          const sfh     = sceneFloorH as number;
+          const roomH   = box3.max.y - box3.min.y;
+          const distBot = Math.abs(sfh - box3.min.y);
+          const distTop = Math.abs(sfh - box3.max.y);
+          // If floor.height is closer to ceiling than to floor → misidentified, use min
+          if (roomH > 0.5 && distTop < distBot) {
+            console.warn(
+              `[Canvas3D] sceneData.floor.height=${sfh.toFixed(3)} looks like ceiling ` +
+              `(box3 Y=[${box3.min.y.toFixed(3)}, ${box3.max.y.toFixed(3)}]). Using box3.min.y.`
+            );
+            return box3.min.y;
+          }
+          return sfh;
+        })();
 
-        // ─── Y-CONVENTION FIX (Bug #1) ────────────────────────────────────────
-        // offsetXYZ.y PHẢI là rawFloorY (physics floor height), KHÔNG phải box3.min.y.
+        // ─── Y-CONVENTION FIX v2 (Root Cause E / RC#6) ───────────────────────
+        // model.position.y = -box3.min.y, nên Three.js world Y của bất kỳ điểm
+        // physics nào được tính:
         //
-        // Vì sao: trajectory từ backend lưu CENTER Y trong Rapier physics space.
-        //   worldY_3js = physicsY - offsetXYZ.y
+        //   world_y = physicsY + model.position.y = physicsY - box3.min.y
         //
-        // Nếu dùng box3.min.y: worldY = physicsY - box3.min.y
-        //   → chỉ đúng khi box3.min.y == rawFloorY (scale nhất quán hoàn toàn)
-        //   → khi có lệch scale dù 1mm → agent lơ lửng
+        // toWorldSpace() trả về: pos - offsetXYZ, vì vậy:
+        //   world_y = physicsY - offsetXYZ.y
         //
-        // Nếu dùng rawFloorY (= sceneData.floor.height, cùng nguồn với backend):
-        //   worldY = physicsY - rawFloorY = (floorHeight + halfH) - floorHeight = halfH
-        //   footY  = worldY - halfH = 0  → đúng với sàn Three.js tại Y=0 ✓
+        // → offsetXYZ.y PHẢI = box3.min.y (giá trị ÂM, ví dụ −0.155m)
         //
-        // physicsFloorY trong Three.js world space = rawFloorY - offsetXYZ.y = 0
-        // (sàn Three.js luôn ở Y=0 vì model.position.y = -box3.min.y)
-        c.offsetXYZ = new THREE.Vector3(ctr.x, rawFloorY, ctr.z);
+        // Lỗi cũ: offsetXYZ.y = rawFloorY = +0.143m → transform sai:
+        //   world_y = physicsY − 0.143  (thiếu 0.155m từ model repositioning)
+        //   feet = worldPos.y − halfH = clearance = 0.05m
+        //   floor mesh Three.js Y = −box3.min.y = +0.155m
+        //   → agent feet (0.05m) DƯỚI floor mesh (0.155m) → ngập sàn 10.5cm!
+        //
+        // Fix: offsetXYZ.y = box3.min.y (−0.155m):
+        //   world_y = physicsY − (−0.155) = physicsY + 0.155  ✓
+        //   feet = backendBaseY = worldPos.y − halfH = clearance = 0.05m (above bbox)
+        //   floor mesh Three.js Y = rawFloorY − box3.min.y = 0.143 + 0.155 = 0.298m
+        //   → agent feet (0.298 + 0.05 = 0.348m) TRÊN floor mesh (0.298m) ✓
+        c.offsetXYZ = new THREE.Vector3(ctr.x, box3.min.y, ctr.z);
 
-        // physicsFloorY in world space (after model position offset)
-        // Với offsetXYZ.y = rawFloorY, sàn Three.js world luôn = 0
-        c.physicsFloorY = 0;
+        // physicsFloorY = vị trí mesh sàn thực trong Three.js world space.
+        // Dùng bởi resolveAgentY (clamp không bao giờ đặt agent dưới sàn)
+        // và getFloorY (ray-matching tolerance).
+        c.physicsFloorY = rawFloorY - box3.min.y;
 
         model.traverse((o: THREE.Object3D) => {
           const mesh = o as THREE.Mesh;
@@ -547,10 +593,10 @@ const Canvas3D: React.FC<Props> = ({
         setTimeout(() => setLoadStatus(""), 3000);
 
         console.info(
-          `[Canvas3D v7] Scene loaded.` +
+          `[Canvas3D v8] Scene loaded.` +
             ` Size after scale: ${sz.x.toFixed(2)}m × ${sz.y.toFixed(2)}m × ${sz.z.toFixed(2)}m.` +
             ` box3.min.y=${box3.min.y.toFixed(3)}  rawFloorY=${rawFloorY.toFixed(3)}` +
-            ` offsetXYZ.y=${rawFloorY.toFixed(3)} physicsFloorY(3js)=${c.physicsFloorY.toFixed(3)}` +
+            ` offsetXYZ.y=${box3.min.y.toFixed(3)} physicsFloorY(3js)=${c.physicsFloorY.toFixed(3)}` +
             ` sceneUnitScale=${sceneUnitScale}.`,
         );
       },
@@ -572,43 +618,51 @@ const Canvas3D: React.FC<Props> = ({
   function resolveAgentY(
     c: any,
     worldPos: THREE.Vector3,
-    realHeight: number,
     action: string,
     doSnap: boolean,
+    _ageId: string = 'early_toddler',  // kept for call-site compat; unused after BUG-M11
   ): number {
-    // Y-CONVENTION:
-    //   worldPos.y = physicsCENTER_Y - offsetXYZ.y
-    //              = (floorHeight + halfH + ε) - rawFloorY
-    //              = halfH + ε   (khi đứng trên sàn)
+    // ── Y-CONVENTION (sau BUG-M11 fix trong agent.js) ───────────────────────
     //
-    //   backendBaseY = worldPos.y - realHeight/2 = ε ≈ 0   (foot-level trong Three.js world)
-    //   sceneFloorY  = 0                                     (model.position.y = -box3.min.y)
+    // agent.getPosition() = [x, t.y − _agentHalfH, z] = [x, feetY_physics, z]
+    // positions[i][1]     = feetY_physics   (bàn chân trong Rapier world)
+    // worldPos.y          = positions[i][1] − offsetXYZ.y
+    //                     = feetY_physics − box3.min.y
+    //                     = feetY_3js       ← ĐÃ là foot level rồi
     //
-    // Với offsetXYZ.y = rawFloorY (Bug #1 đã fix), backendBaseY sẽ luôn gần 0 khi đứng sàn.
-    // resolveAgentY chỉ cần xử lý jitter nhỏ và trường hợp lơ lửng thật sự.
+    // backendBaseY = worldPos.y   (KHÔNG trừ thêm halfH nào)
+    //
+    // Công thức đúng:
+    //   backendBaseY = feetY_3js = worldPos.y  (BACKEND_HALF_H = 0 cho mọi age)
+    //
+    // Ví dụ (early_toddler, floorH=0.143, box3.min.y=−0.155):
+    //   feetY_physics = 0.143 + 0.05 = 0.193m
+    //   worldPos.y    = 0.193 − (−0.155) = 0.348m
+    //   floor_3js     = 0.143 − (−0.155) = 0.298m
+    //   finalY        = max(0.348, 0.298+0.02) = 0.348m → 5cm trên sàn ✓
+    //
+    //   Agent leo thang 0.5m:
+    //   feetY_physics = 0.643m → worldPos.y = 0.798m → finalY = 0.798m ✓
+    //   (trước kia với halfH=0.275: finalY=0.523m = 0.275m quá thấp ✗)
+    // ─────────────────────────────────────────────────────────────────────────
 
-    const FLOOR_CLEARANCE = realHeight * 0.04; // ~4% chiều cao (~1–2cm)
+    const FLOOR_CLEARANCE = 0.02; // 2cm clearance
 
-    // backendBaseY = vị trí bàn chân theo backend physics (foot-level trong Three.js world)
-    // FIX-BUG-M11: Backend now exports feet Y directly. 
-    // worldPos.y is ALREADY the foot level in Three.js world space. DO NOT subtract realHeight/2.
-    const backendBaseY = worldPos.y; 
-    const sceneFloorY = c.physicsFloorY ?? 0;
+    // BUG-M11 FIX: BACKEND_HALF_H = 0 — worldPos.y đã là feetY_3js
+    const backendBaseY = worldPos.y;  // feetY trong Three.js world space
+    const sceneFloorY  = c.physicsFloorY ?? 0;
+
+    // Scene bounds for sanity checks (room height in Three.js world)
+    const sceneBbox      = propsRef.current.sceneData?.boundingBox;
+    const sceneRoomH     = sceneBbox ? (sceneBbox.max[1] - sceneBbox.min[1]) : 4.0;
+    const sceneBottomY   = sceneFloorY;                      // floor in Three.js world
+    const sceneCeilingY  = sceneFloorY + sceneRoomH;         // ceiling in Three.js world
 
     const SNAP_ACTIONS = new Set([
-      "falling",
-      "free_fall",
-      "fall_forward",
-      "walk",
-      "walk_to",
-      "walk_random",
-      "run",
-      "run_unstable",
-      "sprint",
-      "crawl",
-      "lunge",
-      "investigate",
-      "wade",
+      "falling", "free_fall", "fall_forward",
+      "walk", "walk_to", "walk_random",
+      "run", "run_unstable", "sprint",
+      "crawl", "lunge", "investigate", "wade",
     ]);
 
     if (doSnap && SNAP_ACTIONS.has(action)) {
@@ -616,29 +670,53 @@ const Canvas3D: React.FC<Props> = ({
       if (rayY !== null) {
         const rayAboveBackend = rayY - backendBaseY;
 
-        // Rule 1: Ray hit THẤP HƠN backend foot → agent đang lơ lửng → kéo xuống.
-        // Ngưỡng 2.0m thay vì 0.5m cũ: đảm bảo catch được cả khi lệch scale lớn.
-        // Tuy nhiên, không cho phép lún sâu quá 5cm xuống dưới sàn gốc.
-        if (rayY < backendBaseY - 0.05 && rayY > backendBaseY - 2.0) {
-          // Chỉ kéo xuống nếu tia ray chỉ thấp hơn một chút xíu (snapping)
-          // Nếu ray hit quá thấp, coi như lỗi hình học và dùng mặc định.
-          if (rayAboveBackend > -0.15) {
-             return rayY + FLOOR_CLEARANCE;
+        // ── Rule 4 (NEW — SPAWN-ROOT FIX) ─────────────────────────────────
+        // If backendBaseY is suspiciously high (near or above ceiling) AND
+        // raycast found a valid floor surface within scene bounds:
+        // → backend position is contaminated by ceiling-spawn bug → trust raycast.
+        //
+        // Trigger: backendBaseY > physicsFloorY + 40% of room height
+        //          (floor spawning correctly would be physicsFloorY + ~5cm)
+        // Example: physicsFloorY=0, roomH=2.5 → threshold=1.0m
+        //   backendBaseY=2.55m > 1.0m AND rayY=0m → use rayY ✓
+        const floorThreshold = sceneFloorY + sceneRoomH * 0.40;
+        const rayWithinRoom  = rayY >= sceneBottomY - 0.5 && rayY <= sceneCeilingY + 0.5;
+        if (backendBaseY > floorThreshold && rayWithinRoom && rayY < backendBaseY - 0.5) {
+          console.warn(
+            `[Canvas3D] Rule4 snap: backendBaseY=${backendBaseY.toFixed(3)} near ceiling ` +
+            `(threshold=${floorThreshold.toFixed(3)}). Trusting raycast Y=${rayY.toFixed(3)}.`
+          );
+          return rayY + FLOOR_CLEARANCE;
+        }
+
+        // ── Rule 1 ─────────────────────────────────────────────────────────
+        // Raycast is BELOW backend foot by up to the full room height.
+        // Old limit was 2.0m — too small for rooms > 2.0m tall.
+        // New: use full room height as the snap tolerance.
+        if (rayY < backendBaseY - 0.02 && rayY > backendBaseY - (sceneRoomH + 0.5)) {
+          // Only snap if the raycast surface is near the expected floor
+          if (Math.abs(rayY - sceneFloorY) < 0.30) {
+            return rayY + FLOOR_CLEARANCE;
           }
         }
 
-        // Rule 2: Ray hit GẦN backend foot (trong 0.15m) → dùng ray để giảm jitter sàn
+        // ── Rule 2 ─────────────────────────────────────────────────────────
+        // Raycast is within ±15cm of backend foot → use for jitter reduction
         if (Math.abs(rayAboveBackend) < 0.15) {
           return rayY + FLOOR_CLEARANCE;
         }
 
-        // Rule 3: Ray hit CAO HƠN backend foot → furniture surface → BỎ QUA, trust backend.
-        // (nguyên nhân floating cũ: agent bị kéo lên mặt tủ/kệ)
+        // ── Rule 3 ─────────────────────────────────────────────────────────
+        // Raycast is much higher than foot (furniture surface) → ignore, trust backend
       }
     }
 
-    // Default: trust backend foot position, clamp không bao giờ xuống dưới sàn tuyệt đối.
-    return Math.max(backendBaseY, sceneFloorY + FLOOR_CLEARANCE);
+    // Default: use backend position, but clamp to floor if near it.
+    // If backendBaseY is above ceiling, this fallback also catches ceiling-spawn:
+    // physicsFloorY = 0 (validated), backendBaseY = 2.55 → max(2.55, 0.02) = 2.55
+    // To fix this remaining case, clamp backendBaseY to [sceneBottomY, sceneCeilingY]
+    const clampedBaseY = Math.min(backendBaseY, sceneCeilingY + 0.1);
+    return Math.max(clampedBaseY, sceneFloorY + FLOOR_CLEARANCE);
   }
 
   // ── Spawn playback agents ─────────────────────────────────────────────────
@@ -741,17 +819,40 @@ const Canvas3D: React.FC<Props> = ({
     c.currentFrame = 0;
     c.figures.forEach((fh: FigureHandle) => (fh.root.visible = true));
 
-    // ─── Y-CONVENTION SYNC (Bug #1 guard) ────────────────────────────────────
-    // Nếu backend gửi config.floorHeight, dùng nó để cập nhật physicsFloorY.
-    // Trường hợp model chưa load (offsetXYZ chưa được set với rawFloorY đúng),
-    // đây là lớp bảo vệ thứ hai để giữ nhân vật không lơ lửng.
-    //
-    // physicsFloorY trong Three.js world space = floorHeight - offsetXYZ.y
-    // Với offsetXYZ.y = rawFloorY = floorHeight → physicsFloorY = 0 ✓
+    // ─── Y-CONVENTION SYNC (guard khi model load sau playback data) ──────────
+    // [SPAWN-ROOT FIX] Validate config.floorHeight before using it.
+    // If backend sent ceiling Y as floor, physicsFloorY would be near room height
+    // → characters snap to ceiling in resolveAgentY → ceiling-spawn bug persists.
     if (simulationPlayback?.config?.floorHeight != null && c.offsetXYZ) {
       const cfgFloor = simulationPlayback.config.floorHeight as number;
-      const offsetY = (c.offsetXYZ as THREE.Vector3).y;
-      c.physicsFloorY = cfgFloor - offsetY;
+      const offsetY  = (c.offsetXYZ as THREE.Vector3).y;
+
+      // Compute candidate physicsFloorY
+      let candidateFloorY = cfgFloor - offsetY;
+
+      // Validate: if model is loaded, we know the Three.js scene bounds.
+      // physicsFloorY should be near the model's floor, not ceiling.
+      if (c.model) {
+        const box3model  = new THREE.Box3().setFromObject(c.model);
+        const roomHeight = box3model.max.y - box3model.min.y;
+        const floorApprox = box3model.min.y;   // floor ≈ bottom of scene in Three.js
+        const ceilApprox  = box3model.max.y;   // ceiling ≈ top of scene in Three.js
+
+        const distFloor   = Math.abs(candidateFloorY - floorApprox);
+        const distCeiling = Math.abs(candidateFloorY - ceilApprox);
+
+        if (roomHeight > 0.5 && distCeiling < distFloor) {
+          console.warn(
+            `[Canvas3D] config.floorHeight=${cfgFloor.toFixed(3)} → ` +
+            `physicsFloorY=${candidateFloorY.toFixed(3)} looks like ceiling ` +
+            `(room=[${floorApprox.toFixed(2)}, ${ceilApprox.toFixed(2)}]). ` +
+            `Clamping to floor.`
+          );
+          candidateFloorY = floorApprox + 0.02;  // 2cm clearance
+        }
+      }
+
+      c.physicsFloorY = candidateFloorY;
     }
   }, [simulationPlayback, modelPath, sceneUnitScale]);
 
@@ -981,8 +1082,25 @@ const Canvas3D: React.FC<Props> = ({
   useEffect(() => {
     if (!ctx.current) return;
     const c = ctx.current;
-    const offXYZ = c.offsetXYZ as THREE.Vector3;
+    let offXYZ = c.offsetXYZ as THREE.Vector3;
     const frameDt = 1 / 60;
+
+    // [RC#6 FIX] Live bootstrap khi model chưa load.
+    // Cần offsetXYZ.y = box3.min.y (âm), KHÔNG phải cfgFloor (dương).
+    // Dùng sceneData.boundingBox.min[1] làm xấp xỉ tốt nhất của box3.min.y
+    // trước khi model GLTF load xong.
+    //
+    // Transform đúng: world_y = physicsY - offsetXYZ.y = physicsY - box3.min.y
+    // physicsFloorY = rawFloorY - box3.min.y ≈ cfgFloor - sceneBBminY
+    const cfgFloor = propsRef.current.simulationPlayback?.config?.floorHeight;
+    if (offXYZ.y === 0 && cfgFloor != null) {
+      const sceneBBminY = propsRef.current.sceneData?.boundingBox?.min?.[1] as number | undefined;
+      const bootstrapOffsetY = (sceneBBminY != null) ? sceneBBminY : cfgFloor;
+      offXYZ = new THREE.Vector3(offXYZ.x, bootstrapOffsetY, offXYZ.z);
+      c.offsetXYZ = offXYZ;
+      c.physicsFloorY = cfgFloor - bootstrapOffsetY;
+      console.log(`[Canvas3D LIVE] offsetXYZ.y bootstrapped=${bootstrapOffsetY.toFixed(4)} (sceneBBminY=${sceneBBminY?.toFixed(4)}) physicsFloorY=${c.physicsFloorY.toFixed(4)}`);
+    }
 
     // Debug: log offset once when live positions first arrive
     if (liveAgentPositions?.length && !c._liveOffsetLogged) {
@@ -1023,13 +1141,12 @@ const Canvas3D: React.FC<Props> = ({
         };
         driver.root.traverse((o: THREE.Object3D) => o.layers.set(0));
         const wp = toWorldSpace(a.position, offXYZ);
-        const realHeight = driver.registryEntry?.realHeight ?? 0.8;
         const finalY = resolveAgentY(
           c,
           wp,
-          realHeight,
           "idle",
           enableFloorSnap,
+          a.ageGroupId ?? "early_toddler",
         );
         handle.lastFloorY = finalY;
         driver.root.position.set(wp.x, finalY, wp.z);
@@ -1042,22 +1159,29 @@ const Canvas3D: React.FC<Props> = ({
       if (!a?.position || i >= c.liveFigures.length) return;
       const fh = c.liveFigures[i] as FigureHandle;
       const tgt = toWorldSpace(a.position, offXYZ);
-      const realHeight = fh.driver.registryEntry?.realHeight ?? 0.8;
 
       const dx = tgt.x - fh.root.position.x;
       const dz = tgt.z - fh.root.position.z;
       const dist = Math.sqrt(dx * dx + dz * dz);
 
-      // FIX-M3: Infer action from movement speed instead of hardcoding "walk"
-      const liveAction = dist > 0.02 ? "run" : dist > 0.005 ? "walk" : "idle";
+      // Infer action from movement speed and age group
+      // [LIVE-FIX] dist is displacement per-frame (1/60s):
+      //   0.05m/frame = 3.0 m/s → run
+      //   0.012m/frame = 0.72 m/s → walk
+      //   <0.001m/frame → idle
+      // Infant (ageId='infant') can't walk — crawl at any speed
+      const isInfant = fh.ageId === 'infant';
+      const liveAction = isInfant
+        ? (dist > 0.001 ? "crawl" : "idle")
+        : dist > 0.033 ? "run" : dist > 0.005 ? "walk" : "idle";
       const actual_spd = dist / frameDt;
 
       const rawY = resolveAgentY(
         c,
         tgt,
-        realHeight,
         liveAction,
         enableFloorSnap,
+        fh.ageId,
       );
       // Smooth transitions for live positions (interpolate Y only slightly)
       const finalY = fh.root.position.y + (rawY - fh.root.position.y) * 0.2;
@@ -1148,29 +1272,46 @@ const Canvas3D: React.FC<Props> = ({
       fh.lx = simPos[0];
       fh.lz = simPos[2];
 
-      // Action entry
+      // Action entry — binary search for the action that is current at this frame
+      // [BUG-ALOG FIX] Old: linear mapping of aLog index to progress fraction.
+      //   Problem: aLog.length << traj.length (log only on state changes, not every frame)
+      //   → each aLog entry "stretches" over many trajectory frames incorrectly.
+      // New: ActionEntry has optional field `t` (trajectory frame index at which this
+      //   action started). Binary search for the last entry with t ≤ currentFrame.
+      //   Fallback: if no `t` field, use linear mapping (backward-compat).
       let entry: ActionEntry | null = null;
       if (aLog?.length) {
-        const li = Math.min(
-          Math.floor(prog * (aLog.length - 1)),
-          aLog.length - 1,
-        );
-        entry = aLog[li] ?? null;
+        const frame = Math.floor(prog * ((traj?.length ?? 1) - 1));
+        // Check if entries have time/frame indices
+        const hasFrameIdx = typeof (aLog[0] as any)?.t === 'number';
+        if (hasFrameIdx) {
+          // Binary search: find last entry where entry.t <= frame
+          let lo = 0, hi = aLog.length - 1, best = 0;
+          while (lo <= hi) {
+            const mid = (lo + hi) >> 1;
+            if ((aLog[mid] as any).t <= frame) { best = mid; lo = mid + 1; }
+            else hi = mid - 1;
+          }
+          entry = aLog[best] ?? null;
+        } else {
+          // Fallback: linear mapping (aLog sparsely covers timeline)
+          const li = Math.min(Math.floor(prog * (aLog.length - 1)), aLog.length - 1);
+          entry = aLog[li] ?? null;
+        }
       }
       const action = entry?.a ?? (spd > 0.003 ? "walk" : "idle");
       fh.currentlyWading = !!entry?.wadingIn;
 
       // FIX-BUG01B: Convert physics center → Three.js world, then decode foot Y
       const offXYZ = c.offsetXYZ as THREE.Vector3;
-      const worldPos = toWorldSpace(simPos, offXYZ); // worldPos.y = centerY - box3.min.y
-      const realHeight = fh.driver.registryEntry?.realHeight ?? 0.8;
+      const worldPos = toWorldSpace(simPos, offXYZ); // worldPos.y = centerY - offsetXYZ.y
 
       const finalY = resolveAgentY(
         c,
         worldPos,
-        realHeight,
         action,
         enableFloorSnap,
+        fh.ageId,
       );
       fh.lastFloorY = finalY;
 
@@ -1228,7 +1369,7 @@ const Canvas3D: React.FC<Props> = ({
         // Vẽ trail từ đỉnh đầu agent, mỗi 3 frame thêm 1 điểm
         if (c.currentFrame % 3 === 0) {
           const headY =
-            fh.root.position.y + (fh.driver.currentHeight ?? realHeight);
+            fh.root.position.y + (fh.driver.currentHeight ?? fh.driver.registryEntry?.realHeight ?? 0.8);
           const headPt = new THREE.Vector3(
             fh.root.position.x,
             headY,

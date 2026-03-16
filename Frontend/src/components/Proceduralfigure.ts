@@ -20,7 +20,10 @@ interface Anthropometry {
 
 const ANTHROPOMETRY: Record<string, Anthropometry> = {
   infant: {
-    realHeight: 0.70, headRadius: 0.078, neckLength: 0.040,
+    // WHO 12mo: height=74cm, HC=46cm → headR = 46/(2π) = 0.073m
+    // As fraction: 0.073/0.70 = 10.4% — but visual head needs to appear larger
+    // Using 0.095m (13.6%) for correct visual infant proportions (head-to-body ratio)
+    realHeight: 0.70, headRadius: 0.095, neckLength: 0.040,
     torsoLength: 0.22, torsoRadius: 0.070,
     legLength: 0.284, armLength: 0.160,
     shoulderWidth: 0.18, hipWidth: 0.08,
@@ -33,9 +36,11 @@ const ANTHROPOMETRY: Record<string, Anthropometry> = {
     shoulderWidth: 0.22, hipWidth: 0.10,
     skinColor: 0xf5cba7, outfitColor: 0x93c5fd, accentColor: 0x3b82f6,
   },
-  // FIX-C1: Backend sends 'early_toddler' — proportions interpolated from WHO/CDC 50th percentile (1-2y)
+  // FIX-C1: Backend sends 'early_toddler' — proportions for 1-2y (WHO/CDC 50th percentile)
+  // Head: HC p50 18mo ≈ 48cm → headR=0.076m (9.3% of 0.82m)
+  // Visual adjustment: 0.088m (10.7%) for better child proportion feel
   early_toddler: {
-    realHeight: 0.82, headRadius: 0.076, neckLength: 0.046,
+    realHeight: 0.82, headRadius: 0.088, neckLength: 0.046,
     torsoLength: 0.258, torsoRadius: 0.076,
     legLength: 0.370, armLength: 0.210,
     shoulderWidth: 0.20, hipWidth: 0.09,
@@ -462,14 +467,58 @@ export class ProceduralFigure {
     const isInteract = isGrab || isReach || isPull || isLunge || isLookAround || isPause || isHurt || isCrying || isGetUp || isClimbFail || isSlide || isRareEvent;
     const isIdle  = !isWalk && !isRun && !isWade && !isCrawl && !isFall && !isClimb && !isInteract;
 
-    // FIX #1: cycleRate = 0 when idle — stops sliding!
-    // Idle uses a separate breathTimer for subtle breathing only.
-    const cycleRate = isRun ? 3.8 : isWalk ? 2.5 : isWade ? 1.2 : isCrawl ? 3.2
-      : isFall ? 5.0 : isClimb ? 2.5 : isHurt ? 2.0 : isCrying ? 1.5
-      : isGetUp ? 0.8
-      : action === 'push' ? 1.0 : action === 'pick_up' ? 0.8 : action === 'sit_down' ? 0.5
-      : action === 'stand_up' ? 0.8 : isSlide ? 0 : isRareEvent ? 0
-      : isInteract ? 1.0 : 0;   // idle & pause = 0
+    // ── Velocity-proportional cycle rate (Froude gait model) ─────────────
+    // stepFreq (Hz) = velocity / strideLength
+    // strideLength ≈ legLength × 1.2 (walk) | legLength × 1.8 (run)
+    // cycleRate (rad/s) = stepFreq × 2π
+    //
+    // Example early_toddler (legLen=0.37m):
+    //   walk 0.72 m/s → stride=0.444m → stepFreq=1.62Hz → cycleRate=10.2 rad/s
+    //   run  1.40 m/s → stride=0.666m → stepFreq=2.10Hz → cycleRate=13.2 rad/s
+    //   Clamped to [4.0, 12.0] for walk and [6.0, 16.0] for run.
+    const vel = entry?.v ?? 0;
+    const legLen = this.a.legLength;
+
+    let cycleRate: number;
+    if (isWalk || isRun) {
+      const strideLen = isRun ? legLen * 1.80 : legLen * 1.20;
+      const vEff      = Math.max(0.1, vel);  // avoid division by zero
+      const rawRate   = (vEff / strideLen) * 2 * Math.PI;
+      if (isRun) {
+        cycleRate = Math.max(6.0, Math.min(16.0, rawRate));
+      } else {
+        cycleRate = Math.max(4.0, Math.min(12.0, rawRate));
+      }
+    } else if (isWade) {
+      cycleRate = 2.5;                          // wading: slow, heavy steps
+    } else if (isCrawl) {
+      // Crawl: slow deliberate motion. Froude for crawl: ~0.5-1.0 Hz gait
+      const strideCrawl = legLen * 0.80;
+      const vCrawl = Math.max(0.08, vel);
+      cycleRate = Math.max(2.0, Math.min(5.0, (vCrawl / strideCrawl) * 2 * Math.PI));
+    } else if (isFall) {
+      cycleRate = 5.0;                          // flailing during fall
+    } else if (isClimb) {
+      cycleRate = 2.5;                          // steady climb rhythm
+    } else if (isHurt) {
+      cycleRate = 2.0;
+    } else if (isCrying) {
+      cycleRate = 1.5;
+    } else if (isGetUp) {
+      cycleRate = 0.8;
+    } else if (action === 'push') {
+      cycleRate = 1.0;
+    } else if (action === 'pick_up') {
+      cycleRate = 0.8;
+    } else if (action === 'sit_down' || action === 'stand_up') {
+      cycleRate = 0.5;
+    } else if (isSlide || isRareEvent) {
+      cycleRate = 0;
+    } else if (isInteract) {
+      cycleRate = 1.0;
+    } else {
+      cycleRate = 0;   // idle: no limb cycle
+    }
     this.cycle += dt * cycleRate;
     this._breathTimer2 += dt;  // always ticks for idle breathing
 
@@ -496,12 +545,13 @@ export class ProceduralFigure {
       this._setTarget('kneeL_x',  Math.max(0, -c * kneeSwing));
       this._setTarget('kneeR_x',  Math.max(0,  c * kneeSwing));
     } else if (isCrawl) {
-      // Crawl: hip fully flexed ~90°, alternating fore/aft
-      // anatomy: hip flexion up to 90° is fine for crawl position
-      this._setTarget('hipL_x',  -(1.22 + s * 0.32));   // −70° ± 18° for a lower hip profile
-      this._setTarget('hipR_x',  -(1.22 - s * 0.32));
-      this._setTarget('kneeL_x',  1.57 - s * 0.28);     // 90° ± 16° knee flex down to ground
-      this._setTarget('kneeR_x',  1.57 + s * 0.28);
+      // Crawl: hip highly flexed (knees near chest), alternating push/pull
+      // Hip: −60° to −80° flexion (toward chest). Knee: 70°-90° flex.
+      // With spine 80° forward, resultant leg position = knee on/near floor ✓
+      this._setTarget('hipL_x',  -(1.22 + s * 0.26));   // 56°–82° hip flexion
+      this._setTarget('hipR_x',  -(1.22 - s * 0.26));
+      this._setTarget('kneeL_x',  1.40 + s * 0.17);     // 73°–87° knee flex
+      this._setTarget('kneeR_x',  1.40 - s * 0.17);
     } else if (isFall) {
       // Fall / stumble: legs slightly bent backward (natural stumble reflex)
       const flail = Math.sin(this.cycle * 5) * 0.28; // slightly slower flail, less extreme
@@ -683,10 +733,12 @@ export class ProceduralFigure {
       this._setTarget('shL_x', -s * armSwing);
       this._setTarget('shR_x',  s * armSwing);
     } else if (isCrawl) {
-      // Crawl: arms reach forward alternately (weight-bearing, elbow straight)
-      // Shoulder swings ±26° around −90° (arms pointing forward/down)
-      this._setTarget('shL_x', -(1.57 - s * 0.35));  // -90° pointing down
-      this._setTarget('shR_x', -(1.57 + s * 0.35));
+      // Crawl: arms reach FORWARD alternately (positive X = forward flexion in this rig)
+      // Weight-bearing: shoulder at ~60°-80° forward flexion, elbow nearly straight
+      // Joint convention: shL_x positive = forward (arm swings toward face direction)
+      // Phase: s>0 → L arm reaching forward, s<0 → R arm reaching forward
+      this._setTarget('shL_x',  (1.22 + s * 0.26));   // 56°–82° forward flexion
+      this._setTarget('shR_x',  (1.22 - s * 0.26));   // opposite phase
     } else if (isFall) {
       // Fall: arms instinctively fly up/forward to ~90°-100°
       // FIX-A: was -PI*0.8 = −144°. Correct reflex is forward-upward, not backward.
@@ -791,7 +843,7 @@ export class ProceduralFigure {
     this._setTarget('shR_z',  dynamicAbduct);
 
     // Elbow bend per action
-    let elbowBend = isRun ? 0.60 : isWalk ? 0.30 : isCrawl ? 0.0 : isClimb ? 0.52
+    let elbowBend = isRun ? 0.60 : isWalk ? 0.30 : isCrawl ? 0.17 : isClimb ? 0.52  // crawl: slight elbow bend for weight-bearing
       : isHurt ? (action === 'hurt_light' ? 1.05 : action === 'hurt_medium' ? 1.40 : 0.52)
       : isCrying ? 1.40 : isGetUp ? (1.57 * (1 - Math.min(1, this.cycle * 0.8)))
       : isSlide ? 0.17
@@ -809,8 +861,11 @@ export class ProceduralFigure {
 
     // ── Spine ─────────────────────────────────────────────────────────────
     if (isCrawl) {
-      this._setTarget('spine_x',  0.70);   // FIX-W3: 40° natural crawl lean (was 63° — too extreme for infant)
-      this._setTarget('spine_y',  0);
+      // Quadrupedal crawl: torso nearly horizontal (80°-85° lean forward)
+      // spine_x = 1.40 rad (80°) — proper flat-back crawl posture
+      // Old 0.70 rad (40°) was "bending over" not "crawling on all fours"
+      this._setTarget('spine_x',  1.40);
+      this._setTarget('spine_y',  s * 0.06);  // slight lateral sway from weight shift
     } else if (isRun) {
       this._setTarget('spine_x',  0.18);
       this._setTarget('spine_y',  s * 0.10);
@@ -1057,11 +1112,14 @@ export class ProceduralFigure {
 
     // ══════════════════════════════════════════════════════════════════════
     // APPLY LERPED ROTATIONS
-    // FIX #17: dt*4 = ~400ms convergence (smooth: prevents jerky instant changes)
-    //          Was dt*8 (200ms) which was too fast — actions flipped in blink of an eye.
-    //          dt*4 gives a natural transition feel for child-like movements.
+    // LERP = min(1, dt × λ)   — exponential convergence
+    // λ=12: 99% convergence in 4.6/12 = 383ms at 60fps
+    // λ=4 (old): 99% in 1.15s — too sluggish for dynamic child motion
+    // Priority states (hurt/fall) get faster λ=20 for immediate reaction
     // ══════════════════════════════════════════════════════════════════════
-    const LERP = Math.min(1, dt * 4);
+    const LERP_NORMAL   = Math.min(1, dt * 12);
+    const LERP_PRIORITY = Math.min(1, dt * 20);  // hurt/fall: snap faster
+    const LERP = (isFall || isHurt) ? LERP_PRIORITY : LERP_NORMAL;
 
     const applyR = (target: THREE.Object3D, xKey: string, yKey = '', zKey = '') => {
       if (xKey) target.rotation.x = this._lerpAngle(xKey, LERP);

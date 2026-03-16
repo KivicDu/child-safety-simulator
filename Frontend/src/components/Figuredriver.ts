@@ -65,20 +65,38 @@ export interface ModelRegistryEntry {
   restPoseOffsets?:    Partial<Record<keyof BoneMap, [number, number, number]>>;
 }
 
+// ── JOINT_LIMITS — Anatomical ROM per body part (radians) ──────────────────
+// sign convention: X positive = forward/upward rotation
+// Shoulder: negative = backward extension, positive = forward flexion / overhead
+// Note: climbing requires shoulder X down to -π (arm overhead = -180° in this rig)
+//       Use clampJoint() for normal motion; use climbClampJoint() for climb states.
 const JOINT_LIMITS: Record<string, [number, number]> = {
-  armL_x:     [-1.047, Math.PI],   // shoulder: -60° → +180° (overhead)
-  armR_x:     [-1.047, Math.PI],
-  forearmL_x: [-2.530, 0],
+  armL_x:     [-1.047, Math.PI],   // shoulder: -60° (back ext) → +180° (forward/overhead)
+  armR_x:     [-1.047, Math.PI],   // Standard: -60° covers walk/run/grab
+  // CLIMB OVERRIDE: arm must reach overhead (-140° to -180°), stored separately
+  armL_x_climb: [-Math.PI, 0],     // climb: -180° (overhead) → 0° (side)
+  armR_x_climb: [-Math.PI, 0],
+  forearmL_x: [-2.530, 0],         // elbow: -145° (full flex) → 0° (straight)
   forearmR_x: [-2.530, 0],
-  thighL_x:   [-1.745, 1.222],     // hip: -100° → +70° (sitting/lying/crawl needs ≥90°)
+  thighL_x:   [-1.745, 1.222],     // hip: -100° (flex) → +70° (extension)
   thighR_x:   [-1.745, 1.222],
-  shinL_x:    [0, 2.443],          // knee: 0° → 140°, no hyperextension
+  shinL_x:    [0, 2.443],          // knee: 0° (straight) → 140° (flex), no hyperextension
   shinR_x:    [0, 2.443],
-  spine_x:    [-0.436, 1.309],     // spine: -25° → +75°
-  spine_y:    [-0.349, 0.349],
-  head_x:     [-0.524, 0.524],
-  head_y:     [-0.785, 0.785],
+  spine_x:    [-0.436, 1.309],     // spine: -25° (backward) → +75° (forward)
+  spine_y:    [-0.349, 0.349],     // spine: ±20° axial rotation
+  head_x:     [-0.524, 0.524],     // head: ±30° nod
+  head_y:     [-0.785, 0.785],     // head: ±45° turn
 };
+
+// clampJoint with climb-state override
+function clampJointState(key: string, value: number, isClimbing = false): number {
+  // For arm X during climbing, use extended range allowing overhead reach
+  if (isClimbing && (key === 'armL_x' || key === 'armR_x')) {
+    const lim = JOINT_LIMITS[key + '_climb'] ?? JOINT_LIMITS[key];
+    if (lim) return Math.max(lim[0], Math.min(lim[1], value));
+  }
+  return clampJoint(key, value);
+}
 
 function clampJoint(key: string, value: number): number {
   const lim = JOINT_LIMITS[key];
@@ -385,7 +403,10 @@ export class SkeletonDriver implements IFigureDriver {
     const isWalk  = ['walk', 'walk_to', 'walk_random', 'investigate', 'reach'].includes(action);
     const isWade  = action === 'wade';
     const isCrawl = action === 'crawl';
-    const isFall  = ['falling', 'free_fall', 'stumble', 'trip', 'fall_forward', 'lose_balance'].includes(action);
+    // FIXED: stumble/trip are NOT isFall (they're interact states matching ProceduralFigure)
+    // isFall = only genuine airborne/gravity falls
+    const isFall  = ['falling', 'free_fall', 'fall_forward'].includes(action);
+    const isStumble = ['stumble', 'trip', 'lose_balance'].includes(action);  // these use isInteract path
     const isClimb = ['climb_on', 'climb', 'climb_approach', 'climb_reach', 'climb_pull', 'climb_mount', 'climb_down', 'step_up', 'step_down'].includes(action);
     const isClimbFail = action === 'climb_fail';
     const isHurt     = ['hurt_light', 'hurt_medium', 'hurt_heavy', 'hurt_shock', 'recoil'].includes(action);
@@ -399,7 +420,7 @@ export class SkeletonDriver implements IFigureDriver {
     const isPause    = action === 'pause';
     const isSlide    = action === 'slide';
     const isRareEvent = ['dodge', 'push', 'throw', 'pick_up', 'sit_down', 'stand_up', 'jump', 'land'].includes(action);
-    const isInteract = isGrab || isReach || isPull || isLunge || isLookAround || isPause || isHurt || isCrying || isGetUp || isClimbFail || isSlide || isRareEvent;
+    const isInteract = isGrab || isReach || isPull || isLunge || isLookAround || isPause || isHurt || isCrying || isGetUp || isClimbFail || isSlide || isRareEvent || isStumble;
     const isIdle  = !isRun && !isWalk && !isWade && !isCrawl && !isFall && !isClimb && !isInteract;
     const vel     = entry?.v ?? 0;
 
@@ -411,8 +432,16 @@ export class SkeletonDriver implements IFigureDriver {
       else if (isCrawl) clipName = 'crawl';
       this.fadeToAction(clipName, 0.2);
 
-      const baseVel = isRun ? 3.0 : 1.5;
-      this.mixer.timeScale = vel > 0.1 ? vel / (baseVel * this.limbScaleFactor) : 1.0;
+      // [MIXER-FIX] velocity-proportional timeScale using Froude gait model
+      // timeScale = actual_velocity / reference_velocity_of_animation_clip
+      // Animation clips are recorded at reference speeds; scaling by ratio gives natural motion.
+      // reference: walk clip at 1.0 m/s, run clip at 3.0 m/s (typical Mixamo)
+      // limbScaleFactor corrects for age-proportional stride (shorter legs = higher frequency)
+      const refVel    = isRun ? 3.0 : isWalk ? 1.0 : isCrawl ? 0.3 : 1.0;
+      const effLimbSc = Math.max(0.5, this.limbScaleFactor);
+      this.mixer.timeScale = vel > 0.05
+        ? Math.max(0.2, Math.min(3.0, vel / (refVel * effLimbSc)))
+        : 0.5;   // minimum 0.5 when nearly still (idle breathing/shift)
       this.mixer.update(dt);
 
       // FIX-C3: Clear per-frame mixer snapshot so _applyBone recaptures fresh values
@@ -422,7 +451,14 @@ export class SkeletonDriver implements IFigureDriver {
       if (!regEntry.forceProcedural) {
         // FIX-BUG03: Only procedurally override bones NOT in mixer
         const LERP = Math.min(1, dt * 14);
-        this.cycle += dt * (isRun ? 3.8 : isWalk ? 2.5 : 0.6);
+        // Velocity-proportional cycle rate — same Froude model as ProceduralFigure
+        // limbScaleFactor adjusts for age-proportional limb length
+        const vEff = vel > 0.1 ? vel : 0.5;
+        const froudeBase = 5.0 / this.limbScaleFactor;  // ~5.15 rad/s at full stride
+        const mixerCycleRate = isRun  ? Math.min(16.0, froudeBase * vEff / 2.0)
+          : isWalk ? Math.min(12.0, froudeBase * vEff / 1.0)
+          : 0.6;
+        this.cycle += dt * mixerCycleRate;
         const s = Math.sin(this.cycle);
         const armSwing  = isRun ? 1.1 : isWalk ? 0.70 : isWade ? 0.30 : 0;
         const elbowBend = isWalk ? 0.5 : isRun ? 0.9 : 0.2;
@@ -451,13 +487,26 @@ export class SkeletonDriver implements IFigureDriver {
     }
 
     // ── Full procedural fallback (no mixer, or forceProcedural=true) ───────
-    // FIX #1: cycleRate = 0 when idle to prevent sliding
-    const cycleRate = isRun ? 3.8 : isWalk ? 2.5 : isWade ? 1.2 : isCrawl ? 3.2
-      : isFall ? 5.0 : isClimb ? 1.5 : isHurt ? 2.0 : isCrying ? 1.5
-      : isGetUp ? 0.8
-      : action === 'push' ? 1.0 : action === 'pick_up' ? 0.8 : action === 'sit_down' ? 0.5
-      : action === 'stand_up' ? 0.8 : isSlide ? 0 : isRareEvent ? 0
-      : isInteract ? 1.0 : 0;
+    // Froude-based cycle rate: matches ProceduralFigure.ts approach
+    // limbScaleFactor = 0.65 + age*0.07; for early_toddler(age=2): ~0.79
+    const effScale  = Math.max(0.5, this.limbScaleFactor);
+    const baseFreq  = 5.0 / effScale;   // ~6.3 rad/s at toddler scale
+    let cycleRate: number;
+    if (isWalk) {
+      const vW = vel > 0.1 ? vel : 0.72;
+      cycleRate = Math.max(4.0, Math.min(12.0, baseFreq * vW));
+    } else if (isRun) {
+      const vR = vel > 0.1 ? vel : 1.8;
+      cycleRate = Math.max(6.0, Math.min(16.0, baseFreq * vR / 1.5));
+    } else if (isCrawl) {
+      const vC = vel > 0.05 ? vel : 0.15;
+      cycleRate = Math.max(2.0, Math.min(5.0, baseFreq * vC * 2));
+    } else {
+      cycleRate = isWade ? 2.5 : isFall ? 5.0 : isClimb ? 2.5 : isHurt ? 2.0 : isCrying ? 1.5
+        : isGetUp ? 0.8 : action === 'push' ? 1.0 : action === 'pick_up' ? 0.8
+        : action === 'sit_down' ? 0.5 : action === 'stand_up' ? 0.8
+        : isSlide ? 0 : isRareEvent ? 0 : isInteract ? 1.0 : 0;
+    }
     this.cycle += dt * cycleRate;
     const s = Math.sin(this.cycle);
     const c = Math.cos(this.cycle);
@@ -585,9 +634,15 @@ export class SkeletonDriver implements IFigureDriver {
       this._t('armL_x', -(1.22 + flA));
       this._t('armR_x', -(1.22 - flA));
     } else if (isClimb) {
+      // Climb: one arm overhead pulling, one arm at side pushing
+      // Use climbClampJoint to allow shoulder X down to -PI (overhead reach)
       const t2 = Math.abs(s);
-      this._t('armL_x', -(2.44 - t2 * 0.87));
-      this._t('armR_x', -(2.09 - t2 * 0.87));
+      // Raw targets: -2.44 to -1.57 (overhead -140° to -90°)
+      // clampJointState('armL_x', val, true) uses extended range [-PI, 0]
+      const rawL = -(2.44 - t2 * 0.87);  // alternates -157° to -90°
+      const rawR = -(2.09 - t2 * 0.87);  // alternates -120° to -57°
+      this._t('armL_x', clampJointState('armL_x', rawL, true));
+      this._t('armR_x', clampJointState('armR_x', rawR, true));
     } else if (isHurt) {
       if (action === 'hurt_light' || action === 'recoil') {
         this._t('armL_x', -0.52); this._t('armR_x', -0.52);
