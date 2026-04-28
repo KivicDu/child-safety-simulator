@@ -120,17 +120,46 @@ export function classifyObject(obj, sceneBbox, floorInfo) {
     }
   }
 
-  // 3. Fallback Classification
+  // 3. Fallback: Shape-based Classification (when no keyword match)
+  let classificationSource = matchScore > 0 ? 'keyword' : 'shape';
+
   if (!match) {
-    // If no keyword match, guess by material + size
     const dims = [
       obj.boundingBox.max[0] - obj.boundingBox.min[0],
       obj.boundingBox.max[1] - obj.boundingBox.min[1],
       obj.boundingBox.max[2] - obj.boundingBox.min[2]
     ];
-    const volume = dims[0] * dims[1] * dims[2];
+    const [width, height, depth] = dims;
+    const volume = width * height * depth;
+    const maxHoriz = Math.max(width, depth) || 0.001;
 
-    if (estimatedMaterial === 'wood' && volume > 0.5) {
+    // Shape ratios
+    const hw = height / (width || 0.001);   // height / width
+    const hd = height / (depth || 0.001);   // height / depth
+    const wd = width / (depth || 0.001);    // width / depth
+    const flatness = Math.min(width, height, depth) / (Math.max(width, height, depth) || 0.001);
+    const heightToBase = height / maxHoriz;
+
+    // Shape-based rules (priority: most specific first)
+    if (heightToBase > 4.0 && height > 0.5) {
+      // Very tall and thin → pole / lamp / stand
+      match = { category: 'decor', subcategory: 'pole', surfaceType: estimatedMaterial || 'metal', attractionByAge: { toddler: 0.4 } };
+    } else if (heightToBase > 2.0 && height > 0.8) {
+      // Tall → shelf / cabinet
+      match = { category: 'furniture', subcategory: 'storage', surfaceType: estimatedMaterial || 'wood', attractionByAge: { toddler: 0.5 }, tipHazard: true };
+    } else if (flatness < 0.1 && height < 0.15) {
+      // Very flat + low → rug / mat / floor cover
+      match = { category: 'decor', subcategory: 'floor', surfaceType: estimatedMaterial || 'fabric', attractionByAge: { infant: 0.5 }, tripHazard: true };
+    } else if (flatness < 0.15 && height > 0.3 && maxHoriz > 0.5) {
+      // Flat + wide + elevated → table / shelf surface
+      match = { category: 'furniture', subcategory: 'table', surfaceType: estimatedMaterial || 'wood', attractionByAge: { toddler: 0.3 }, edgeSharpness: 0.5 };
+    } else if (flatness > 0.6 && volume < 0.01) {
+      // Roughly cubic + small → box / small appliance
+      match = { category: 'toy', subcategory: 'general', surfaceType: estimatedMaterial || 'plastic', attractionByAge: { toddler: 0.6 } };
+    } else if (flatness > 0.6 && volume > 0.1) {
+      // Roughly cubic + large → appliance / box
+      match = { category: 'appliance', subcategory: 'general', surfaceType: estimatedMaterial || 'plastic', attractionByAge: { toddler: 0.4 } };
+    } else if (estimatedMaterial === 'wood' && volume > 0.5) {
       match = { category: 'furniture', subcategory: 'general', surfaceType: 'wood', attractionByAge: { toddler: 0.3 } };
     } else if (estimatedMaterial === 'fabric') {
       match = { category: 'decor', subcategory: 'soft', surfaceType: 'fabric', attractionByAge: { infant: 0.6 } };
@@ -166,7 +195,8 @@ export function classifyObject(obj, sceneBbox, floorInfo) {
     },
     attractionByAge: match.attractionByAge || {},
     dangerScore: (match.sharpness || 0) * 10 + (match.fallHazard ? 50 : 0),
-    confidence: matchScore > 0 ? 0.9 : 0.4
+    confidence: classificationSource === 'keyword' ? 0.9 : 0.6,
+    classificationSource,
   };
 
   // Special case: Floor

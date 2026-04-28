@@ -41,4 +41,14 @@ router.post('/upload', upload.single('model'), sceneController.uploadModel);
 // GET /api/scene/:id - Get parsed scene data
 router.get('/scene/:id', sceneController.getScene);
 
+// ── Analysis & Debug Endpoints ────────────────────────────────────────────
+// GET /api/scene/:id/analysis - Full spatial analysis (groups + relations + hazards)
+router.get('/scene/:id/analysis', sceneController.getAnalysis);
+
+// Debug endpoints — individual data layers
+router.get('/scene/:id/objects',   sceneController.getObjects);
+router.get('/scene/:id/groups',    sceneController.getGroups);
+router.get('/scene/:id/relations', sceneController.getRelations);
+router.get('/scene/:id/hazards',   sceneController.getHazards);
+
 export default router;

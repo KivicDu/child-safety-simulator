@@ -19,7 +19,7 @@ const ResetPassword = () => {
     setMessage("");
 
     if (password !== confirmPassword) {
-      return setError("Passwords do not match");
+      return setError("Passwords do not match.");
     }
 
     setLoading(true);
@@ -30,7 +30,7 @@ const ResetPassword = () => {
       });
 
       if (response.data.success) {
-        setMessage("Password reset successful! Redirecting to login...");
+        setMessage("Password reset successful. Redirecting...");
         setTimeout(() => {
           navigate("/login");
         }, 3000);
@@ -49,22 +49,21 @@ const ResetPassword = () => {
     <AuthLayout
       title="New Password"
       subtitle="Enter your new password"
-      icon="🔐"
     >
-      <form onSubmit={handleSubmit} className="space-y-6">
+      <form onSubmit={handleSubmit} className="space-y-4 pt-2">
         {error && (
-          <div className="text-red-500 text-sm text-center bg-red-100 p-3 rounded-xl border-2 border-red-200 font-bold">
+          <div style={{ background:"rgba(220, 38, 38, 0.1)", border:"1px solid rgba(220, 38, 38, 0.3)", color:"#fca5a5", borderRadius:8, padding:"10px 14px", fontSize:"0.85rem", fontWeight:700, textAlign:"center", boxShadow: "inset 0 0 10px rgba(220,38,38,0.05)" }}>
             {error}
           </div>
         )}
         {message && (
-          <div className="text-green-600 text-sm text-center bg-green-100 p-3 rounded-xl border-2 border-green-200 font-bold">
+          <div style={{ background:"rgba(34, 197, 94, 0.1)", border:"1px solid rgba(34, 197, 94, 0.3)", color:"#86efac", borderRadius:8, padding:"10px 14px", fontSize:"0.85rem", fontWeight:700, textAlign:"center", boxShadow: "inset 0 0 10px rgba(34,197,94,0.05)" }}>
             {message}
           </div>
         )}
 
         <div>
-          <label className="block text-gray-600 text-sm font-extrabold uppercase tracking-wider mb-2 ml-2">
+          <label style={labelStyle}>
             New Password
           </label>
           <input
@@ -74,12 +73,12 @@ const ResetPassword = () => {
             required
             minLength={6}
             placeholder="••••••••"
-            className="w-full px-5 py-4 rounded-xl bg-pink-50 border-2 border-pink-100 text-gray-700 placeholder-pink-300 focus:outline-none focus:ring-4 focus:ring-pink-200 focus:border-pink-400 transition-all font-bold"
+            className="auth-input"
           />
         </div>
 
         <div>
-          <label className="block text-gray-600 text-sm font-extrabold uppercase tracking-wider mb-2 ml-2">
+          <label style={labelStyle}>
             Confirm Password
           </label>
           <input
@@ -89,33 +88,43 @@ const ResetPassword = () => {
             required
             minLength={6}
             placeholder="••••••••"
-            className="w-full px-5 py-4 rounded-xl bg-pink-50 border-2 border-pink-100 text-gray-700 placeholder-pink-300 focus:outline-none focus:ring-4 focus:ring-pink-200 focus:border-pink-400 transition-all font-bold"
+            className="auth-input"
           />
         </div>
 
-        <div className="pt-2">
+        <div className="pt-4">
           <button
             type="submit"
             disabled={loading}
-            className="w-full py-4 px-6 bg-gradient-to-r from-yellow-400 to-orange-500 hover:from-yellow-300 hover:to-orange-400 text-white text-xl font-black rounded-2xl shadow-lg border-b-[6px] border-orange-600 active:border-b-0 active:translate-y-[6px] transition-all transform hover:-translate-y-1 block disabled:opacity-50"
+            className="auth-btn"
           >
-            {loading ? "UPDATING... ⏳" : "RESET PASSWORD 🚀"}
+            {loading ? "UPDATING..." : "RESET PASSWORD"}
           </button>
         </div>
       </form>
 
-      <div className="mt-8 text-center text-sm">
-        <p className="mt-2 text-gray-300">
-          <Link
-            to="/login"
-            className="hover:text-gray-500 transition-colors underline font-bold"
-          >
-            Back to Login
-          </Link>
-        </p>
+      <div style={{ marginTop: 24, textAlign:"center", fontSize:"0.9rem", color:"rgba(245, 230, 200, 0.6)", fontWeight:600 }}>
+        Remembered it?{" "}
+        <Link
+          to="/login"
+          style={{ color:"#D4AF37", fontWeight:700, textDecoration:"underline" }}
+        >
+          Back to Login
+        </Link>
       </div>
     </AuthLayout>
   );
+};
+
+const labelStyle: React.CSSProperties = {
+  display: "block",
+  fontSize: "0.85rem",
+  fontWeight: 700,
+  color: "#D4AF37",
+  textTransform: "uppercase",
+  letterSpacing: "0.08em",
+  marginBottom: 8,
+  fontFamily: "Georgia, serif",
 };
 
 export default ResetPassword;

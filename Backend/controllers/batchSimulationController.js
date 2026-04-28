@@ -154,11 +154,6 @@ async function runSingleSimulation(sceneId, sceneData, ageGroupId, ageGroup, age
 
   console.log(`   🧒 Spawning ${agentCount} agents...`);
 
-  // [BUG-FIX] handleToCollider MUST be built before the spawn loop.
-  // Previously declared with `const` *after* the loop, placing it in the
-  // Temporal Dead Zone when the intersectionsWithShape callback fired on
-  // any overlapping shape — throwing a ReferenceError and silently skipping
-  // every spawn-overlap check. Agents could spawn inside furniture/each other.
   const handleToCollider = new Map();
   colliders.forEach(c => {
     if (c.collidersArr) {
@@ -254,11 +249,6 @@ async function runSingleSimulation(sceneId, sceneData, ageGroupId, ageGroup, age
 
   const eventQueue = new physicsEngine.rapier.EventQueue(true);
 
-  // [BUG-FIX] handleToCollider is now built before the spawn loop (see above).
-
-  // [BUG-FIX] Agent uses a multipart body (head/torso/legs). `a.collider`
-  // (singular) is always null — only `a.colliders` (plural) is populated.
-  // Register all three part-colliders so agent↔object hits are detected.
   const handleToAgent = new Map();
   agents.forEach(a => {
     if (a.colliders) {

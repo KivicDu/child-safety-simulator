@@ -1,27 +1,6 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // physicsEngine.js  — v4
 //
-// FIXES v4 (Report Priority 1 + 4):
-//  • [P1] getFloorHeightAt: removed hidden y+0.3 offset. Origin = exact y.
-//    hitY = y - toi (not origin.y + dir.y*t with offset).
-//    Old hidden offset caused spawn hovering/sinking and DBC false-positives.
-//  • [P4] createHandSensors: new method — creates two kinematic sensor spheres
-//    (left/right hand) for reach-based object interaction instead of torso collision.
-//  • [P4] updateHandSensorPositions: new method — repositions hand sensors each
-//    frame to match agent body pos + heading-relative arm extension.
-//
-// BUG FIX v3:
-//  • [FIX BOUNCE BUG] createAgentMultipartCollider: caller passes FEET position
-//    (floor Y + 0.02). Engine internally adds halfH to centre the body.
-//    Previously, both the caller AND the engine were adding halfH → body spawned
-//    halfH above the floor, causing gravity → bounce → KCC push → infinite loop.
-//    Contract is now explicit: position[1] = feet Y. Engine owns the +halfH.
-//
-//  • [FIX FALL HEIGHT] getBodyCenterY / getFeetY helpers added so agent.js can
-//    convert between body-centre (Rapier translation) and feet Y without
-//    hardcoding halfH everywhere. Fixes free_fall height calculation that used
-//    pos.y (centre) - spawnY (feet) → always positive even on flat ground.
-//
 // All other API surface preserved (no breaking changes).
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -101,7 +80,6 @@ class PhysicsEngine {
       activeEvents = activeEvents | this.rapier.ActiveEvents.INTERSECTION_EVENTS;
     }
 
-    // [BUG-A FIX] fixed↔kinematic collision events cần KINEMATIC_FIXED opt-in
     const activeColTypes = this.rapier.ActiveCollisionTypes.DEFAULT
       | this.rapier.ActiveCollisionTypes.KINEMATIC_FIXED;
 
@@ -314,12 +292,6 @@ class PhysicsEngine {
       controller.computeColliderMovement(collider, desiredMove);
       const corrected = controller.computedMovement();
 
-      // [PERF-FIX-5] MoveDebug log đã disabled.
-      // if (Math.random() < 0.05) {
-      //   const pos = rigidBody.translation();
-      //   console.log(`[MoveDebug] ...`);
-      // }
-
       // pos phải được khai báo ở đây (độc lập với MoveDebug block ở trên)
       const pos = rigidBody.translation();
 
@@ -413,9 +385,6 @@ class PhysicsEngine {
 
     // Method 2: intersectColliders — works for kinematic+trimesh pairs where
     // contactPair returns no manifold. Uses shape overlap test instead.
-    // [CONTACT-FIX] Rapier contactPair does NOT reliably generate manifolds for
-    // kinematic_position_based ↔ fixed_trimesh pairs (known Rapier limitation).
-    // intersectColliders is a broader overlap test that always works for these pairs.
     try {
       let hasIntersection = false;
       world.intersectionPair(collider1, collider2, (intersecting) => {
@@ -540,7 +509,6 @@ class PhysicsEngine {
 
       const ray = new this.rapier.Ray({ x, y, z }, { x: 0, y: -1, z: 0 });
       
-      // [FIX] rapier3d-compat@0.19.3 uses flat argument signature for filtering:
       // castRay(ray, maxToi, solid, filterFlags, filterGroups, excludeCollider, excludeRigidBody)
       // Using 0x2 (EXCLUDE_KINEMATIC) ensures we ignore all agents (which are kinematic).
       const hit = world.castRay(ray, maxDistance, true, 2);
@@ -751,11 +719,6 @@ class PhysicsEngine {
     let activeEvents = this.rapier.ActiveEvents.COLLISION_EVENTS;
     if (isSensor) activeEvents |= this.rapier.ActiveEvents.INTERSECTION_EVENTS;
 
-    // [BUG-A FIX] Trimesh là fixed body, agent là kinematic body.
-    // Rapier mặc định KHÔNG fire collision events cho fixed↔kinematic pairs.
-    // Phải set KINEMATIC_FIXED trên collider để opt-in vào loại pair này.
-    // Không set → drainCollisionEvents() không bao giờ nhận được pair nào
-    // → contactCandidates = 0 mãi mãi dù agents đang va chạm thực sự.
     const activeColTypes = this.rapier.ActiveCollisionTypes.DEFAULT
       | this.rapier.ActiveCollisionTypes.KINEMATIC_FIXED;
 

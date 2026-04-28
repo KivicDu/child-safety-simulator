@@ -459,47 +459,54 @@ const Simulator = () => {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-pink-50 via-white to-rose-50 text-gray-700 font-sans selection:bg-pink-200 selection:text-pink-900">
-      <Header />
-
-      {/* Background blobs */}
-      <div className="fixed inset-0 pointer-events-none overflow-hidden z-0">
-        <div className="blob blob-1" />
-        <div className="blob blob-2" />
-        <div className="blob blob-3" />
+    <div className="min-h-screen bg-[#0A0F1D] text-[#FDFDFD] font-sans selection:bg-[#FFE4A0]/30 selection:text-[#FFE4A0] relative overflow-hidden">
+      {/* MAGICAL FAIRY DUST BACKGROUND */}
+      <div className="fixed inset-0 pointer-events-none opacity-20 bg-[url('data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI0MDAiIGhlaWdodD0iNDAwIj4KICA8ZyBmaWxsPSIjRkZFNEEwIj4KICAgIDxjaXJjbGUgY3g9IjUwIiBjeT0iNTAiIHI9IjEiIG9wYWNpdHk9IjAuOCIgLz4KICAgIDxjaXJjbGUgY3g9IjE1MCIgY3k9IjI1MCIgcj0iMS41IiBvcGFjaXR5PSIwLjUiIC8+CiAgICA8Y2lyY2xlIGN4PSIyNTAiIGN5PSIxMjAiIHI9IjIiIG9wYWNpdHk9IjAuMyIgLz4KICAgIDxjaXJjbGUgY3g9IjMzMCIgY3k9IjMyMCIgcj0iMSIgb3BhY2l0eT0iMC42IiAvPgogICAgPGNpcmNsZSBjeD0iMTAwIiBjeT0iMzUwIiByPSIwLjUiIG9wYWNpdHk9IjAuOSIgLz4KICA8L2c+Cjwvc3ZnPg==')] [background-size:200px_200px] animate-[pulse_4s_ease-in-out_infinite] z-0" />
+      
+      <div className="relative z-20">
+        <Header />
       </div>
 
       {/* --- Main Simulator Interface --- */}
       <section
         id="simulator"
-        className="relative z-10 min-h-screen pt-20 pb-16 px-5"
+        className="relative z-10 min-h-screen pt-24 pb-16 px-5"
       >
         <div className="max-w-6xl mx-auto">
           <div className="mb-6">
-            <span className="text-xs font-bold text-pink-400 tracking-widest uppercase">
-              3D Environment
+            <span 
+              className="text-xs font-bold text-[#FFE4A0]/70 tracking-widest uppercase italic"
+              style={{ fontFamily: "'Cormorant Garamond', serif" }}
+            >
+              The Magic Box
             </span>
-            <h2 className="text-2xl font-black text-slate-700 mt-1">
-              Simulator Controls
+            <h2 
+              className="text-3xl font-black text-[#FFE4A0] mt-1"
+              style={{ fontFamily: "'Cinzel Decorative', serif", textShadow: "0 2px 10px rgba(255,228,160,0.2)" }}
+            >
+              Simulation Controls
             </h2>
           </div>
 
           {/* Error Message */}
           {error && (
-            <div className="mb-6 p-4 bg-red-100 border-2 border-red-400 rounded-xl text-red-700 font-bold">
+            <div className="mb-6 p-4 bg-red-900/40 border border-red-500 rounded-xl text-red-200 font-bold backdrop-blur-sm shadow-[0_0_15px_rgba(255,0,0,0.2)]">
               ❌ {error}
             </div>
           )}
 
           {/* Control Panel */}
-          <div className="glass-panel p-5 mb-6 space-y-3">
+          <div className="p-5 mb-6 space-y-4 bg-[#0A0F1D]/60 backdrop-blur-md border border-[#FFE4A0]/30 rounded-2xl shadow-[0_0_30px_rgba(0,0,0,0.5)]">
             <div className="flex flex-wrap gap-4 items-end">
               {/* File Upload */}
               <div>
-                <label className="block text-xs font-bold text-gray-600 mb-1.5">
-                  📂 3D Model (GLB/GLTF)
+                <label 
+                  className="block text-sm font-bold text-[#FFE4A0]/90 mb-1.5 italic"
+                  style={{ fontFamily: "'Cormorant Garamond', serif" }}
+                >
+                  📂 Enchanted Model (GLB/GLTF)
                 </label>
-                <label className="cursor-pointer bg-white px-4 py-2 rounded-xl shadow-sm border-2 border-dashed border-pink-300 hover:border-pink-500 transition font-bold inline-block text-sm">
+                <label className="cursor-pointer bg-[#0A0F1D]/80 px-4 py-2 flex items-center justify-center rounded-xl shadow-inner border border-[#FFE4A0]/40 hover:border-[#FFE4A0] hover:shadow-[0_0_10px_rgba(255,228,160,0.2)] transition-all font-bold text-sm min-w-[160px] h-11 group">
                   <input
                     type="file"
                     accept=".glb,.gltf"
@@ -507,34 +514,40 @@ const Simulator = () => {
                     onChange={handleFileUpload}
                     className="hidden"
                   />
-                  <span className="text-gray-600">
-                    {fileName || "📂 Choose File"}
+                  <span className="text-[#FDFDFD] group-hover:text-[#FFE4A0] transition-colors truncate max-w-[200px]">
+                    {fileName || "📜 Select Scroll..."}
                   </span>
                 </label>
               </div>
 
               {/* Age Group */}
               <div>
-                <label className="block text-xs font-bold text-gray-600 mb-1.5">
-                  👶 Age Group
+                <label 
+                  className="block text-sm font-bold text-[#FFE4A0]/90 mb-1.5 italic"
+                  style={{ fontFamily: "'Cormorant Garamond', serif" }}
+                >
+                  👶 Kingdom Explorer
                 </label>
                 <select
                   value={ageGroup}
                   onChange={(e) => setAgeGroup(e.target.value)}
-                  className="px-3 py-2 rounded-xl border-2 border-pink-200 font-bold bg-white text-sm"
+                  className="px-3 py-2 rounded-xl border border-[#FFE4A0]/40 bg-[#0A0F1D]/80 text-[#FDFDFD] font-bold text-sm h-11 shadow-inner focus:border-[#FFE4A0] outline-none hover:border-[#FFE4A0]/70 transition-all cursor-pointer"
                 >
-                  <option>Infant (0-1y)</option>
-                  <option>Early Toddler (1-2y)</option>
-                  <option>Late Toddler (2-3y)</option>
-                  <option>Preschool (3-5y)</option>
-                  <option>Child (6-10y)</option>
+                  <option className="bg-[#0A0F1D] text-[#FDFDFD]">Infant (0-1y)</option>
+                  <option className="bg-[#0A0F1D] text-[#FDFDFD]">Early Toddler (1-2y)</option>
+                  <option className="bg-[#0A0F1D] text-[#FDFDFD]">Late Toddler (2-3y)</option>
+                  <option className="bg-[#0A0F1D] text-[#FDFDFD]">Preschool (3-5y)</option>
+                  <option className="bg-[#0A0F1D] text-[#FDFDFD]">Child (6-10y)</option>
                 </select>
               </div>
 
               {/* Agent Count */}
               <div>
-                <label className="block text-xs font-bold text-gray-600 mb-1.5">
-                  🤖 Agents
+                <label 
+                  className="block text-sm font-bold text-[#FFE4A0]/90 mb-1.5 italic"
+                  style={{ fontFamily: "'Cormorant Garamond', serif" }}
+                >
+                  ✨ Illusions
                 </label>
                 <input
                   type="number"
@@ -542,14 +555,17 @@ const Simulator = () => {
                   max="20"
                   value={agentCount}
                   onChange={(e) => setAgentCount(Number(e.target.value))}
-                  className="w-24 px-3 py-2 rounded-xl border-2 border-pink-200 font-bold bg-white text-sm"
+                  className="w-24 px-4 py-2 rounded-xl border border-[#FFE4A0]/40 bg-[#0A0F1D]/80 text-[#FDFDFD] font-bold text-sm h-11 shadow-inner focus:border-[#FFE4A0] outline-none hover:border-[#FFE4A0]/70 transition-all text-center"
                 />
               </div>
 
               {/* Duration */}
               <div>
-                <label className="block text-xs font-bold text-gray-600 mb-1.5">
-                  ⏱️ Duration (s)
+                <label 
+                  className="block text-sm font-bold text-[#FFE4A0]/90 mb-1.5 italic"
+                  style={{ fontFamily: "'Cormorant Garamond', serif" }}
+                >
+                  ⏳ Time Span (s)
                 </label>
                 <input
                   type="number"
@@ -557,7 +573,7 @@ const Simulator = () => {
                   max="30"
                   value={duration}
                   onChange={(e) => setDuration(Number(e.target.value))}
-                  className="w-24 px-3 py-2 rounded-xl border-2 border-pink-200 font-bold bg-white text-sm"
+                  className="w-24 px-4 py-2 rounded-xl border border-[#FFE4A0]/40 bg-[#0A0F1D]/80 text-[#FDFDFD] font-bold text-sm h-11 shadow-inner focus:border-[#FFE4A0] outline-none hover:border-[#FFE4A0]/70 transition-all text-center"
                 />
               </div>
 
@@ -565,47 +581,55 @@ const Simulator = () => {
               <button
                 onClick={startSimulation}
                 disabled={running || !uploadedFile}
-                className="px-6 py-2.5 rounded-xl font-black shadow-lg bg-gradient-to-r from-yellow-400 to-orange-500 text-white hover:from-yellow-300 transition-all disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+                className="px-8 h-11 rounded-xl font-black shadow-[0_0_15px_rgba(212,175,55,0.3)] bg-gradient-to-br from-[#FFE4A0] via-[#D4AF37] to-[#996515] text-[#3A2B00] hover:shadow-[0_0_25px_rgba(212,175,55,0.5)] hover:brightness-110 transition-all disabled:opacity-50 disabled:cursor-not-allowed text-sm uppercase tracking-wider relative overflow-hidden group"
               >
-                {running ? "⏳ Running..." : "🚀 Run Simulation"}
+                <div className="absolute inset-0 bg-white/20 -skew-x-12 -translate-x-full group-hover:animate-[shimmer_1.5s_infinite]" />
+                <span className="relative z-10">{running ? "⏳ Conjuring..." : "🎇 Cast Magic"}</span>
               </button>
             </div>
 
             {/* View Tools Row */}
-            <div className="flex flex-wrap gap-2 pt-3 border-t border-pink-100">
+            <div className="flex flex-wrap gap-3 pt-4 border-t border-[#FFE4A0]/20 mt-2">
               <button
                 onClick={() => setIsBabyView(!isBabyView)}
-                className={`px-4 py-2 rounded-xl font-bold text-xs transition-all ${
+                className={`px-5 py-2 rounded-xl font-bold text-xs transition-all border ${
                   isBabyView
-                    ? "bg-gradient-to-r from-violet-500 to-purple-500 text-white shadow-lg shadow-purple-200/50"
-                    : "bg-white/80 text-gray-600 hover:bg-violet-50 hover:text-violet-600 border border-gray-200"
+                    ? "bg-[#FFE4A0]/20 border-[#FFE4A0] text-[#FFE4A0] shadow-[0_0_15px_rgba(255,228,160,0.3)]"
+                    : "bg-[#0A0F1D] border-[#FFE4A0]/30 text-[#FDFDFD] hover:border-[#FFE4A0]/70 hover:bg-[#FFE4A0]/10 hover:shadow-[0_0_10px_rgba(255,228,160,0.1)]"
                 }`}
               >
-                {isBabyView ? "👶 Baby View ON" : "👁️ Baby View"}
+                {isBabyView ? "👁️ Child's Gaze Active" : "👁️ Enter Child's Gaze"}
               </button>
               <button
                 onClick={handleScreenshot}
-                className="px-4 py-2 rounded-xl font-bold text-xs bg-white/80 text-gray-600 hover:bg-emerald-50 hover:text-emerald-600 border border-gray-200 transition-all"
+                className="px-5 py-2 rounded-xl font-bold text-xs bg-[#0A0F1D] border border-[#FFE4A0]/30 text-[#FDFDFD] hover:border-[#FFE4A0]/70 hover:bg-[#FFE4A0]/10 hover:shadow-[0_0_10px_rgba(255,228,160,0.1)] transition-all"
               >
-                📸 Screenshot
+                📸 Capture Memory
               </button>
             </div>
           </div>
 
           {/* --- Progress Indicator --- */}
           {running && simResult && (
-            <div className="mb-5 p-4 bg-white/60 rounded-2xl shadow backdrop-blur">
+            <div className="mb-5 p-4 bg-[#0A0F1D]/60 backdrop-blur-md border border-[#FFE4A0]/30 rounded-2xl shadow-[0_0_20px_rgba(0,0,0,0.5)]">
               <div className="flex justify-between items-center mb-2">
-                <span className="font-bold text-gray-700 text-sm">Progress</span>
-                <span className="font-black text-lg text-pink-500">
+                <span 
+                  className="font-bold text-[#FFE4A0] text-sm italic tracking-wide"
+                  style={{ fontFamily: "'Cormorant Garamond', serif" }}
+                >
+                  Conjuring Simulation...
+                </span>
+                <span className="font-black text-lg text-[#D4AF37]" style={{ textShadow: "0 0 10px rgba(212,175,55,0.5)" }}>
                   {simResult.progress}%
                 </span>
               </div>
-              <div className="w-full h-3 bg-gray-200 rounded-full overflow-hidden">
+              <div className="w-full h-3 bg-[#0A0F1D] border border-[#FFE4A0]/20 rounded-full overflow-hidden shadow-inner">
                 <div
-                  className="h-full bg-gradient-to-r from-pink-400 to-orange-500 transition-all duration-300"
+                  className="h-full bg-gradient-to-r from-[#D4AF37] to-[#FFE4A0] shadow-[0_0_15px_rgba(255,228,160,0.8)] transition-all duration-300 relative"
                   style={{ width: `${simResult.progress}%` }}
-                />
+                >
+                  <div className="absolute inset-0 bg-white/20 animate-[shimmer_1s_infinite] -skew-x-12" />
+                </div>
               </div>
             </div>
           )}
@@ -613,11 +637,13 @@ const Simulator = () => {
           {/* --- 3D Visualization --- */}
           <div
             ref={canvasContainerRef}
-            className="h-[420px] rounded-2xl border-2 border-gray-800 relative overflow-hidden shadow-xl mb-6"
+            className="h-[420px] rounded-2xl border-2 border-[#D4AF37] shadow-[0_0_30px_rgba(212,175,55,0.2)] bg-[#0A0F1D] relative overflow-hidden mb-6"
           >
+            <div className="absolute inset-0 pointer-events-none ring-1 ring-inset ring-[#FFE4A0]/20 rounded-2xl z-10" />
+            
             {isBabyView && (
-              <div className="absolute top-4 left-1/2 -translate-x-1/2 z-20 px-4 py-2 rounded-full bg-violet-500/90 text-white text-sm font-bold backdrop-blur-sm shadow-lg animate-pulse-glow">
-                👶 Baby View — Camera at child eye level (~60cm)
+              <div className="absolute top-4 left-1/2 -translate-x-1/2 z-20 px-5 py-2 rounded-full bg-[#0A0F1D]/90 border border-[#FFE4A0] text-[#FFE4A0] text-sm font-bold backdrop-blur-md shadow-[0_0_15px_rgba(255,228,160,0.3)] animate-pulse-glow italic" style={{ fontFamily: "'Cormorant Garamond', serif" }}>
+                👁️ Child's Gaze — Camera at eye level (~60cm)
               </div>
             )}
             <Canvas3D
@@ -644,23 +670,25 @@ const Simulator = () => {
           {/* ── Agent Selector Bar ── */}
           {simulationPlayback?.trajectories &&
             simulationPlayback.trajectories.length > 0 && (
-              <div className="glass-panel p-4 mb-5">
-                <div className="flex items-center justify-between mb-2">
-                  <h3 className="text-sm font-black text-slate-700">
-                    👶 Agent Inspector
+              <div className="p-4 mb-5 bg-[#0A0F1D]/60 backdrop-blur-md border border-[#FFE4A0]/30 rounded-2xl shadow-[0_0_20px_rgba(0,0,0,0.5)]">
+                <div className="flex items-center justify-between mb-3">
+                  <h3 
+                    className="text-lg font-black text-[#FFE4A0]"
+                    style={{ fontFamily: "'Cinzel Decorative', serif" }}
+                  >
+                    ✨ Illusions Inspector
                   </h3>
                   {selectedAgentId !== null && (
-                    <button
-                      onClick={() => setSelectedAgentId(null)}
-                      className="text-xs px-3 py-1 rounded-full bg-gray-200 hover:bg-gray-300 text-gray-600 font-bold transition-colors"
-                    >
-                      Show All Agents
-                    </button>
-                  )}
+                     <button
+                       onClick={() => setSelectedAgentId(null)}
+                       className="text-xs px-4 py-1.5 rounded-full bg-transparent border border-[#FFE4A0]/30 text-[#FDFDFD] hover:bg-[#FFE4A0]/20 hover:border-[#FFE4A0] font-bold transition-all"
+                     >
+                       Show All Illusions
+                     </button>
+                   )}
                 </div>
                 <div
-                  className="flex gap-2 overflow-x-auto pb-2"
-                  style={{ scrollbarWidth: "thin" }}
+                  className="flex gap-3 overflow-x-auto pb-3 custom-scrollbar"
                 >
                   {simulationPlayback.trajectories.map(
                     (traj: any, i: number) => {
@@ -692,27 +720,27 @@ const Simulator = () => {
                               isSelected ? null : (traj.agentId ?? i),
                             )
                           }
-                          className={`flex-shrink-0 flex items-center gap-2 px-4 py-2 rounded-xl border-2 transition-all duration-200 cursor-pointer ${
+                          className={`flex-shrink-0 flex items-center gap-2 px-4 py-2 rounded-xl border transition-all duration-300 cursor-pointer ${
                             isSelected
-                              ? "border-pink-400 bg-pink-50 shadow-lg scale-105"
+                              ? "border-[#FFE4A0] bg-[#FFE4A0]/20 shadow-[0_0_15px_rgba(255,228,160,0.3)] scale-105"
                               : selectedAgentId !== null
-                                ? "border-gray-200 bg-gray-50 opacity-50 hover:opacity-80"
-                                : "border-gray-200 bg-white hover:border-pink-300 hover:bg-pink-50"
+                                ? "border-[#FFE4A0]/10 bg-[#0A0F1D]/40 opacity-50 hover:opacity-80 text-[#FDFDFD]"
+                                : "border-[#FFE4A0]/30 bg-[#0A0F1D] text-[#FDFDFD] hover:border-[#FFE4A0]/70 hover:bg-[#FFE4A0]/10"
                           }`}
                         >
                           <div
-                            className="w-3 h-3 rounded-full flex-shrink-0"
-                            style={{ backgroundColor: color }}
+                            className="w-3 h-3 rounded-full flex-shrink-0 shadow-[0_0_5px_currentColor]"
+                            style={{ backgroundColor: color, color: color }}
                           />
-                          <span className="font-bold text-sm text-slate-700">
+                          <span className={`font-bold text-sm ${isSelected ? "text-[#FFE4A0]" : "text-[#FDFDFD]"}`}>
                             Agent {traj.agentId ?? i}
                           </span>
                           {collisions > 0 && (
-                            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-red-100 text-red-600 font-bold">
+                            <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-red-900/60 border border-red-500/50 text-red-200 font-bold">
                               {collisions} 💥
                             </span>
                           )}
-                          <span className="text-[10px] text-gray-400">
+                          <span className="text-[10px] text-[#FFE4A0]/50 ml-1">
                             {distance.toFixed(1)}m
                           </span>
                         </button>
@@ -808,74 +836,77 @@ const Simulator = () => {
                       ageGroupNames[ageId] || ageGroupNames["early_toddler"];
 
                     return (
-                      <div className="mt-4 p-4 rounded-2xl border-2 border-pink-200 bg-gradient-to-br from-white to-pink-50">
-                        <div className="flex items-center gap-3 mb-3">
+                      <div className="mt-5 p-5 rounded-2xl border border-[#D4AF37]/50 bg-[#0A0F1D]/80 shadow-[inset_0_0_20px_rgba(212,175,55,0.05)] text-[#FDFDFD]">
+                        <div className="flex items-center gap-3 mb-4 border-b border-[#FFE4A0]/20 pb-3">
                           <div
-                            className="w-5 h-5 rounded-full"
-                            style={{ backgroundColor: color }}
+                            className="w-5 h-5 rounded-full shadow-[0_0_10px_currentColor]"
+                            style={{ backgroundColor: color, color: color }}
                           />
-                          <h4 className="font-black text-lg text-slate-700">
-                            Agent {selectedAgentId} — {ageMeta.label}
+                          <h4 
+                            className="font-black text-xl text-[#FFE4A0]"
+                            style={{ fontFamily: "'Cinzel Decorative', serif" }}
+                          >
+                            Agent {selectedAgentId} — <span className="text-[#FDFDFD] text-lg font-sans font-medium">{ageMeta.label}</span>
                           </h4>
                         </div>
-                        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
-                          <div className="bg-white rounded-xl p-3 border border-gray-100">
-                            <div className="text-xs text-gray-400 font-bold">
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-5">
+                          <div className="bg-[#0A0F1D] rounded-xl p-3 border border-[#FFE4A0]/20 shadow-inner">
+                            <div className="text-xs text-[#FFE4A0]/70 font-bold uppercase tracking-wider mb-1">
                               Height
                             </div>
-                            <div className="font-black text-slate-700">
+                            <div className="font-black text-[#FDFDFD] text-lg">
                               {ageMeta.height}
                             </div>
                           </div>
-                          <div className="bg-white rounded-xl p-3 border border-gray-100">
-                            <div className="text-xs text-gray-400 font-bold">
+                          <div className="bg-[#0A0F1D] rounded-xl p-3 border border-[#FFE4A0]/20 shadow-inner">
+                            <div className="text-xs text-[#FFE4A0]/70 font-bold uppercase tracking-wider mb-1">
                               Speed Range
                             </div>
-                            <div className="font-black text-slate-700 text-sm">
+                            <div className="font-bold text-[#FDFDFD] text-sm">
                               {ageMeta.speed}
                             </div>
                           </div>
-                          <div className="bg-white rounded-xl p-3 border border-gray-100">
-                            <div className="text-xs text-gray-400 font-bold">
+                          <div className="bg-[#0A0F1D] rounded-xl p-3 border border-[#FFE4A0]/20 shadow-inner">
+                            <div className="text-xs text-[#FFE4A0]/70 font-bold uppercase tracking-wider mb-1">
                               Distance
                             </div>
-                            <div className="font-black text-blue-500">
+                            <div className="font-black text-[#D4AF37] text-lg">
                               {(fs.totalDistance ?? 0).toFixed(1)}m
                             </div>
                           </div>
-                          <div className="bg-white rounded-xl p-3 border border-gray-100">
-                            <div className="text-xs text-gray-400 font-bold">
+                          <div className="bg-[#0A0F1D] rounded-xl p-3 border border-[#FFE4A0]/20 shadow-inner">
+                            <div className="text-xs text-[#FFE4A0]/70 font-bold uppercase tracking-wider mb-1">
                               Fatigue
                             </div>
-                            <div className="font-black text-orange-500">
+                            <div className="font-black text-orange-400 text-lg">
                               {((fs.fatigue ?? 0) * 100).toFixed(0)}%
                             </div>
                           </div>
                         </div>
-                        <div className="grid grid-cols-2 gap-3 mb-4">
-                          <div className="bg-white rounded-xl p-3 border border-gray-100">
-                            <div className="text-xs text-gray-400 font-bold">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-5">
+                          <div className="bg-[#0A0F1D] rounded-xl p-4 border border-[#FFE4A0]/20 shadow-inner">
+                            <div className="text-xs text-[#FFE4A0]/70 font-bold uppercase tracking-wider mb-1">
                               Capabilities
                             </div>
-                            <div className="text-sm text-slate-600">
+                            <div className="text-sm text-[#FDFDFD]/90">
                               {ageMeta.capabilities}
                             </div>
                           </div>
-                          <div className="bg-white rounded-xl p-3 border border-gray-100">
-                            <div className="text-xs text-gray-400 font-bold">
+                          <div className="bg-[#0A0F1D] rounded-xl p-4 border border-[#FFE4A0]/20 shadow-inner">
+                            <div className="text-xs text-[#FFE4A0]/70 font-bold uppercase tracking-wider mb-1">
                               Attracted To
                             </div>
-                            <div className="text-sm text-slate-600">
+                            <div className="text-sm text-[#FDFDFD]/90">
                               {ageMeta.attracted}
                             </div>
                           </div>
                         </div>
                         {nonSafeEvents.length > 0 && (
-                          <div>
-                            <div className="text-xs font-bold text-gray-400 mb-2">
-                              ⚠️ Risk Events ({nonSafeEvents.length})
+                          <div className="bg-red-900/20 border border-red-500/30 rounded-xl p-4">
+                            <div className="text-sm font-bold text-red-300 mb-3 flex items-center gap-2">
+                              <span>⚠️</span> Risk Events Encountered ({nonSafeEvents.length})
                             </div>
-                            <div className="space-y-1 max-h-32 overflow-y-auto">
+                            <div className="space-y-2 max-h-32 overflow-y-auto custom-scrollbar pr-2">
                               {nonSafeEvents.slice(0, 8).map((evt, idx) => {
                                 const rawName = evt.objectName || "Unknown";
                                 const cleanName =
@@ -886,30 +917,30 @@ const Simulator = () => {
                                 ).toLowerCase();
                                 const tierColor =
                                   tier === "critical"
-                                    ? "text-red-600"
+                                    ? "text-red-400"
                                     : tier === "dangerous"
-                                      ? "text-orange-600"
+                                      ? "text-orange-400"
                                       : tier === "warning"
-                                        ? "text-yellow-600"
-                                        : "text-amber-500";
+                                        ? "text-yellow-400"
+                                        : "text-amber-400";
                                 return (
                                   <div
                                     key={idx}
-                                    className="flex items-center gap-2 text-xs bg-gray-50 rounded-lg px-3 py-1.5"
+                                    className="flex items-center gap-3 text-xs bg-[#0A0F1D] border border-red-500/20 rounded-lg px-4 py-2"
                                   >
-                                    <span className="text-gray-400">
+                                    <span className="text-[#FFE4A0]/50 font-mono">
                                       {(evt.time ?? 0).toFixed(2)}s
                                     </span>
-                                    <span className="font-bold text-slate-600">
+                                    <span className="font-bold text-[#FDFDFD]">
                                       {cleanName}
                                     </span>
-                                    <span className="font-bold text-slate-500">
+                                    <span className="text-[#FDFDFD]/70 italic hidden sm:inline">
                                       ({evt.injury?.bodyPart})
                                     </span>
-                                    <span className={`font-black ${tierColor}`}>
+                                    <span className={`font-black uppercase tracking-wider ${tierColor} ml-auto`}>
                                       {evt.injury?.riskTier}
                                     </span>
-                                    <span className="text-gray-400">
+                                    <span className="text-[#FFE4A0]/50">
                                       Score: {evt.injury?.injuryScore ?? 0}
                                     </span>
                                   </div>
@@ -919,8 +950,8 @@ const Simulator = () => {
                           </div>
                         )}
                         {nonSafeEvents.length === 0 && (
-                          <div className="text-sm text-green-600 font-bold">
-                            ✅ No risk events for this agent
+                          <div className="bg-green-900/20 border border-green-500/30 rounded-xl p-4 text-sm text-green-400 font-bold flex items-center gap-2">
+                            <span>✨</span> The illusion remained safely protected
                           </div>
                         )}
                       </div>
@@ -930,20 +961,24 @@ const Simulator = () => {
                 {/* ── Film Reel Playback Controls ── */}
                 {selectedAgentId !== null &&
                   simulationPlayback?.trajectories && (
-                    <div className="mt-4 p-4 rounded-2xl border-2 border-indigo-200 bg-gradient-to-br from-indigo-50 to-white">
-                      <div className="flex items-center gap-3 mb-3">
-                        <h4 className="font-black text-sm text-indigo-700">
-                          🎬 Film Reel Playback
+                    <div className="mt-5 p-5 rounded-2xl border border-[#FFE4A0]/30 bg-[#0A0F1D] shadow-[0_0_20px_rgba(0,0,0,0.8)] relative overflow-hidden">
+                      <div className="absolute inset-x-0 -top-10 h-20 bg-[#FFE4A0]/5 blur-[50px] pointer-events-none" />
+                      <div className="flex items-center gap-3 mb-4">
+                        <h4 
+                          className="font-black text-sm text-[#FFE4A0] tracking-widest uppercase italic"
+                          style={{ fontFamily: "'Cormorant Garamond', serif" }}
+                        >
+                          📜 Time Scroll Playback
                         </h4>
                       </div>
-                      <div className="flex items-center gap-3">
+                      <div className="flex items-center gap-4 relative z-10">
                         {/* Play/Pause Button */}
                         <button
                           onClick={() => setPlaybackPaused(!playbackPaused)}
-                          className={`flex-shrink-0 w-10 h-10 rounded-xl flex items-center justify-center text-lg font-black shadow-md transition-all ${
+                          className={`flex-shrink-0 w-12 h-12 rounded-full flex items-center justify-center text-xl font-black transition-all border-2 ${
                             playbackPaused
-                              ? "bg-green-500 hover:bg-green-600 text-white shadow-green-200"
-                              : "bg-indigo-500 hover:bg-indigo-600 text-white shadow-indigo-200"
+                              ? "bg-transparent border-[#D4AF37] text-[#D4AF37] hover:bg-[#D4AF37]/20 shadow-[0_0_15px_rgba(212,175,55,0.4)]"
+                              : "bg-[#D4AF37] border-[#D4AF37] text-[#3A2B00] hover:brightness-110 shadow-[0_0_20px_rgba(212,175,55,0.6)]"
                           }`}
                         >
                           {playbackPaused ? "▶" : "⏸"}
@@ -964,15 +999,15 @@ const Simulator = () => {
                                 setPlaybackSeek(null),
                               );
                             }}
-                            className="w-full h-2 rounded-full appearance-none bg-indigo-100 cursor-pointer"
+                            className="w-full h-2.5 rounded-full appearance-none bg-[#0A0F1D] border border-[#FFE4A0]/30 cursor-pointer shadow-inner relative z-10"
                             style={{
-                              background: `linear-gradient(to right, #818cf8 ${playbackInfo.progress * 100}%, #e0e7ff ${playbackInfo.progress * 100}%)`,
+                              background: `linear-gradient(to right, #D4AF37 ${playbackInfo.progress * 100}%, rgba(10,15,30,0.8) ${playbackInfo.progress * 100}%)`,
                             }}
                           />
                         </div>
 
                         {/* Action + Timestamp */}
-                        <div className="flex-shrink-0 flex items-center gap-2 bg-white rounded-xl px-3 py-1.5 border border-indigo-100 shadow-sm">
+                        <div className="flex-shrink-0 flex items-center gap-2 bg-[#0A0F1D]/80 rounded-xl px-4 py-2 border border-[#FFE4A0]/40 shadow-[0_0_10px_rgba(255,228,160,0.1)]">
                           <span className="text-lg">
                             {{
                               crawl: "🐛",
@@ -991,10 +1026,10 @@ const Simulator = () => {
                               roll: "🔄",
                             }[playbackInfo.action] || "🔹"}
                           </span>
-                          <span className="font-bold text-sm text-slate-700">
+                          <span className="font-bold text-sm text-[#FDFDFD] capitalize w-16">
                             {playbackInfo.action}
                           </span>
-                          <span className="text-xs text-gray-400 font-mono">
+                          <span className="text-xs text-[#FFE4A0]/70 font-mono w-10 text-right">
                             {playbackInfo.time.toFixed(1)}s
                           </span>
                         </div>
@@ -1006,69 +1041,73 @@ const Simulator = () => {
 
           {/* --- Simulation Results --- */}
           {simResult && (
-            <div className="space-y-4">
+            <div className="space-y-5">
               {/* Summary Stats */}
-              <div className="grid grid-cols-3 gap-3">
-                <div className="glass-panel p-4 text-center">
-                  <div className="text-2xl font-black text-pink-500">
+              <div className="grid grid-cols-3 gap-4">
+                <div className="bg-[#0A0F1D]/80 border border-[#FFE4A0]/20 shadow-[inset_0_0_15px_rgba(255,228,160,0.05)] rounded-2xl p-4 text-center">
+                  <div className="text-3xl font-black text-[#D4AF37]" style={{ textShadow: "0 0 15px rgba(212,175,55,0.4)" }}>
                     {simResult.progress}%
                   </div>
-                  <div className="text-xs font-bold text-gray-600 mt-1">
-                    Progress
+                  <div className="text-xs font-bold text-[#FFE4A0]/70 mt-1 uppercase tracking-widest italic" style={{ fontFamily: "'Cormorant Garamond', serif" }}>
+                    Magic Resolved
                   </div>
                 </div>
-                <div className="glass-panel p-4 text-center">
-                  <div className="text-2xl font-black text-blue-500">
+                <div className="bg-[#0A0F1D]/80 border border-[#FFE4A0]/20 shadow-[inset_0_0_15px_rgba(255,228,160,0.05)] rounded-2xl p-4 text-center">
+                  <div className="text-3xl font-black text-[#FDFDFD]">
                     {simResult.totalEvents}
                   </div>
-                  <div className="text-xs font-bold text-gray-600 mt-1">
-                    Collision Events
+                  <div className="text-xs font-bold text-[#FFE4A0]/70 mt-1 uppercase tracking-widest italic" style={{ fontFamily: "'Cormorant Garamond', serif" }}>
+                    Encounters
                   </div>
                 </div>
-                <div className="glass-panel p-4 text-center">
+                <div className="bg-[#0A0F1D]/80 border border-[#FFE4A0]/20 shadow-[inset_0_0_15px_rgba(255,228,160,0.05)] rounded-2xl p-4 text-center">
                   <div
                     className={
-                      "text-2xl font-black " +
+                      "text-3xl font-black " +
                       (simResult.status === "complete"
-                        ? "text-green-500"
-                        : "text-yellow-500")
+                        ? "text-[#FFE4A0]"
+                        : "text-[#D4AF37] animate-pulse")
                     }
+                    style={{ textShadow: "0 0 10px currentColor" }}
                   >
-                    {simResult.status === "complete" ? "✅" : "⏳"}
+                    {simResult.status === "complete" ? "✨" : "⏳"}
                   </div>
-                  <div className="text-xs font-bold text-gray-600 mt-1 capitalize">
-                    {simResult.status}
+                  <div className="text-xs font-bold text-[#FFE4A0]/70 mt-1 uppercase tracking-widest italic" style={{ fontFamily: "'Cormorant Garamond', serif" }}>
+                    {simResult.status === "complete" ? "Prophecy Sealed" : "Scrying..."}
                   </div>
                 </div>
               </div>
 
               {/* Collision Events Table */}
               {simResult.events.length > 0 && (
-                <div className="glass-panel p-5">
-                  <h3 className="text-base font-black text-slate-700 mb-3">
-                    🎯 Collision Events
+                <div className="bg-[#0A0F1D]/90 border border-[#FFE4A0]/30 shadow-[0_0_30px_rgba(0,0,0,0.6)] rounded-2xl p-6">
+                  <h3 
+                    className="text-xl font-black text-[#FFE4A0] mb-4"
+                    style={{ fontFamily: "'Cinzel Decorative', serif" }}
+                  >
+                    📜 Chronicle of Encounters
                   </h3>
-                  <div className="overflow-x-auto">
+                  <div className="overflow-x-auto custom-scrollbar pb-2">
                     <table className="w-full text-sm">
                       <thead>
-                        <tr className="border-b-2 border-pink-200">
-                          <th className="text-left py-2 px-4 font-black text-gray-700">
+                        <tr className="border-b border-[#FFE4A0]/30">
+                          <th className="text-left py-3 px-4 font-bold text-[#FFE4A0] uppercase tracking-wider text-xs">
                             Time
                           </th>
-                          <th className="text-left py-2 px-4 font-black text-gray-700">
-                            Agent
+                          <th className="text-left py-3 px-4 font-bold text-[#FFE4A0] uppercase tracking-wider text-xs">
+                            Illusion
                           </th>
-                          <th className="text-left py-2 px-4 font-black text-gray-700">
-                            Object
+                          <th className="text-left py-3 px-4 font-bold text-[#FFE4A0] uppercase tracking-wider text-xs">
+                            Entity
                           </th>
-                          <th className="text-left py-2 px-4 font-black text-gray-700">
+                          <th className="text-left py-3 px-4 font-bold text-[#FFE4A0] uppercase tracking-wider text-xs hidden md:table-cell">
                             Position
                           </th>
-                          <th className="text-left py-2 px-4 font-black text-gray-700">
-                            Impact
+                          <th className="text-left py-3 px-4 font-bold text-[#FFE4A0] uppercase tracking-wider text-xs">
+                            Impact Rate
                           </th>
-                          <th className="text-left py-2 px-4 font-black text-gray-700">
-                            Risk
+                          <th className="text-left py-3 px-4 font-bold text-[#FFE4A0] uppercase tracking-wider text-xs">
+                            Vulnerability
                           </th>
                         </tr>
                       </thead>
@@ -1102,14 +1141,14 @@ const Simulator = () => {
                               evt.injury?.gForceTier || "Observe";
                             const riskColor =
                               riskTier === "critical"
-                                ? "bg-red-200 text-red-800 border border-red-300"
+                                ? "bg-red-900/50 text-red-300 border border-red-500/50"
                                 : riskTier === "dangerous"
-                                  ? "bg-orange-200 text-orange-800 border border-orange-300"
+                                  ? "bg-orange-900/50 text-orange-300 border border-orange-500/50"
                                   : riskTier === "warning"
-                                    ? "bg-yellow-200 text-yellow-800 border border-yellow-300"
+                                    ? "bg-yellow-900/50 text-yellow-300 border border-yellow-500/50"
                                     : riskTier === "watch"
-                                      ? "bg-amber-100 text-amber-700 border border-amber-200"
-                                      : "bg-green-100 text-green-700 border border-green-200";
+                                      ? "bg-amber-900/30 text-amber-400 border border-amber-500/30"
+                                      : "bg-[#0A0F1D] text-[#FFE4A0] border border-[#FFE4A0]/20";
                             const gForceIcon =
                               gForceTier === "Serious Injury"
                                 ? "🚨"
@@ -1118,10 +1157,10 @@ const Simulator = () => {
                                   : "👀";
                             const gForceColor =
                               gForceTier === "Serious Injury"
-                                ? "text-red-600"
+                                ? "text-red-400"
                                 : gForceTier === "Soft Injury"
-                                  ? "text-orange-600"
-                                  : "text-green-600";
+                                  ? "text-orange-400"
+                                  : "text-[#FFE4A0]/70";
                             // Clean object name: replace unreadable characters with readable fallback
                             const rawName =
                               evt.objectName || evt.objectId || "Unknown";
@@ -1131,41 +1170,41 @@ const Simulator = () => {
                             return (
                               <tr
                                 key={idx}
-                                className="border-b border-pink-100 hover:bg-pink-50"
+                                className="border-b border-[#FFE4A0]/10 hover:bg-[#FFE4A0]/5 transition-colors"
                               >
-                                <td className="py-3 px-4">
+                                <td className="py-4 px-4 text-[#FFE4A0]/70 font-mono">
                                   {(evt.time ?? 0).toFixed(2)}s
                                 </td>
-                                <td className="py-3 px-4 font-bold">
+                                <td className="py-4 px-4 font-bold text-[#FDFDFD]">
                                   Agent {evt.agentId}
                                 </td>
-                                <td className="py-3 px-4 font-medium text-slate-600">
+                                <td className="py-4 px-4 font-medium text-[#FFE4A0]">
                                   {cleanObjectName}
                                 </td>
-                                <td className="py-3 px-4 text-xs font-mono">
+                                <td className="py-4 px-4 text-xs font-mono text-[#FDFDFD]/50 hidden md:table-cell">
                                   ({evt.position?.[0]?.toFixed(1) ?? 0},{" "}
                                   {evt.position?.[1]?.toFixed(1) ?? 0},{" "}
                                   {evt.position?.[2]?.toFixed(1) ?? 0})
                                 </td>
-                                <td className="py-3 px-4">
-                                  <span className="font-bold">
+                                <td className="py-4 px-4">
+                                  <span className="font-bold text-[#FDFDFD]">
                                     {evt.injury?.injuryScore ?? 0}
                                   </span>
-                                  <span className="text-xs text-gray-400 ml-1">
+                                  <span className="text-xs text-[#FFE4A0]/50 ml-2 italic">
                                     ({evt.injury?.bodyPart})
                                   </span>
                                   {evt.injury?.gForce != null && (
                                     <span
-                                      className={`text-xs font-bold ml-2 ${gForceColor}`}
+                                      className={`text-xs w-16 inline-block font-bold ml-3 ${gForceColor}`}
                                     >
                                       {gForceIcon}{" "}
                                       {evt.injury.gForce.toFixed(1)}g
                                     </span>
                                   )}
                                 </td>
-                                <td className="py-3 px-4">
+                                <td className="py-4 px-4">
                                   <span
-                                    className={`px-3 py-1 rounded-full text-xs font-bold ${riskColor}`}
+                                    className={`px-3 py-1.5 rounded-md text-[11px] uppercase tracking-wider font-bold ${riskColor}`}
                                   >
                                     {riskTierRaw}
                                   </span>
@@ -1184,16 +1223,16 @@ const Simulator = () => {
                         (e.injury?.riskTier || "safe").toLowerCase() !== "safe",
                     ).length;
                     return (
-                      <p className="text-gray-400 mt-4 text-sm">
-                        Showing {Math.min(total, 30)} of {total} events
+                      <p className="text-[#FFE4A0]/50 mt-5 text-sm italic" style={{ fontFamily: "'Cormorant Garamond', serif" }}>
+                        Showing {Math.min(total, 30)} of {total} prophecies
                         {nonSafeCount > 0 && (
-                          <span className="font-bold text-orange-500 ml-1">
-                            ({nonSafeCount} elevated risk)
+                          <span className="font-bold text-orange-400 ml-2 not-italic font-sans">
+                            ({nonSafeCount} elevated warnings)
                           </span>
                         )}
                         {nonSafeCount === 0 && (
-                          <span className="text-green-500 ml-1">
-                            (all events safe)
+                          <span className="text-green-400 ml-2 not-italic font-sans">
+                            (All visions are peaceful)
                           </span>
                         )}
                       </p>
@@ -1205,12 +1244,18 @@ const Simulator = () => {
               {/* No Events Message */}
               {simResult.events.length === 0 &&
                 simResult.status === "complete" && (
-                  <div className="glass-panel p-8 text-center">
-                    <p className="text-2xl font-black text-gray-600">
-                      ✅ No collision events detected
+                  <div className="bg-[#0A0F1D]/80 border border-[#D4AF37]/50 shadow-[inset_0_0_30px_rgba(212,175,55,0.1)] rounded-2xl p-10 text-center">
+                    <p 
+                      className="text-3xl font-black text-[#FFE4A0]"
+                      style={{ fontFamily: "'Cinzel Decorative', serif", textShadow: "0 0 15px rgba(255,228,160,0.4)" }}
+                    >
+                      ✨ A Peaceful Kingdom
                     </p>
-                    <p className="text-gray-500 mt-2">
-                      The environment appears safe for this age group
+                    <p 
+                      className="text-[#FDFDFD]/90 mt-3 text-lg italic"
+                      style={{ fontFamily: "'Cormorant Garamond', serif" }}
+                    >
+                      The prophecy shows no dangers. The environment is perfectly safe for this age group.
                     </p>
                   </div>
                 )}
@@ -1219,37 +1264,41 @@ const Simulator = () => {
 
           {/* ── RESULTS DASHBOARD ────────────────────────────────────── */}
           {simResult && (
-            <div className="bg-white rounded-xl shadow-lg overflow-hidden animate-fade-in-up">
-              <div className="bg-gradient-to-r from-pink-500 to-rose-500 px-4 py-3 flex flex-wrap justify-between items-center gap-2 text-white">
-                <h2 className="text-base font-bold flex items-center gap-2">
-                  <span>📊</span> Simulation Report
+            <div className="bg-[#0A0F1D]/80 rounded-2xl shadow-[0_0_30px_rgba(212,175,55,0.2)] border border-[#D4AF37]/50 overflow-hidden animate-fade-in-up mt-8 relative">
+              <div className="absolute inset-0 bg-[#FFE4A0]/5 pointer-events-none" />
+              <div className="bg-gradient-to-r from-[#0A0F1D] via-[#FFE4A0]/10 to-[#0A0F1D] border-b border-[#FFE4A0]/30 px-5 py-4 flex flex-wrap justify-between items-center gap-4 relative z-10">
+                <h2 
+                  className="text-xl font-black flex items-center gap-3 text-[#FFE4A0] style={{ textShadow: '0 0 10px rgba(255,228,160,0.3)' }}"
+                  style={{ fontFamily: "'Cinzel Decorative', serif" }}
+                >
+                  <span className="text-2xl">✨</span> Safety Grimoire Report
                 </h2>
                 <div className="flex flex-wrap gap-2">
                   <button
                     onClick={() => setShowHeatmap(!showHeatmap)}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                    className={`px-4 py-2 rounded-xl text-xs font-bold transition-all border ${
                       showHeatmap
-                        ? "bg-white text-pink-600 shadow"
-                        : "bg-white/20 hover:bg-white/30"
+                        ? "bg-[#FFE4A0]/20 border-[#FFE4A0] text-[#FFE4A0] shadow-[0_0_15px_rgba(255,228,160,0.3)]"
+                        : "bg-transparent border-[#FFE4A0]/30 text-[#FDFDFD] hover:bg-[#FFE4A0]/10"
                     }`}
                   >
-                    {showHeatmap ? "Hide Heatmap" : "Show Heatmap"}
+                    {showHeatmap ? "Hide Danger Veins" : "Show Danger Veins"}
                   </button>
                   <button
                     onClick={() => setShowBoundingBoxes(!showBoundingBoxes)}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                    className={`px-4 py-2 rounded-xl text-xs font-bold transition-all border ${
                       showBoundingBoxes
-                        ? "bg-green-100 text-green-700 shadow"
-                        : "bg-white/20 hover:bg-white/30"
+                        ? "bg-[#D4AF37]/20 border-[#D4AF37] text-[#D4AF37] shadow-[0_0_15px_rgba(212,175,55,0.3)]"
+                        : "bg-transparent border-[#FFE4A0]/30 text-[#FDFDFD] hover:bg-[#FFE4A0]/10"
                     }`}
                   >
-                    {showBoundingBoxes ? "Hide BBoxes" : "Show BBoxes"}
+                    {showBoundingBoxes ? "Hide Magical Wards" : "Show Magical Wards"}
                   </button>
                   <button
                     onClick={exportToExcel}
-                    className="px-3 py-1.5 bg-white/20 hover:bg-white/30 rounded-lg text-xs font-bold"
+                    className="px-4 py-2 bg-[#0A0F1D] border border-[#FFE4A0]/30 hover:border-[#FFE4A0] hover:bg-[#FFE4A0]/10 rounded-xl text-xs font-bold text-[#FDFDFD] transition-all"
                   >
-                    📊 Export CSV
+                    📊 Scribe CSV
                   </button>
                   <button
                     onClick={() => {
@@ -1263,65 +1312,88 @@ const Simulator = () => {
                         });
                       }
                     }}
-                    className="px-3 py-1.5 bg-white/20 hover:bg-white/30 rounded-lg text-xs font-bold"
+                    className="px-4 py-2 bg-gradient-to-br from-[#FFE4A0] to-[#D4AF37] hover:brightness-110 text-[#3A2B00] rounded-xl text-xs font-black shadow-[0_0_15px_rgba(212,175,55,0.3)] transition-all"
                   >
-                    📄 Export PDF
+                    📄 Produce Scroll (PDF)
                   </button>
                 </div>
               </div>
 
-              <div className="p-4 grid grid-cols-1 md:grid-cols-4 gap-4">
+              <div className="p-6 grid grid-cols-1 md:grid-cols-4 gap-5 relative z-10">
                 {/* RSI Score Card */}
-                <div className="bg-slate-50 rounded-xl p-4 border border-slate-200 relative overflow-hidden">
-                  <div className="absolute top-0 right-0 p-3 opacity-10 text-4xl">
+                <div className="col-span-1 md:col-span-2 bg-[#0A0F1D] rounded-2xl p-6 border border-[#FFE4A0]/30 shadow-inner relative overflow-hidden flex flex-col justify-center">
+                  <div className="absolute -right-4 -top-8 text-8xl opacity-5 pointer-events-none grayscale sepia hue-rotate-[30deg]">
                     🛡️
                   </div>
-                  <h3 className="text-slate-500 text-xs font-bold uppercase tracking-wider mb-1.5">
-                    Room Safety Grade
+                  <h3 
+                    className="text-[#FFE4A0] text-sm font-bold uppercase tracking-widest italic mb-2"
+                    style={{ fontFamily: "'Cormorant Garamond', serif" }}
+                  >
+                    Sanctuary Grade
                   </h3>
-                  <div className="flex items-baseline gap-2">
+                  <div className="flex items-end gap-3 gap-y-1 flex-wrap mb-4">
                     <span
-                      className={`text-4xl font-black ${
-                        simResult.roomSafetyIndex?.grade === "S" ||
+                      className="text-6xl font-black leading-none drop-shadow-[0_0_20px_currentColor]"
+                      style={{
+                        fontFamily: "'Cinzel Decorative', serif",
+                        color: simResult.roomSafetyIndex?.grade === "S" ||
                         simResult.roomSafetyIndex?.grade === "A"
-                          ? "text-green-500"
+                          ? "#FFE4A0" // Gold for safe
                           : simResult.roomSafetyIndex?.grade === "B"
-                            ? "text-yellow-500"
-                            : "text-red-500"
-                      }`}
+                            ? "#F4C842" 
+                            : "#FF5722" // Orange/Red for dangerous
+                      }}
                     >
                       {simResult.roomSafetyIndex?.grade || "-"}
                     </span>
-                    <span className="text-lg font-bold text-slate-400">
+                    <span className="text-xl font-black text-[#FFE4A0]/50 mb-1">
                       / {simResult.roomSafetyIndex?.score ?? 0}
                     </span>
                   </div>
-                  <div className="mt-3 space-y-1">
-                    <div className="flex justify-between text-xs text-slate-600">
-                      <span>Critical:</span>
-                      <span className="font-bold text-red-500">
+                  <div className="flex gap-6 mt-auto border-t border-[#FFE4A0]/10 pt-4">
+                    <div className="flex-1">
+                      <div className="text-xs text-[#FFE4A0]/70 uppercase tracking-wider mb-1">Critical Taint</div>
+                      <div className="font-black text-red-400 text-lg">
                         {simResult.roomSafetyIndex?.breakdown?.critical ?? 0}
-                      </span>
+                      </div>
                     </div>
-                    <div className="flex justify-between text-xs text-slate-600">
-                      <span>Serious:</span>
-                      <span className="font-bold text-orange-500">
+                    <div className="flex-1 border-l border-[#FFE4A0]/10 pl-6">
+                      <div className="text-xs text-[#FFE4A0]/70 uppercase tracking-wider mb-1">Serious Taint</div>
+                      <div className="font-black text-orange-400 text-lg">
                         {simResult.roomSafetyIndex?.breakdown?.serious ?? 0}
-                      </span>
+                      </div>
                     </div>
                   </div>
                 </div>
 
                 {/* Total Events */}
-                <div className="bg-pink-50 rounded-xl p-4 border border-pink-100">
-                  <h3 className="text-pink-400 text-xs font-bold uppercase tracking-wider mb-1">
-                    Total Incidents
+                <div className="md:col-span-1 bg-[#0A0F1D] rounded-2xl p-6 border border-[#FFE4A0]/20 shadow-inner flex flex-col justify-center text-center">
+                  <h3 
+                    className="text-[#FFE4A0] text-sm font-bold uppercase tracking-widest italic mb-2"
+                    style={{ fontFamily: "'Cormorant Garamond', serif" }}
+                  >
+                    Total Anomalies
                   </h3>
-                  <div className="text-2xl font-black text-pink-600">
+                  <div className="text-4xl font-black text-[#D4AF37] my-3 drop-shadow-[0_0_10px_rgba(212,175,55,0.4)]">
                     {simResult.events.length}
                   </div>
-                  <div className="text-xs text-pink-400 mt-1">
-                    Collision events recorded
+                  <div className="text-xs text-[#FFE4A0]/50 leading-relaxed max-w-[120px] mx-auto">
+                    Visions of encounters
+                  </div>
+                </div>
+                
+                <div className="md:col-span-1 bg-[#0A0F1D] rounded-2xl p-6 border border-[#FFE4A0]/20 shadow-inner flex flex-col justify-center text-center">
+                  <h3 
+                    className="text-[#FFE4A0] text-sm font-bold uppercase tracking-widest italic mb-2"
+                    style={{ fontFamily: "'Cormorant Garamond', serif" }}
+                  >
+                    Realm Explorer
+                  </h3>
+                  <div className="text-xl font-bold text-[#FDFDFD] my-3 leading-tight uppercase font-serif tracking-wide py-2">
+                    {ageGroup.split('(')[0].trim() || "Unknown"}
+                  </div>
+                  <div className="text-xs text-[#FFE4A0]/50 leading-relaxed font-mono">
+                    {ageGroup.match(/\((.*?)\)/)?.[1] || ""}
                   </div>
                 </div>
               </div>
@@ -1333,62 +1405,65 @@ const Simulator = () => {
             simResult.status === "complete" &&
             heatmapData &&
             heatmapData.length > 0 && (
-              <div className="glass-panel p-5">
-                <h3 className="text-base font-black text-slate-700 mb-4">
-                  🗺️ 3D Danger Heatmap
+              <div className="bg-[#0A0F1D]/60 backdrop-blur-md rounded-2xl shadow-[0_0_20px_rgba(0,0,0,0.5)] border border-[#FFE4A0]/30 p-5 mt-6">
+                <h3 
+                  className="text-lg font-black text-[#FFE4A0] mb-5 uppercase tracking-widest italic"
+                  style={{ fontFamily: "'Cormorant Garamond', serif" }}
+                >
+                  🗺️ Codex of Danger Veins
                 </h3>
 
                 {/* Color Legend */}
-                <div className="flex items-center gap-6 mb-6 bg-white/60 rounded-xl p-4">
-                  <span className="text-sm font-bold text-gray-500">
-                    Danger Scale:
+                <div className="flex flex-wrap items-center gap-6 mb-4 bg-[#0A0F1D] rounded-xl p-4 border border-[#FFE4A0]/10 shadow-inner">
+                  <span className="text-sm font-bold text-[#FFE4A0]/70 uppercase">
+                    Aura Scale:
                   </span>
-                  <div className="flex items-center gap-1">
-                    <div className="w-8 h-4 rounded bg-green-400"></div>
-                    <span className="text-xs font-bold text-gray-500">
-                      Safe
+                  <div className="flex items-center gap-2">
+                    <div className="w-8 h-2 rounded-full bg-green-500 shadow-[0_0_10px_rgba(34,197,94,0.5)]"></div>
+                    <span className="text-xs font-bold text-[#FDFDFD]">
+                      Tranquil
                     </span>
                   </div>
-                  <div className="flex items-center gap-1">
-                    <div className="w-8 h-4 rounded bg-yellow-400"></div>
-                    <span className="text-xs font-bold text-gray-500">
-                      Watch
+                  <div className="flex items-center gap-2">
+                    <div className="w-8 h-2 rounded-full bg-yellow-400 shadow-[0_0_10px_rgba(250,204,21,0.5)]"></div>
+                    <span className="text-xs font-bold text-[#FDFDFD]">
+                      Watchful
                     </span>
                   </div>
-                  <div className="flex items-center gap-1">
-                    <div className="w-8 h-4 rounded bg-orange-400"></div>
-                    <span className="text-xs font-bold text-gray-500">
+                  <div className="flex items-center gap-2">
+                    <div className="w-8 h-2 rounded-full bg-orange-500 shadow-[0_0_10px_rgba(249,115,22,0.5)]"></div>
+                    <span className="text-xs font-bold text-[#FDFDFD]">
                       Warning
                     </span>
                   </div>
-                  <div className="flex items-center gap-1">
-                    <div className="w-8 h-4 rounded bg-red-500"></div>
-                    <span className="text-xs font-bold text-gray-500">
-                      Critical
+                  <div className="flex items-center gap-2">
+                    <div className="w-8 h-2 rounded-full bg-red-600 shadow-[0_0_10px_rgba(220,38,38,0.5)]"></div>
+                    <span className="text-xs font-bold text-[#FDFDFD]">
+                      Perilous
                     </span>
                   </div>
                 </div>
 
                 {/* G-Force Thresholds Legend */}
-                <div className="flex items-center gap-6 bg-white/60 rounded-xl p-4">
-                  <span className="text-sm font-bold text-gray-500">
-                    G-Force Tiers:
+                <div className="flex flex-wrap items-center gap-6 bg-[#0A0F1D] rounded-xl p-4 border border-[#FFE4A0]/10 shadow-inner">
+                  <span className="text-sm font-bold text-[#FFE4A0]/70 uppercase">
+                    Impact Force:
                   </span>
-                  <div className="flex items-center gap-1">
+                  <div className="flex items-center gap-2">
                     <span className="text-lg">👀</span>
-                    <span className="text-xs font-bold text-green-600">
+                    <span className="text-xs font-bold text-green-400">
                       &lt;20g Observe
                     </span>
                   </div>
-                  <div className="flex items-center gap-1">
+                  <div className="flex items-center gap-2">
                     <span className="text-lg">⚠️</span>
-                    <span className="text-xs font-bold text-orange-600">
+                    <span className="text-xs font-bold text-orange-400">
                       20-50g Soft Injury
                     </span>
                   </div>
-                  <div className="flex items-center gap-1">
+                  <div className="flex items-center gap-2">
                     <span className="text-lg">🚨</span>
-                    <span className="text-xs font-bold text-red-600">
+                    <span className="text-xs font-bold text-red-500">
                       &ge;50g Serious
                     </span>
                   </div>
@@ -1401,9 +1476,12 @@ const Simulator = () => {
             simResult.status === "complete" &&
             heatmapData &&
             heatmapData.some((h) => h.recommendations.length > 0) && (
-              <div className="glass-panel p-5">
-                <h3 className="text-base font-black text-slate-700 mb-4">
-                  🛡️ Safety Recommendations
+              <div className="bg-[#0A0F1D]/80 backdrop-blur-md rounded-2xl shadow-[0_0_20px_rgba(0,0,0,0.5)] border border-[#FFE4A0]/30 p-6 mt-6">
+                <h3 
+                  className="text-xl font-black text-[#FFE4A0] mb-5 uppercase tracking-widest italic"
+                  style={{ fontFamily: "'Cormorant Garamond', serif" }}
+                >
+                  🛡️ Wards & Recommendations
                 </h3>
                 <div className="space-y-4">
                   {heatmapData
@@ -1411,10 +1489,10 @@ const Simulator = () => {
                     .map((obj, idx) => {
                       const tierStyle =
                         obj.worstGForceTier === "Serious Injury"
-                          ? "border-red-300 bg-red-50/80"
+                          ? "border-red-500/50 bg-red-900/30 shadow-[inset_0_0_15px_rgba(220,38,38,0.1)]"
                           : obj.worstGForceTier === "Soft Injury"
-                            ? "border-orange-300 bg-orange-50/80"
-                            : "border-green-300 bg-green-50/80";
+                            ? "border-orange-500/50 bg-orange-900/30 shadow-[inset_0_0_15px_rgba(249,115,22,0.1)]"
+                            : "border-green-500/50 bg-green-900/20 shadow-[inset_0_0_15px_rgba(34,197,94,0.1)]";
                       const tierIcon =
                         obj.worstGForceTier === "Serious Injury"
                           ? "🚨"
@@ -1423,10 +1501,10 @@ const Simulator = () => {
                             : "👀";
                       const tierTextColor =
                         obj.worstGForceTier === "Serious Injury"
-                          ? "text-red-700"
+                          ? "text-red-400"
                           : obj.worstGForceTier === "Soft Injury"
-                            ? "text-orange-700"
-                            : "text-green-700";
+                            ? "text-orange-400"
+                            : "text-green-400";
 
                       return (
                         <div
@@ -1436,29 +1514,29 @@ const Simulator = () => {
                           {/* Object Header */}
                           <div className="flex items-center justify-between mb-4">
                             <div>
-                              <h4 className="text-lg font-black text-gray-800">
+                              <h4 className="text-xl font-black text-[#FDFDFD]">
                                 {tierIcon} {obj.objectName}
                               </h4>
-                              <p className="text-sm text-gray-500 mt-1">
-                                {obj.totalHits} collision
-                                {obj.totalHits !== 1 ? "s" : ""} • Max G-Force:{" "}
+                              <p className="text-sm text-[#FFE4A0]/60 mt-1">
+                                {obj.totalHits} encounter
+                                {obj.totalHits !== 1 ? "s" : ""} • Max Force:{" "}
                                 <span className={`font-bold ${tierTextColor}`}>
                                   {obj.maxGForce.toFixed(1)}g
                                 </span>{" "}
-                                • Body:{" "}
-                                <span className="font-bold">
+                                • Target:{" "}
+                                <span className="font-bold text-[#FDFDFD]">
                                   {obj.primaryBodyPart}
                                 </span>
                               </p>
                             </div>
                             <div className="text-right">
                               <div
-                                className={`text-2xl font-black ${tierTextColor}`}
+                                className={`text-3xl font-black ${tierTextColor}`}
                               >
                                 {obj.maxInjuryScore}
                               </div>
                               <div
-                                className={`text-xs font-bold ${tierTextColor}`}
+                                className={`text-xs font-bold uppercase tracking-wider ${tierTextColor}`}
                               >
                                 {obj.worstGForceTier}
                               </div>
@@ -1467,48 +1545,48 @@ const Simulator = () => {
 
                           {/* Action Required */}
                           <div
-                            className={`text-sm font-bold ${tierTextColor} mb-4 bg-white/60 rounded-xl p-3`}
+                            className={`text-sm font-bold ${tierTextColor} mb-5 bg-[#0A0F1D]/60 border border-[#FFE4A0]/20 rounded-xl p-4`}
                           >
                             {obj.worstGForceTier === "Serious Injury"
-                              ? "🚨 MUST change environment — high risk of significant injury"
+                              ? "🚨 REQUIRED ACTION — high risk of tragedy, immediate warding needed"
                               : obj.worstGForceTier === "Soft Injury"
-                                ? "⚠️ Preventive measures needed — padding or relocation recommended"
-                                : "👀 Monitor only — no injury expected"}
+                                ? "⚠️ PREVENTIVE CHARMS — padding or relocation strongly advised"
+                                : "👀 MONITOR ONLY — no potent danger foreseen"}
                           </div>
 
                           {/* Product Recommendations */}
-                          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                             {obj.recommendations.map((rec, rIdx) => (
                               <a
                                 key={rIdx}
                                 href={rec.searchUrl}
                                 target="_blank"
                                 rel="noopener noreferrer"
-                                className="flex items-start gap-3 bg-white/80 rounded-xl p-4 border border-gray-200 hover:shadow-lg hover:border-blue-300 transition-all group cursor-pointer"
+                                className="flex items-start gap-4 bg-[#0A0F1D] rounded-xl p-4 border border-[#FFE4A0]/20 hover:shadow-[0_0_15px_rgba(212,175,55,0.2)] hover:border-[#D4AF37] transition-all group cursor-pointer"
                               >
                                 <div className="flex-1">
                                   <div className="flex items-center gap-2">
-                                    <span className="font-black text-sm text-gray-800 group-hover:text-blue-600 transition-colors">
+                                    <span className="font-black text-sm text-[#FDFDFD] group-hover:text-[#FFE4A0] transition-colors leading-tight">
                                       {rec.product}
                                     </span>
                                     <span
-                                      className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                                      className={`text-[9px] font-black px-2 py-0.5 rounded-md tracking-wider ${
                                         rec.priority === "high"
-                                          ? "bg-red-100 text-red-600"
-                                          : "bg-blue-100 text-blue-600"
+                                          ? "bg-red-900/50 text-red-300 border border-red-500/30"
+                                          : "bg-blue-900/50 text-blue-300 border border-blue-500/30"
                                       }`}
                                     >
                                       {rec.priority === "high"
-                                        ? "HIGH"
-                                        : "RECOMMENDED"}
+                                        ? "CRITICAL"
+                                        : "SUGGESTED"}
                                     </span>
                                   </div>
-                                  <p className="text-xs text-gray-500 mt-1">
+                                  <p className="text-xs text-[#FFE4A0]/50 mt-1.5 leading-relaxed">
                                     {rec.reason}
                                   </p>
                                 </div>
-                                <div className="text-blue-400 group-hover:text-blue-600 text-lg mt-1 transition-colors">
-                                  🛍️
+                                <div className="text-[#D4AF37]/50 group-hover:text-[#D4AF37] text-xl transition-colors self-center">
+                                  ✧
                                 </div>
                               </a>
                             ))}
@@ -1521,48 +1599,50 @@ const Simulator = () => {
             )}
           {/* ── Zone Analysis Panel ── */}
           {simResult && simResult.status === "complete" && zoneAnalysis && (
-            <div className="glass-panel p-5">
-              <h3 className="text-base font-black text-slate-700 mb-3">
-                📍 Zone Analysis
+            <div className="bg-[#0A0F1D]/80 backdrop-blur-md rounded-2xl shadow-[0_0_20px_rgba(0,0,0,0.5)] border border-[#FFE4A0]/30 p-6 mt-6">
+              <h3 
+                className="text-xl font-black text-[#FFE4A0] mb-3 uppercase tracking-widest italic"
+                style={{ fontFamily: "'Cormorant Garamond', serif" }}
+              >
+                📍 Grid of Fate (Zone Analysis)
               </h3>
-              <p className="text-xs text-gray-500 mb-3">
-                Room divided into {zoneAnalysis.summary?.gridSize || 8}×
-                {zoneAnalysis.summary?.gridSize || 8} grid. Each cell classified
-                by collision severity.
+              <p className="text-sm text-[#FFE4A0]/50 mb-5 italic" style={{ fontFamily: "'Cormorant Garamond', serif" }}>
+                The Kingdom divided into a {zoneAnalysis.summary?.gridSize || 8}×
+                {zoneAnalysis.summary?.gridSize || 8} matrix. Each cell reveals its intrinsic alignment with danger.
               </p>
 
               {/* Zone Summary Badges */}
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
-                <div className="rounded-xl bg-green-50 border-2 border-green-200 p-3 text-center">
-                  <div className="text-2xl font-black text-green-600">
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+                <div className="rounded-2xl bg-green-900/20 border border-green-500/30 p-4 text-center shadow-inner">
+                  <div className="text-3xl font-black text-green-400">
                     {zoneAnalysis.summary?.safe || 0}
                   </div>
-                  <div className="text-xs font-bold text-green-700 mt-0.5">
-                    ✅ Safe Zones
+                  <div className="text-xs font-bold text-green-500/80 mt-1 uppercase tracking-wider">
+                    ✅ Safe Havens
                   </div>
                 </div>
-                <div className="rounded-xl bg-yellow-50 border-2 border-yellow-200 p-3 text-center">
-                  <div className="text-2xl font-black text-yellow-600">
+                <div className="rounded-2xl bg-yellow-900/20 border border-yellow-500/30 p-4 text-center shadow-inner">
+                  <div className="text-3xl font-black text-yellow-400">
                     {zoneAnalysis.summary?.caution || 0}
                   </div>
-                  <div className="text-xs font-bold text-yellow-700 mt-0.5">
-                    👀 Caution Zones
+                  <div className="text-xs font-bold text-yellow-500/80 mt-1 uppercase tracking-wider">
+                    👀 Watchful 
                   </div>
                 </div>
-                <div className="rounded-xl bg-orange-50 border-2 border-orange-200 p-3 text-center">
-                  <div className="text-2xl font-black text-orange-600">
+                <div className="rounded-2xl bg-orange-900/20 border border-orange-500/30 p-4 text-center shadow-inner">
+                  <div className="text-3xl font-black text-orange-400">
                     {zoneAnalysis.summary?.hazard || 0}
                   </div>
-                  <div className="text-xs font-bold text-orange-700 mt-0.5">
-                    ⚠️ Hazard Zones
+                  <div className="text-xs font-bold text-orange-500/80 mt-1 uppercase tracking-wider">
+                    ⚠️ Hazard Marks
                   </div>
                 </div>
-                <div className="rounded-xl bg-red-50 border-2 border-red-200 p-3 text-center">
-                  <div className="text-2xl font-black text-red-600">
+                <div className="rounded-2xl bg-red-900/20 border border-red-500/30 p-4 text-center shadow-inner">
+                  <div className="text-3xl font-black text-red-500">
                     {zoneAnalysis.summary?.danger || 0}
                   </div>
-                  <div className="text-xs font-bold text-red-700 mt-0.5">
-                    🚨 Danger Zones
+                  <div className="text-xs font-bold text-red-500/80 mt-1 uppercase tracking-wider">
+                    🚨 Perilous Hexes
                   </div>
                 </div>
               </div>
@@ -1575,8 +1655,8 @@ const Simulator = () => {
                     z.classification === "hazard",
                 ).length > 0 && (
                   <div className="space-y-3">
-                    <h4 className="text-sm font-bold text-gray-700 uppercase tracking-wider">
-                      Hazard & Danger Zone Details
+                    <h4 className="text-sm font-bold text-[#FFE4A0]/80 uppercase tracking-widest pb-2 border-b border-[#FFE4A0]/10 mb-3">
+                      Focus Points
                     </h4>
                     {zoneAnalysis.zones
                       .filter(
@@ -1589,35 +1669,36 @@ const Simulator = () => {
                       .map((zone: any, idx: number) => (
                         <div
                           key={idx}
-                          className={`flex items-center justify-between rounded-xl p-4 border-2 ${
+                          className={`flex items-center justify-between rounded-xl p-4 border transition-colors hover:bg-[#FFE4A0]/5 ${
                             zone.classification === "danger"
-                              ? "bg-red-50/80 border-red-200"
-                              : "bg-orange-50/80 border-orange-200"
+                              ? "bg-red-900/10 border-red-500/20"
+                              : "bg-orange-900/10 border-orange-500/20"
                           }`}
                         >
                           <div>
                             <span
-                              className={`text-sm font-black ${zone.classification === "danger" ? "text-red-700" : "text-orange-700"}`}
+                              className={`text-sm font-black uppercase tracking-wider ${zone.classification === "danger" ? "text-red-400" : "text-orange-400"}`}
                             >
-                              {zone.classification === "danger" ? "🚨" : "⚠️"}{" "}
-                              Grid [{zone.row},{zone.col}]
+                              {zone.classification === "danger" ? "🚨 " : "⚠️ "}{" "}
+                              Coordinate [{zone.row},{zone.col}]
                             </span>
-                            <p className="text-xs text-gray-500 mt-1">
-                              {zone.events} collision
-                              {zone.events !== 1 ? "s" : ""} • Avg score:{" "}
-                              {zone.avgScore} • Max: {zone.maxScore}
+                            <p className="text-xs text-[#FDFDFD]/70 mt-1.5">
+                              {zone.events} encounter
+                              {zone.events !== 1 ? "s" : ""} • Base Severity:{" "}
+                              {zone.avgScore} • Peak: {zone.maxScore}
                             </p>
                             {zone.objects && zone.objects.length > 0 && (
-                              <p className="text-xs text-gray-400 mt-0.5">
-                                Objects: {zone.objects.slice(0, 3).join(", ")}
+                              <p className="text-[11px] text-[#FFE4A0]/50 mt-1 italic">
+                                Elements: {zone.objects.slice(0, 3).join(", ")}
                                 {zone.objects.length > 3
-                                  ? ` +${zone.objects.length - 3} more`
+                                  ? ` and ${zone.objects.length - 3} more`
                                   : ""}
                               </p>
                             )}
                           </div>
                           <div
-                            className={`text-lg font-black ${zone.classification === "danger" ? "text-red-600" : "text-orange-600"}`}
+                            className={`text-2xl font-black ${zone.classification === "danger" ? "text-red-500" : "text-orange-500"}`}
+                            style={{ textShadow: "0 0 10px currentColor" }}
                           >
                             {zone.avgScore}
                           </div>

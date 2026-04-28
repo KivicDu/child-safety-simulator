@@ -4,18 +4,19 @@ import react from '@vitejs/plugin-react'
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react()],
+
+  resolve: {
+    dedupe: ['three', '@react-three/fiber'],
+  },
   optimizeDeps: {
-    // Loại bỏ `force: true` (Nguyên nhân chính gây ra "Forced re-optimization of dependencies" mỗi lần start)
     include: [
-      'react',
-      'react-dom',
-      'react-router-dom',
       'three',
       '@react-three/fiber',
       '@react-three/drei',
+      '@react-three/postprocessing',
+      'postprocessing',
+      'gsap',
       'framer-motion',
-      'xlsx',
-      'file-saver'
     ],
   },
   server: {
@@ -60,6 +61,7 @@ export default defineConfig({
     // Giảm thời gian build, giúp Vite tối ưu chunk mapping
     target: 'esnext',
     rollupOptions: {
+      external: ['xlsx'],
       output: {
         manualChunks: {
           three: ['three'],

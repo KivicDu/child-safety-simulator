@@ -7,7 +7,6 @@ const generateToken = () => {
   return crypto.randomBytes(32).toString('hex');
 };
 
-// ✅ Fixed: added tls.rejectUnauthorized = false to fix self-signed certificate error
 const createTransporter = () => {
   return nodemailer.createTransport({
     host: process.env.EMAIL_HOST || 'smtp.gmail.com',
@@ -186,7 +185,7 @@ export const logout = async (req, res) => {
     if (user) {
       user.token = null;
       await user.save();
-      console.log(`✅ User logged out: ${user.email}`);
+      console.log(`User logged out: ${user.email}`);
     }
 
     res.json({ success: true, message: 'Logout successful' });
@@ -341,7 +340,7 @@ export const verifyOtp = async (req, res) => {
     user.resetOtpVerified = true;
     await user.save({ validateBeforeSave: false });
 
-    console.log(`✅ OTP verified for: ${normalizedEmail}`);
+    console.log(`OTP verified for: ${normalizedEmail}`);
 
     res.json({
       success: true,
@@ -395,7 +394,7 @@ export const resetPasswordOtp = async (req, res) => {
 
     await user.save();
 
-    console.log(`✅ Password reset via OTP for: ${normalizedEmail}`);
+    console.log(`Password reset via OTP for: ${normalizedEmail}`);
 
     res.json({
       success: true,

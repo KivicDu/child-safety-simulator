@@ -2,39 +2,6 @@
  * ============================================================================
  * INJURY CALCULATOR — Research-Based Biomechanics  (v2 — Pediatric Fixes)
  * ============================================================================
- *
- * FIXES v2:
- *  [BUG-INJ-1] determineBodyPart: now uses agent-relative Y instead of world Y.
- *              Signature extended with agentFeetY parameter (default 0 for
- *              backward compat). Returns 'arm' and 'wrist' body parts which
- *              were present in LOCATION_DENSITY but never reachable.
- *
- *  [BUG-INJ-2] calculateFallHeightScore: uses actual fall delta (peakY → contactY)
- *              when agentSpawnY / peakY is available. Falls back to standing CoM
- *              estimate when not. Old code used world Y directly = wrong.
- *
- *  [BUG-INJ-3] G-force thresholds: replaced single adult-derived thresholds with
- *              age × body-part matrix sourced from:
- *                Prange MT et al. (2004) J Biomechanics — head injury thresholds
- *                Margulies SS & Thibault LE (1992) J Biomech Eng
- *                Klinich KD et al. (2002) Stapp Car Crash J — chest thresholds
- *              Old threshold (20g = soft_injury) was the adult "observe" level.
- *
- *  [BUG-INJ-4] normalizeForce: replaced 40×body-weight formula with age-specific
- *              fracture force thresholds (Newton-based) per:
- *                Pierce MC et al. (2000) Pediatrics — long bone fracture forces
- *                Miltner E et al. (1998) Forensic Sci Int — infant femur data
- *              40×bw for infant (7 kg) = 2746 N vs actual fracture ~300 N → 9×
- *              over-estimated making all infant injuries appear "safe".
- *
- *  [BUG-INJ-5] getGForceTier: now accepts ageGroupId + bodyPart to look up the
- *              correct pediatric threshold instead of one fixed value.
- *
- *  [BUG-INJ-6] FOOSH (Fall On OutStretched Hand) detection: when agent is falling
- *              with horizontal velocity component, wrist/arm override applied for
- *              toddler/preschool age groups. Wrist fracture is the #1 fall injury
- *              in children 2-5 y (Cooper C et al. 1992 JBMR; Lyons RA et al. 1999).
- *
  * Original implements:
  * - HIC₁₅ (Head Injury Criterion) per NHTSA FMVSS 208 / Versace 1971
  * - Impact Force via Impulse-Momentum Theorem: F = mΔv/Δt
@@ -83,21 +50,12 @@ const MATERIAL_COLLISION = {
   unknown:   { duration: 0.015, hardness: 0.50, label: 'Unknown' },
 };
 
-// ============================================================================
-// [BUG-INJ-3 FIX] PEDIATRIC G-FORCE THRESHOLDS — age × body-part matrix
-// Sources:
-//   Head:  Prange MT et al. 2004 J Biomechanics; Margulies SS 1992 J Biomech Eng
-//   Torso: Klinich KD et al. 2002 Stapp Car Crash J
-//   Limbs: Doorly MC & Gilchrist MD 2006 IRCOBI (scaled to pediatric)
-// All thresholds in peak g-force (not average).
-// ============================================================================
-// [BUG-BODY-1 FIX] shoulder thresholds added (Landin 1997, clavicle fracture data)
 // shoulder g-thresholds between torso and arm (thinner bone, less bracing)
 const PEDIATRIC_G_THRESHOLDS = {
   infant: {
     head:     { observe: 30,  serious: 60  },
     torso:    { observe: 20,  serious: 40  },
-    shoulder: { observe: 18,  serious: 36  },  // [BUG-BODY-1 FIX]
+    shoulder: { observe: 18,  serious: 36  }, 
     legs:     { observe: 25,  serious: 50  },
     arm:      { observe: 20,  serious: 35  },
     wrist:    { observe: 18,  serious: 30  },
@@ -137,15 +95,6 @@ const PEDIATRIC_G_THRESHOLDS = {
 };
 
 // ============================================================================
-// [BUG-INJ-4 FIX] PEDIATRIC FRACTURE FORCE THRESHOLDS (Newton)
-// Sources:
-//   Pierce MC et al. (2000) Pediatrics — long bone fracture in children
-//   Miltner E et al. (1998) Forensic Sci Int — infant femur fracture data
-//   Scheuer JL & Black SM (2000) Developmental Juvenile Osteology
-// 'threshold' = force at which fracture probability reaches ~50%
-// ============================================================================
-// [BUG-BODY-1 FIX] shoulder/clavicle fracture thresholds added.
-// Sources: Landin LA (1997) Acta Orthop Scand Suppl — clavicle fracture in children
 //   infant clavicle: 80-120 N (birth fracture common)
 //   toddler clavicle: ~200-350 N (falls from standing)
 //   preschool:        ~500-700 N
@@ -226,14 +175,11 @@ class InjuryCalculator {
     const position = collisionEvent.position || [0, 0, 0];
     const mass     = ageGroup.mass;
 
-    // [BUG-INJ-1 FIX] determineBodyPart now uses agent-relative Y.
     // agentFeetY is passed from simulationController via collisionEvent.agentFeetY.
     // Fall back to 0 for backward compatibility with older event records.
     const agentFeetY = collisionEvent.agentFeetY ?? 0;
     let bodyPart = collisionEvent.bodyPart ||
       this.determineBodyPart(position[1], ageGroup.height, agentFeetY);
-
-    // [BUG-INJ-6 FIX] FOOSH detection — override to 'wrist' for forward-falling toddlers.
     // FOOSH (Fall On OutStretched Hand) is the #1 injury mechanism for ages 1-5.
     // Triggered when: agent is falling + horizontal velocity exceeds 30% of vertical.
     const isFalling = collisionEvent.isFalling ?? false;
@@ -263,7 +209,6 @@ class InjuryCalculator {
     const deceleration_g = velocity > 0.01 ? (velocity / collisionDuration) / this.GRAVITY : 0;
     const sharpnessScore = objectProperties.edgeSharpness || 0;
 
-    // [BUG-INJ-2 FIX] calculateFallHeightScore uses actual fall delta when available.
     const fallHeightScore = this.calculateFallHeightScore(
       position[1],
       ageGroup.height,
@@ -271,7 +216,6 @@ class InjuryCalculator {
       collisionEvent.agentPeakY ?? null
     );
 
-    // [BUG-INJ-5 FIX] G-force tier uses pediatric thresholds per age + body part.
     const gForce     = deceleration_g;
     const gForceTier = this.getGForceTier(gForce, ageGroupId, bodyPart);
 
@@ -304,7 +248,6 @@ class InjuryCalculator {
       this.WEIGHTS.fallHeight   * (fallHeightScore * 100)
     ) * boneDensityFactor / locationDensityMultiplier;
 
-    // [BUG-INJ-7 FIX] Pass isFalling so fallDamageMultiplier is applied correctly
     const isFallingEvent = collisionEvent.isFalling ?? false;
     const ageAdjustedScore = calculateAgeAdjustedInjury(rawScore, ageGroupId, bodyPart, isFallingEvent);
     let finalScore = Math.max(0, Math.min(100, ageAdjustedScore));
