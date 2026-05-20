@@ -23,6 +23,8 @@
 
 const QUAT_IDENTITY_EPSILON = 0.005;
 
+import { COLLISION_GROUPS } from '../services/physicsEngine.js';
+
 function isIdentityQuat(q) {
   if (!q) return true;
   const x = Array.isArray(q) ? q[0] : (q.x ?? 0);
@@ -362,7 +364,21 @@ const colliderGenerator = {
           }
         }
 
-        if (colliderEntry) colliders.push(colliderEntry);
+        if (colliderEntry) {
+          // [PERF-OPT-1] Set collision group based on object type.
+          // Soft objects (sensors) → SENSOR group (only interact with FURNITURE)
+          // All other objects → FURNITURE group (interact with AGENT + SENSOR)
+          const group = colliderEntry.isSoft ? COLLISION_GROUPS.SENSOR : COLLISION_GROUPS.FURNITURE;
+          if (colliderEntry.collider) {
+            colliderEntry.collider.setCollisionGroups(group);
+          }
+          if (colliderEntry.collidersArr) {
+            for (const c of colliderEntry.collidersArr) {
+              c.setCollisionGroups(group);
+            }
+          }
+          colliders.push(colliderEntry);
+        }
 
       } catch (err) {
         console.warn(`[ColliderGen] Error processing "${obj.id || obj.name}":`, err.message);

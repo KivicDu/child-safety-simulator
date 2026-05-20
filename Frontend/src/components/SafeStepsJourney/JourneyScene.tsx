@@ -5,8 +5,8 @@
  * Trans 0→1(0.18–0.35): Bay xuống xuyên cửa sổ
  * Frame 1  (0.35–0.50): Baby chơi trong phòng
  * Frame 2  (0.50–0.70): Baby đứng → tối → table xuất hiện → đi về góc bàn
- * Frame 3  (0.70–0.82): Baby dừng, guardian xanh
- * Frame 4  (0.82–1.00): Nhà hiện, camera kéo lên → blueprint
+ * Frame 3  (0.70–0.84): Baby dừng, guardian xanh (T-08: 0.82→0.84)
+ * Frame 4  (0.84–1.00): Nhà hiện, camera kéo lên → blueprint
  */
 import { Suspense, useState, useEffect, useCallback, useRef } from "react";
 import { Canvas } from "@react-three/fiber";
@@ -297,8 +297,8 @@ const HUD_PHASES = [
   { label: "Entering", range: [0.18, 0.35] },
   { label: "Wonderland", range: [0.35, 0.5] },
   { label: "First Steps", range: [0.5, 0.7] },
-  { label: "Guardian", range: [0.7, 0.82] },
-  { label: "Blueprint", range: [0.82, 1.0] },
+  { label: "Guardian", range: [0.7, 0.84] },   // T-08: 0.82→0.84
+  { label: "Blueprint", range: [0.84, 1.0] },   // T-08: 0.82→0.84
 ];
 
 function ScrollHUD({ progress }: { progress: number }) {
@@ -383,6 +383,18 @@ export default function JourneyScene() {
   const containerRef = useRef<HTMLDivElement>(null);
   const SCROLL_PAGES = 6; // 4 frames in 6 screen heights
 
+  /*
+   * T-16: Góc nguy hiểm thực tế do HazardTable tính và gửi lên.
+   * Dùng cho GuardianParticles để particles luôn xuất hiện đúng góc bàn.
+   * Khởi tạo = null; fallback tạm [-0.40, 0.41, 0.20] chỉ hiển thị
+   * khi callback chưa kịp fire (trước lần mount đầu tiên của HazardTable).
+   */
+  const [tableCorner, setTableCorner] = useState<THREE.Vector3 | null>(null);
+
+  const handleCornerReady = useCallback((worldPos: THREE.Vector3) => {
+    setTableCorner(worldPos.clone());
+  }, []);
+
   const scheduleUpdate = useCallback(() => {
     if (rafRef.current) return;
     rafRef.current = requestAnimationFrame(() => {
@@ -447,55 +459,63 @@ export default function JourneyScene() {
   const babyPhase: BabyPhase =
     sp < 0.5 ? "play" : sp < 0.56 ? "stand" : sp < 0.7 ? "walk" : "idle";
 
-  /* Table: Fade in sau khi House đã tắt (0.50→0.53), fade out vào bóng tối (0.77→0.80) */
+  /* Table: T-09 — start from 0.47 to overlap with sceneAlpha fadeout (0.45→0.48) */
   const tableOpacity =
-    sp < 0.50
+    sp < 0.47
       ? 0
-      : sp < 0.53
-        ? (sp - 0.5) / 0.03
+      : sp < 0.52
+        ? (sp - 0.47) / 0.05
         : sp < 0.77
           ? 1
           : sp < 0.80
             ? 1 - (sp - 0.77) / 0.03
             : 0;
 
-  /* Danger: 0.50→0.55 build, 0.55→0.68 hold, 0.68→0.72 fade */
+  /* Danger: T-06 — fade out ends at 0.70 (was 0.72) to avoid purple overlap */
   const dangerIntensity =
-    sp >= 0.50 && sp < 0.72
+    sp >= 0.50 && sp < 0.70
       ? sp < 0.55
         ? (sp - 0.50) / 0.05
-        : sp < 0.68
+        : sp < 0.66
           ? 1
-          : 1 - (sp - 0.68) / 0.04
+          : Math.max(0, 1 - (sp - 0.66) / 0.04)
       : 0;
 
-  /* Guardian: 0.70→0.78 in, 0.80→0.82 out */
+  /* Guardian: T-06 — starts at 0.72 (gap 0.70→0.72 = clean), T-08 — ends at 0.84 */
   const guardianIntensity =
-    sp >= 0.7 && sp < 0.82
+    sp >= 0.72 && sp < 0.84
       ? sp < 0.78
-        ? Math.min(1, (sp - 0.7) / 0.08)
-        : Math.max(0, 1 - (sp - 0.8) / 0.02)
+        ? Math.min(1, (sp - 0.72) / 0.06)
+        : Math.max(0, 1 - (sp - 0.82) / 0.02)
       : 0;
 
   const guardianParticles = guardianIntensity;
 
   /* House + Ground + Toys visibility
-     Chìm vào bóng tối từ 0.45→0.48. Đen đặc trong suốt Frame 2,3 (Hazard).
-     Hiện ra lại từ 0.80→0.83. */
+     Chìm vào bóng tối từ 0.45→0.48. Đen đặc trong suốt Frame 2,3.
+     T-08: Hiện ra lại từ 0.84→0.87 (was 0.80→0.83). */
   const sceneAlpha =
     sp < 0.45
       ? 1
       : sp < 0.48
         ? 1 - (sp - 0.45) / 0.03
-        : sp < 0.80
+        : sp < 0.84
           ? 0
-          : sp < 0.83
-            ? (sp - 0.80) / 0.03
+          : sp < 0.87
+            ? (sp - 0.84) / 0.03
             : 1;
 
-  /* Canvas → Blueprint crossfade */
-  const canvasOpacity = sp > 0.92 ? Math.max(0, 1 - (sp - 0.92) / 0.06) : 1;
-  const blueprintOpacity = sp > 0.93 ? Math.min(1, (sp - 0.93) / 0.06) : 0;
+  /* Canvas → Blueprint crossfade — T-08 shifted, T-14 overlap fix (0.91) */
+  const canvasOpacity = sp > 0.94 ? Math.max(0, 1 - (sp - 0.94) / 0.05) : 1;
+  const blueprintOpacity = sp > 0.91 ? Math.min(1, (sp - 0.91) / 0.06) : 0;
+
+  /* T-11: Danger vignette — HTML overlay radial-gradient tied to dangerIntensity */
+  const vignetteOp = dangerIntensity * 0.55;
+
+  /* T-12: White flash when camera passes through window (scroll 0.30→0.34) */
+  const flashOp = sp >= 0.30 && sp <= 0.34
+    ? Math.sin((sp - 0.30) / 0.04 * Math.PI) * 0.85
+    : 0;
 
   const showToys = sp >= 0.35 && sceneAlpha > 0.01;
   const showDustMotes = sp >= 0.35 && sp < 0.5;
@@ -560,22 +580,31 @@ export default function JourneyScene() {
               <Toys visible={showToys} />
             </group>
 
-            {/* Table — xuất hiện Frame 2 (Nâng lên theo mặt sàn 0.1317) */}
+            {/* Table — xuất hiện Frame 2.
+                T-16: Không hardcode dangerTarget nữa.
+                HazardTable tự tính góc nguy hiểm từ bounding box thực tế
+                và trả về qua onCornerReady để đồng bộ GuardianParticles. */}
             {tableOpacity > 0.01 && (
               <HazardTable
                 dangerIntensity={dangerIntensity}
                 guardianIntensity={guardianIntensity}
                 opacity={tableOpacity}
                 position={[-0.05, 0.1317, 0.12]}
-                dangerTarget={[-0.50, 0.35, 0.30]}
+                onCornerReady={handleCornerReady}
               />
             )}
 
-            {/* Guardian particles — Frame 3 (Gắn chặt tọa độ góc bên trái trên) */}
+            {/* Guardian particles — T-16: position lấy từ tableCorner thực tế.
+                +0.05 Y để particles nổi nhẹ phía trên góc bàn.
+                Fallback về giá trị cũ nếu corner chưa được tính (trước mount đầu). */}
             {guardianParticles > 0.01 && (
               <GuardianParticles
                 progress={guardianParticles}
-                position={[-0.50, 0.40, 0.30]}
+                position={
+                  tableCorner
+                    ? [tableCorner.x, tableCorner.y + 0.05, tableCorner.z]
+                    : [-0.40, 0.46, 0.20]
+                }
               />
             )}
 
@@ -584,6 +613,24 @@ export default function JourneyScene() {
           </Canvas>
         </Suspense>
       </div>
+
+      {/* T-11: Danger vignette overlay */}
+      {vignetteOp > 0.01 && (
+        <div style={{
+          position: "fixed", inset: 0, pointerEvents: "none", zIndex: 35,
+          background: `radial-gradient(ellipse at center, transparent 40%, rgba(0,0,0,${vignetteOp}) 100%)`,
+          transition: 'background 0.3s ease',
+        }} />
+      )}
+
+      {/* T-12: White flash when passing through window */}
+      {flashOp > 0.01 && (
+        <div style={{
+          position: "fixed", inset: 0, zIndex: 55,
+          background: 'white', opacity: flashOp,
+          pointerEvents: 'none',
+        }} />
+      )}
 
       <AudioEngine scrollProgress={sp} />
       <PixieDustCursor />

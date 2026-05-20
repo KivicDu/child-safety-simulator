@@ -4,12 +4,6 @@
  * toys_clack    : scroll 0.35–0.50 (Frame 1, loop — tiếng đồ chơi)
  * heartbeat     : scroll 0.58 → PLAY ONCE (Frame 2, baby đi về bàn)
  * shimmer_magic : scroll 0.70 → PLAY ONCE (Frame 3, guardian xuất hiện)
- *
- * IMPROVEMENTS (C2):
- *   • Smooth volume crossfade using linearRampToValueAtTime
- *   • Fade-out for toys loop (not abrupt stop)
- *   • Better gain management per source
- *   • Volume envelope for one-shot sounds (attack + hold)
  */
 import { useEffect, useRef, useCallback } from "react";
 
@@ -92,7 +86,10 @@ export default function AudioEngine({
 
     // Smooth fade-in
     gain.gain.setValueAtTime(0, ctx.currentTime);
-    gain.gain.linearRampToValueAtTime(volume, ctx.currentTime + FADE_IN_DURATION);
+    gain.gain.linearRampToValueAtTime(
+      volume,
+      ctx.currentTime + FADE_IN_DURATION,
+    );
 
     source.connect(gain).connect(ctx.destination);
     source.start();
@@ -113,13 +110,16 @@ export default function AudioEngine({
     gain.gain.linearRampToValueAtTime(0, now + FADE_OUT_DURATION);
 
     // Stop source after fade completes
-    setTimeout(() => {
-      try {
-        source.stop();
-      } catch {
-        /* already stopped */
-      }
-    }, FADE_OUT_DURATION * 1000 + 50);
+    setTimeout(
+      () => {
+        try {
+          source.stop();
+        } catch {
+          /* already stopped */
+        }
+      },
+      FADE_OUT_DURATION * 1000 + 50,
+    );
 
     ref.current.active[key] = null;
   }, []);

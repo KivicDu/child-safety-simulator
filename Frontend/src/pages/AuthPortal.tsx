@@ -27,7 +27,10 @@ const AuthPortal = () => {
     setLoginError("");
     setLoginLoading(true);
     try {
-      const response = await axios.post("/api/auth/login", { email: loginEmail, password: loginPassword });
+      const response = await axios.post("/api/auth/login", {
+        email: loginEmail,
+        password: loginPassword,
+      });
       if (response.data.success) {
         const { user } = response.data;
         localStorage.setItem("user", JSON.stringify(user));
@@ -46,12 +49,17 @@ const AuthPortal = () => {
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
     setRegError("");
-    if (regPassword !== regConfirm) return setRegError("Passwords do not match!");
-    if (regPassword.length < 6) return setRegError("Password must be at least 6 characters!");
+    if (regPassword !== regConfirm)
+      return setRegError("Passwords do not match!");
+    if (regPassword.length < 6)
+      return setRegError("Password must be at least 6 characters!");
     setRegLoading(true);
     try {
       const response = await axios.post("/api/auth/register", {
-        name: regName, email: regEmail, password: regPassword, confirmPassword: regConfirm,
+        name: regName,
+        email: regEmail,
+        password: regPassword,
+        confirmPassword: regConfirm,
       });
       if (response.data.success) {
         const { user } = response.data;
@@ -62,7 +70,9 @@ const AuthPortal = () => {
         setRegError(response.data.error || "Registration failed.");
       }
     } catch (err: any) {
-      setRegError(err.response?.data?.error || "Registration failed. Please try again.");
+      setRegError(
+        err.response?.data?.error || "Registration failed. Please try again.",
+      );
     } finally {
       setRegLoading(false);
     }
@@ -76,48 +86,107 @@ const AuthPortal = () => {
     <div className="portal-root">
       {/* Absolute ambient background for the entire page */}
       <div className="portal-ambient-bg" />
+      {/* ── Back to Home button — always visible, top-left ── */}
+      <button
+        onClick={() => navigate("/")}
+        style={{
+          position: "fixed",
+          top: 20,
+          left: 20,
+          zIndex: 200,
+          background: "rgba(11,19,43,0.85)",
+          backdropFilter: "blur(12px)",
+          border: "1px solid rgba(212,175,55,0.3)",
+          borderRadius: 8,
+          padding: "9px 16px",
+          color: "#FFE4A0",
+          fontSize: "0.82rem",
+          fontFamily: "Georgia, serif",
+          fontWeight: 700,
+          cursor: "pointer",
+          display: "flex",
+          alignItems: "center",
+          gap: 7,
+          letterSpacing: "0.04em",
+          transition: "all 0.2s",
+        }}
+        onMouseEnter={(e) => {
+          e.currentTarget.style.borderColor = "rgba(212,175,55,0.7)";
+          e.currentTarget.style.background = "rgba(11,19,43,0.98)";
+        }}
+        onMouseLeave={(e) => {
+          e.currentTarget.style.borderColor = "rgba(212,175,55,0.3)";
+          e.currentTarget.style.background = "rgba(11,19,43,0.85)";
+        }}
+      >
+        <span style={{ fontSize: "0.9rem" }}>←</span>
+        Back to Home
+      </button>
 
       <div className="portal-container">
-        
         {/* === LEFT SIDE: SIGN IN FORM === */}
-        <div className={`form-container sign-in-container ${isLogin ? "active" : "inactive"}`}>
+        <div
+          className={`form-container sign-in-container ${isLogin ? "active" : "inactive"}`}
+        >
           <form onSubmit={handleLogin} className="portal-form">
             <h1 className="portal-title">Child Safety Simulator</h1>
             <p className="portal-subtitle">Welcome Back to the Night Forest</p>
-            
+
             {loginError && <div className="portal-error">{loginError}</div>}
-            
+
             <div className="input-group">
               <label style={labelStyle}>Email</label>
               <input
-                type="email" value={loginEmail} onChange={(e) => setLoginEmail(e.target.value)}
-                required placeholder="name@example.com" className="auth-input"
+                type="email"
+                value={loginEmail}
+                onChange={(e) => setLoginEmail(e.target.value)}
+                required
+                placeholder="name@example.com"
+                className="auth-input"
               />
             </div>
             <div className="input-group">
               <label style={labelStyle}>Password</label>
               <input
-                type="password" value={loginPassword} onChange={(e) => setLoginPassword(e.target.value)}
-                required placeholder="••••••••" className="auth-input"
+                type="password"
+                value={loginPassword}
+                onChange={(e) => setLoginPassword(e.target.value)}
+                required
+                placeholder="••••••••"
+                className="auth-input"
               />
             </div>
-            <div style={{ width: "100%", textAlign: "right", marginTop: "-8px", marginBottom: "16px" }}>
-              <Link to="/forgot-password" className="portal-link-small">Forgot your password?</Link>
+            <div
+              style={{
+                width: "100%",
+                textAlign: "right",
+                marginTop: "-8px",
+                marginBottom: "16px",
+              }}
+            >
+              <Link to="/forgot-password" className="portal-link-small">
+                Forgot your password?
+              </Link>
             </div>
-            
+
             <button type="submit" disabled={loginLoading} className="auth-btn">
               {loginLoading ? "Signing In..." : "Sign In"}
             </button>
-            
+
             {/* Mobile-only toggle */}
             <div className="mobile-toggle">
-              Don't have an account? <Link to="/register" className="portal-link">Sign Up</Link>
+              Don't have an account?{" "}
+              <Link to="/register" className="portal-link">
+                Sign Up
+              </Link>
             </div>
           </form>
         </div>
 
         {/* === RIGHT SIDE: SIGN UP FORM === */}
-        <div className={`form-container sign-up-container ${!isLogin ? "active" : "inactive"}`}>
+        <div
+          className={`form-container sign-up-container ${!isLogin ? "active" : "inactive"}`}
+        >
           <form onSubmit={handleRegister} className="portal-form">
             <h1 className="portal-title">Child Safety Simulator</h1>
             <p className="portal-subtitle">Join the Daytime Light</p>
@@ -127,58 +196,86 @@ const AuthPortal = () => {
             <div className="input-group">
               <label style={labelStyle}>Full Name</label>
               <input
-                type="text" value={regName} onChange={(e) => setRegName(e.target.value)}
-                required placeholder="Your Name" className="auth-input"
+                type="text"
+                value={regName}
+                onChange={(e) => setRegName(e.target.value)}
+                required
+                placeholder="Your Name"
+                className="auth-input"
               />
             </div>
             <div className="input-group">
               <label style={labelStyle}>Email</label>
               <input
-                type="email" value={regEmail} onChange={(e) => setRegEmail(e.target.value)}
-                required placeholder="name@example.com" className="auth-input"
+                type="email"
+                value={regEmail}
+                onChange={(e) => setRegEmail(e.target.value)}
+                required
+                placeholder="name@example.com"
+                className="auth-input"
               />
             </div>
             <div className="input-group">
               <label style={labelStyle}>Password</label>
               <input
-                type="password" value={regPassword} onChange={(e) => setRegPassword(e.target.value)}
-                required placeholder="Min 6 chars" className="auth-input"
+                type="password"
+                value={regPassword}
+                onChange={(e) => setRegPassword(e.target.value)}
+                required
+                placeholder="Min 6 chars"
+                className="auth-input"
               />
             </div>
             <div className="input-group">
               <label style={labelStyle}>Confirm Password</label>
               <input
-                type="password" value={regConfirm} onChange={(e) => setRegConfirm(e.target.value)}
-                required placeholder="••••••••" className="auth-input"
+                type="password"
+                value={regConfirm}
+                onChange={(e) => setRegConfirm(e.target.value)}
+                required
+                placeholder="••••••••"
+                className="auth-input"
               />
             </div>
-            
-            <button type="submit" disabled={regLoading} className="auth-btn" style={{ marginTop: 12 }}>
+
+            <button
+              type="submit"
+              disabled={regLoading}
+              className="auth-btn"
+              style={{ marginTop: 12 }}
+            >
               {regLoading ? "Creating..." : "Create Account"}
             </button>
 
             {/* Mobile-only toggle */}
             <div className="mobile-toggle">
-              Already have an account? <Link to="/login" className="portal-link">Sign In</Link>
+              Already have an account?{" "}
+              <Link to="/login" className="portal-link">
+                Sign In
+              </Link>
             </div>
           </form>
         </div>
 
         {/* === SLIDING OVERLAY === */}
-        <motion.div 
+        <motion.div
           className="overlay-container"
           initial={false}
           animate={{ x: overlayX }}
-          transition={{ duration: 0.8, ease: [0.76, 0, 0.24, 1] }} 
+          transition={{ duration: 0.8, ease: [0.76, 0, 0.24, 1] }}
         >
           <div className="overlay-content">
             {/* The backgrounds that crossfade */}
-            <div className={`overlay-bg overlay-bg-day ${!isLogin ? "opacity-100" : "opacity-0"}`} />
-            <div className={`overlay-bg overlay-bg-night ${isLogin ? "opacity-100" : "opacity-0"}`} />
-            
+            <div
+              className={`overlay-bg overlay-bg-day ${!isLogin ? "opacity-100" : "opacity-0"}`}
+            />
+            <div
+              className={`overlay-bg overlay-bg-night ${isLogin ? "opacity-100" : "opacity-0"}`}
+            />
+
             <AnimatePresence mode="wait">
               {isLogin ? (
-                <motion.div 
+                <motion.div
                   key="login-prompt"
                   className="overlay-panel"
                   initial={{ opacity: 0, y: 20 }}
@@ -187,13 +284,18 @@ const AuthPortal = () => {
                   transition={{ duration: 0.3, delay: 0.2 }}
                 >
                   <h2 className="overlay-title">New to the Forest?</h2>
-                  <p className="overlay-desc">Step into the light and begin your safety journey today.</p>
-                  <button className="overlay-btn" onClick={() => navigate("/register")}>
+                  <p className="overlay-desc">
+                    Step into the light and begin your safety journey today.
+                  </p>
+                  <button
+                    className="overlay-btn"
+                    onClick={() => navigate("/register")}
+                  >
                     Sign Up
                   </button>
                 </motion.div>
               ) : (
-                <motion.div 
+                <motion.div
                   key="register-prompt"
                   className="overlay-panel"
                   initial={{ opacity: 0, y: 20 }}
@@ -202,8 +304,13 @@ const AuthPortal = () => {
                   transition={{ duration: 0.3, delay: 0.2 }}
                 >
                   <h2 className="overlay-title">Already a Guardian?</h2>
-                  <p className="overlay-desc">Return to the magic and continue where you left off.</p>
-                  <button className="overlay-btn" onClick={() => navigate("/login")}>
+                  <p className="overlay-desc">
+                    Return to the magic and continue where you left off.
+                  </p>
+                  <button
+                    className="overlay-btn"
+                    onClick={() => navigate("/login")}
+                  >
                     Sign In
                   </button>
                 </motion.div>
@@ -211,7 +318,6 @@ const AuthPortal = () => {
             </AnimatePresence>
           </div>
         </motion.div>
-
       </div>
 
       <style>{`
@@ -348,6 +454,7 @@ const AuthPortal = () => {
 
         .portal-link { color: #D4AF37; font-weight: 700; text-decoration: underline; }
         .portal-link-small { color: #D4AF37; font-weight: 700; text-decoration: underline; font-size: 0.85rem; }
+        .portal-link-small:hover { color: #D4AF37; }
 
         /* Mobile logic */
         .mobile-toggle { display: none; margin-top: 24px; font-size: 0.9rem; color: #A0B0C0; }

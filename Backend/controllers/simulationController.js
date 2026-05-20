@@ -8,7 +8,7 @@ import injuryCalculator from '../services/injuryCalculator.js';
 import Agent from '../services/agent.js';
 import { getAgeGroup } from '../config/ageGroups.js';
 import { initDeterministicMath, restoreMathRandom } from '../utils/seededRandom.js';
-import physicsEngine from '../services/physicsEngine.js';
+import physicsEngine, { COLLISION_GROUPS } from '../services/physicsEngine.js';
 import colliderGenerator from '../utils/colliderGenerator.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -387,7 +387,15 @@ export const startSimulation = async (req, res) => {
           return false;
         };
 
-        console.log(`[SIM] Step 3/5: Creating ${agentCount} independent worlds...`);
+        // ── [PERF-OPT-2] Fire Gemini API call BEFORE world creation loop ────────
+        // Gemini only needs sceneData + ageGroupId (available now).
+        // World creation is CPU-bound (5-15s), Gemini is Network-bound (2-15s).
+        // Running them in parallel hides the network latency entirely.
+        // distributeBehaviors() needs allAgents (only after loop) so we await later.
+        console.log(`[SIM] Step 3+4/5: Creating worlds + generating behaviors IN PARALLEL...`);
+        const behaviorStartTime = Date.now();
+        const behaviorPromise = behaviorManager.generateBehaviorsForScene(sceneData, ageGroupId);
+
         const simWorlds = [];
         const allAgents = [];
         let confirmedFloorY = floorHeight;
@@ -396,9 +404,11 @@ export const startSimulation = async (req, res) => {
           const world     = physicsEngine.createWorld();
           const colliders = colliderGenerator.generateCollidersFromScene(sceneData, world, physicsEngine);
 
-          // ── [BUG-1 FIX] Explicit floor collider — default collision group ──
-          // KHÔNG dùng setCollisionGroups → floor ở default group → castRay tìm thấy
-          // → confirmFloorSurface hoạt động → confirmedFloorY chính xác.
+          // ── [BUG-1 FIX] Explicit floor collider ────────────────────────────
+          // [PERF-OPT-1] FLOOR collision group: only interacts with AGENT.
+          // [PERF-OPT-3] No ActiveEvents: KCC handles ground, no event needed.
+          // NOTE: castRay uses filterFlags=2 (EXCLUDE_KINEMATIC) which ignores
+          // collision groups entirely — so FLOOR group does NOT affect raycasts.
           let explicitFloorHandle = null;
           {
             const fDesc = physicsEngine.rapier.RigidBodyDesc.fixed()
@@ -408,8 +418,7 @@ export const startSimulation = async (req, res) => {
               physicsEngine.rapier.ColliderDesc.cuboid(100, 0.05, 100)
                 .setFriction(0.9)
                 .setRestitution(0.0)
-                .setActiveEvents(physicsEngine.rapier.ActiveEvents.COLLISION_EVENTS),
-              // NOTE: NO setCollisionGroups — default group so castRay hits this
+                .setCollisionGroups(COLLISION_GROUPS.FLOOR),
               fBody
             );
             explicitFloorHandle = fColl.handle;
@@ -465,11 +474,8 @@ export const startSimulation = async (req, res) => {
           }
 
           // ── Tường vô hình bao quanh phòng ──────────────────────────────────
-          // Walls giữ nguyên setCollisionGroups(0x00010001) như code gốc.
-          // Lý do: KCC của agent cũng ở group mặc định (0xFFFF) nên vẫn va chạm
-          // với wall (0x0001 membership → mask 0x0001 → KCC có bit 0x0001 → match).
-          // Đây là hành vi đúng. Bỏ groups khỏi walls (như trong v3 trước) làm
-          // KCC coi walls như dynamic bodies và block horizontal movement.
+          // [PERF-OPT-1] WALL collision group: only interacts with AGENT.
+          // [PERF-OPT-3] No ActiveEvents: KCC handles wall blocking, no event needed.
           if (bb) {
             const wallHeight    = (bb.max[1] - bb.min[1]) + 1.0; // bao phủ toàn chiều cao phòng
             const wallThickness = 0.3;
@@ -491,7 +497,8 @@ export const startSimulation = async (req, res) => {
               const wallCollider = world.createCollider(
                 physicsEngine.rapier.ColliderDesc.cuboid(w.hx, w.hy, w.hz)
                   .setFriction(0.3)
-                  .setRestitution(0.0),
+                  .setRestitution(0.0)
+                  .setCollisionGroups(COLLISION_GROUPS.WALL),
                 body
               );
               handleToCollider.set(wallCollider.handle, {
@@ -737,11 +744,12 @@ export const startSimulation = async (req, res) => {
 
         console.log(`[SIM]    ✅ Created ${simWorlds.length} independent worlds (1 agent each)`);
 
-        // Step 4: Behaviors
-        console.log(`[SIM] Step 4/5: Generating agent behaviors...`);
-        const behaviorStartTime = Date.now();
-        const { behaviors, rareEvents } = await behaviorManager.generateBehaviorsForScene(sceneData, ageGroupId);
-        console.log(`[SIM]    ✅ Behaviors ready in ${Date.now() - behaviorStartTime}ms`);
+        // ── [PERF-OPT-2] Await Gemini result (was fired before world loop) ──
+        // By this point, Gemini has been running in parallel with world creation.
+        // If worlds took longer than Gemini, this await returns instantly.
+        console.log(`[SIM] Step 4/5: Awaiting AI behaviors (started in parallel)...`);
+        const { behaviors, rareEvents } = await behaviorPromise;
+        console.log(`[SIM]    ✅ Behaviors ready in ${Date.now() - behaviorStartTime}ms (ran in parallel with world creation)`);
         behaviorManager.distributeBehaviors(allAgents, behaviors, rareEvents);
 
         const collisionEvents = [];
@@ -750,8 +758,13 @@ export const startSimulation = async (req, res) => {
         let dbg_softIntersections = 0;
         const traceLog = [];
 
-        const deltaTime  = 1 / 60;
-        const totalSteps = duration * 60;
+        // [PERF-TIER2] Headless simulation: 20 FPS is sufficient for kinematic agents.
+        // All colliders are static/kinematic — no dynamic bodies needing 60Hz sub-steps.
+        // Agent speed ~0.8m/s → 0.04m/step at 20Hz, well within collider radius 0.22m.
+        // Impact: 18,000 steps → 6,000 steps (−66% compute time).
+        const SIM_FPS    = 20;
+        const deltaTime  = 1 / SIM_FPS;
+        const totalSteps = duration * SIM_FPS;
 
         console.log(`[SIM] Step 5/5: Running physics loop (${totalSteps} steps × ${simWorlds.length} worlds)...`);
         const loopStartTime = Date.now();
@@ -762,10 +775,9 @@ export const startSimulation = async (req, res) => {
         const _roomHeight  = (bb ? bb.max[1] - bb.min[1] : 4.0);
 
         for (let step = 0; step < totalSteps; step++) {
-          // [PERF-FIX-3] Giảm setImmediate từ mỗi 60 steps (1s sim) → mỗi 300 steps (5s sim).
-          // Old: 30 context switches cho simulation 30s → overhead event loop không cần thiết.
-          // 300 steps = 5s sim-time vẫn đủ responsive cho status polling (client poll mỗi 2s).
-          if (step > 0 && step % 300 === 0) {
+          // [PERF-FIX-3] Yield to event loop every ~5s of sim-time for status polling.
+          // At 20 FPS: 100 steps = 5s sim-time.
+          if (step > 0 && step % 100 === 0) {
             await new Promise(r => setImmediate(r));
           }
 
@@ -861,7 +873,7 @@ export const startSimulation = async (req, res) => {
                 const px = pos.x, pz = pos.z;
                 const lastP  = agent._floorCachePos;
                 const movedFar = !lastP || Math.hypot(px - lastP[0], pz - lastP[1]) > 0.3;
-                const timedOut = !agent._floorCacheFrame || (step - agent._floorCacheFrame) >= 60;
+                const timedOut = !agent._floorCacheFrame || (step - agent._floorCacheFrame) >= SIM_FPS;  // ~1 second safety net
 
                 if (movedFar || timedOut) {
                   const rawFloorY = getCurrentFloorY(
@@ -1249,7 +1261,7 @@ export const startSimulation = async (req, res) => {
             agentCount, duration,
             ageGroup: ageGroup.name, ageGroupId,
             scaleFactor: sceneData._scaleFactor || 1.0,
-            fps: 60,
+            fps: SIM_FPS,
             floorHeight: confirmedFloorY,
           },
           trajectories,
@@ -1519,6 +1531,20 @@ export const getSimulationHeatmap = async (req, res) => {
       entry.hits.forEach(h => { if (h.bodyPart) bodyParts[h.bodyPart] = (bodyParts[h.bodyPart] || 0) + 1; });
       const primaryBodyPart = Object.entries(bodyParts).sort((a, b) => b[1] - a[1])[0]?.[0] || 'unknown';
 
+      // [FRACTURE-DATA] Extract specific injuries (e.g. growth_plate_fracture) and biomechanics
+      const specificInjuries = entry.hits
+        .filter(h => h.specificInjury)
+        .map(h => h.specificInjury);
+      const fractureCount = specificInjuries.length;
+      const hicValues     = entry.hits.map(h => h.hic15 || 0);
+      const forceValues   = entry.hits.map(h => h.impactForceN || 0);
+      const durationValues = entry.hits.map(h => h.collisionDurationMs || 0);
+      const maxHIC        = Math.max(...hicValues, 0);
+      const maxImpactForceN = Math.max(...forceValues, 0);
+      const avgCollisionDurationMs = durationValues.length > 0
+        ? Math.round(durationValues.reduce((a, b) => a + b, 0) / durationValues.length * 10) / 10 : 0;
+      const bodyPartDistribution = bodyParts;
+
       const intensity   = Math.max(0, Math.min(1.0, maxScore / 80));
       const heatColor   = scoreToRGB(maxScore) || [0, 1, 0];
       const sceneObj    = sceneObjects[objId];
@@ -1540,6 +1566,13 @@ export const getSimulationHeatmap = async (req, res) => {
         heatColor: Array.isArray(heatColor) ? heatColor : [0, 1, 0],
         intensity:  typeof intensity === 'number' ? intensity : 0,
         recommendations: Array.isArray(recommendations) ? recommendations : [],
+        // [FRACTURE-DATA] Biomechanics detail for frontend
+        fractureCount,
+        specificInjuries: [...new Set(specificInjuries)],  // unique injury types
+        maxHIC: Math.round(maxHIC * 100) / 100,
+        maxImpactForceN: Math.round(maxImpactForceN),
+        avgCollisionDurationMs,
+        bodyPartDistribution,
       });
     }
 
