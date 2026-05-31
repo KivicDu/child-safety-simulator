@@ -217,6 +217,13 @@ class HybridBehaviorEngine {
       sceneData
     );
 
+    // Log selected behaviors with durations
+    console.log(`   Selected ${selectedBehaviors.length} behaviors:`);
+    selectedBehaviors.forEach((b, idx) => {
+      const totalDuration = b.sequence?.reduce((sum, a) => sum + (a.duration || 0.5), 0) || b.duration || 'N/A';
+      console.log(`     [${idx + 1}] ${b.id}: ${totalDuration}s`);
+    });
+
     return {
       source: 'FALLBACK',
       reason,
@@ -237,6 +244,11 @@ class HybridBehaviorEngine {
 
     // Filter behaviors that can be executed in this scene
     const eligible = behaviors.filter(behavior => {
+      // Safety check: ensure targetTypes exists
+      if (!behavior || !behavior.targetTypes) {
+        console.warn(`⚠️  Behavior missing targetTypes: ${behavior?.id || 'unknown'}`);
+        return true; // Include behaviors with no target type restriction
+      }
       return behavior.targetTypes.some(type => 
         this.matchesObjectType(type, availableObjects)
       );
@@ -305,6 +317,8 @@ class HybridBehaviorEngine {
     
     console.error(`❌ AI Error: ${errorType}`);
     console.error(`   Message: ${error.message}`);
+    console.error(`   Age Group: ${ageGroupId}`);
+    console.error(`   Scene Objects: ${(sceneData.objects || []).length}`);
 
     // Determine if we should fallback
     const shouldFallback = (
@@ -314,8 +328,10 @@ class HybridBehaviorEngine {
     );
 
     if (shouldFallback) {
+      console.warn(`📚 Falling back to research-based behaviors...`);
       return this.getFallbackBehaviors(sceneData, ageGroupId, errorType);
     } else {
+      console.error(`🛑 Fallback DISABLED for ${errorType} - simulation may fail`);
       throw error; // Re-throw if fallback disabled
     }
   }

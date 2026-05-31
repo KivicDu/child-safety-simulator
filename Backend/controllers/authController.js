@@ -28,7 +28,7 @@ const sendOtpEmail = async (email, otp, name) => {
   const mailOptions = {
     from: `"Child Safety Simulator" <${process.env.EMAIL_USER}>`,
     to: email,
-    subject: '🔐 Your Password Reset OTP Code',
+    subject: 'Your Password Reset OTP Code',
     html: `
       <div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto; padding: 32px; background: #f0f9ff; border-radius: 16px;">
         <h2 style="color: #0369a1; text-align: center; margin-bottom: 8px;">Password Reset</h2>
@@ -41,7 +41,7 @@ const sendOtpEmail = async (email, otp, name) => {
         </div>
         
         <p style="color: #94a3b8; text-align: center; font-size: 14px;">
-          ⏰ This code expires in <strong>5 minutes</strong>.<br/>
+          !This code expires in <strong>5 minutes</strong>.<br/>
           If you did not request this, please ignore this email.
         </p>
       </div>
@@ -80,7 +80,7 @@ export const register = async (req, res) => {
       token: generateToken()
     });
 
-    console.log(`✅ User registered: ${email}`);
+    console.log(`User registered: ${email}`);
 
     res.json({
       success: true,
@@ -124,7 +124,7 @@ export const login = async (req, res) => {
     user.lastLogin = Date.now();
     await user.save();
 
-    console.log(`✅ User logged in: ${email}`);
+    console.log(`User logged in: ${email}`);
 
     res.json({
       success: true,

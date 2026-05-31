@@ -20,9 +20,6 @@ interface Anthropometry {
 
 const ANTHROPOMETRY: Record<string, Anthropometry> = {
   infant: {
-    // WHO 12mo: height=74cm, HC=46cm → headR = 46/(2π) = 0.073m
-    // As fraction: 0.073/0.70 = 10.4% — but visual head needs to appear larger
-    // Using 0.095m (13.6%) for correct visual infant proportions (head-to-body ratio)
     realHeight: 0.70, headRadius: 0.095, neckLength: 0.040,
     torsoLength: 0.22, torsoRadius: 0.070,
     legLength: 0.284, armLength: 0.160,
@@ -36,9 +33,6 @@ const ANTHROPOMETRY: Record<string, Anthropometry> = {
     shoulderWidth: 0.22, hipWidth: 0.10,
     skinColor: 0xf5cba7, outfitColor: 0x93c5fd, accentColor: 0x3b82f6,
   },
-  // FIX-C1: Backend sends 'early_toddler' — proportions for 1-2y (WHO/CDC 50th percentile)
-  // Head: HC p50 18mo ≈ 48cm → headR=0.076m (9.3% of 0.82m)
-  // Visual adjustment: 0.088m (10.7%) for better child proportion feel
   early_toddler: {
     realHeight: 0.82, headRadius: 0.088, neckLength: 0.046,
     torsoLength: 0.258, torsoRadius: 0.076,
@@ -46,7 +40,6 @@ const ANTHROPOMETRY: Record<string, Anthropometry> = {
     shoulderWidth: 0.20, hipWidth: 0.09,
     skinColor: 0xf5cba7, outfitColor: 0x93c5fd, accentColor: 0x3b82f6,
   },
-  // FIX-C1: Backend sends 'late_toddler' — proportions for 2-3y (longer legs, leaner torso)
   late_toddler: {
     realHeight: 0.94, headRadius: 0.073, neckLength: 0.053,
     torsoLength: 0.30, torsoRadius: 0.082,
@@ -68,7 +61,6 @@ const ANTHROPOMETRY: Record<string, Anthropometry> = {
     shoulderWidth: 0.30, hipWidth: 0.14,
     skinColor: 0xf5cba7, outfitColor: 0xc4b5fd, accentColor: 0x8b5cf6,
   },
-  // FIX: Backend sends 'school' as ageGroupId — alias to school_age
   school: {
     realHeight: 1.30, headRadius: 0.065, neckLength: 0.070,
     torsoLength: 0.40, torsoRadius: 0.100,
@@ -76,7 +68,6 @@ const ANTHROPOMETRY: Record<string, Anthropometry> = {
     shoulderWidth: 0.30, hipWidth: 0.14,
     skinColor: 0xf5cba7, outfitColor: 0xc4b5fd, accentColor: 0x8b5cf6,
   },
-  // FIX-C1: Backend sends 'child' (6-10y) — same measurements as school_age
   child: {
     realHeight: 1.30, headRadius: 0.065, neckLength: 0.070,
     torsoLength: 0.40, torsoRadius: 0.100,
@@ -94,41 +85,26 @@ const ANTHROPOMETRY: Record<string, Anthropometry> = {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// FIX-A: Anatomical joint limits (radians)
-// Format: [min, max]  where rotation.x is forward(+)/backward(-)
+// Shared Joint Limits (radians)
 // ─────────────────────────────────────────────────────────────────────────────
 const JOINT_LIMITS: Record<string, [number, number]> = {
-  // Shoulder X: backward extension −60°(−1.047) → forward flexion +180°(+3.14)
-  // Shoulder must be able to reach overhead (PI rad) for climbing
-  shL_x: [-1.047, Math.PI],
-  shR_x: [-1.047, Math.PI],
-  // Shoulder Z: abduction ±90°
-  shL_z: [-1.571, 1.571],
-  shR_z: [-1.571, 1.571],
-  // Elbow X: flexion only. Negative = bend inward (toward body). 0 = straight.
-  elbL_x: [-2.530, 0],
-  elbR_x: [-2.530, 0],
-  // Hip X: 100° flexion(−1.745) → 70° forward-swing(+1.222)
-  // BUG-FIX: was -0.698(40°) which clamped all sitting/lying/crawl poses!
-  // Children hip flexion reaches ~125° (APTA). Allow -100° for sit/lie/crawl.
-  hipL_x: [-1.745, 1.222],
-  hipR_x: [-1.745, 1.222],
-  // Hip Z: abduction ±40°
-  hipL_z: [-0.698, 0.698],
-  hipR_z: [-0.698, 0.698],
-  // Knee X: 0 (straight) → 140° flex (2.44 rad). No hyperextension.
-  kneeL_x: [0, 2.443],
-  kneeR_x: [0, 2.443],
-  // Spine X: 25° backward(−0.436) → 75° forward(+1.309)
-  spine_x: [-0.436, 1.309],
-  // Spine Y: ±20° lateral sway
-  spine_y: [-0.349, 0.349],
-  // Head X: ±30° nod
-  head_x: [-0.524, 0.524],
-  // Head Y: ±45° turn
-  head_y: [-0.785, 0.785],
-  // Hip bob: 0 → 5cm
-  hips_bob: [0, 0.05],
+  shL_x: [-Math.PI, Math.PI],
+  shR_x: [-Math.PI, Math.PI],
+  shL_z: [-Math.PI, Math.PI],
+  shR_z: [-Math.PI, Math.PI],
+  elbL_x: [-2.530, 2.530],
+  elbR_x: [-2.530, 2.530],
+  hipL_x: [-2.5, 2.5],
+  hipR_x: [-2.5, 2.5],
+  hipL_z: [-1.5, 1.5],
+  hipR_z: [-1.5, 1.5],
+  kneeL_x: [-2.5, 2.5],
+  kneeR_x: [-2.5, 2.5],
+  spine_x: [-1.5, 1.5],
+  spine_y: [-1.0, 1.0],
+  head_x: [-1.0, 1.0],
+  head_y: [-1.0, 1.0],
+  hips_bob: [-2.0, 1.0],
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -163,9 +139,6 @@ function box(w: number, h: number, d: number, color: number): THREE.Mesh {
   return new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat(color, 0.75));
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Joint helpers
-// ─────────────────────────────────────────────────────────────────────────────
 function pivot(y = 0, name = ''): THREE.Group {
   const g = new THREE.Group();
   g.position.y = y;
@@ -188,7 +161,7 @@ export class ProceduralFigure {
 
   private a: Anthropometry;
 
-  // Joint pivots (rotated every frame)
+  // Joint pivots
   private hips!:       THREE.Group;
   private spine!:      THREE.Group;
   private headPivot!:  THREE.Group;
@@ -212,19 +185,14 @@ export class ProceduralFigure {
   private wading      = false;
   private wadingAlpha = 0;
 
-  // FIX #17: Minimum action duration tracking — prevent instant state changes
   private _lastAction = '';
   private _actionTimer = 0;
-  private static readonly MIN_ACTION_DURATION = 0.3; // seconds
-  private _breathTimer2 = 0;  // separate timer for idle breathing (not tied to cycle)
+  private static readonly MIN_ACTION_DURATION = 0.05; 
+  private _breathTimer2 = 0;
 
-  // FIX-C: Lerp state stores CURRENT angle (for short-arc lerp)
-  // targets = desired value this frame (reset each update)
-  // current = smoothed value applied to bones
   private targets: Record<string, number> = {};
   private current: Record<string, number> = {};
 
-  // Optional label sprite (managed externally by Canvas3D)
   labelSprite?: THREE.Sprite;
 
   constructor(ageGroupId: string, agentId: number, accentOverride?: number) {
@@ -244,7 +212,6 @@ export class ProceduralFigure {
     this._build();
   }
 
-  // ─── Build geometry ─────────────────────────────────────────────────────
   private _build() {
     const {
       headRadius, neckLength, torsoLength, torsoRadius,
@@ -264,7 +231,9 @@ export class ProceduralFigure {
     const footH = limbR * 0.55;
     const footD = limbR * 3.2;
 
-    // ── Hips (pivot at foot level + legLength) ────────────────────────────
+    const baseWidth = shoulderWidth > 0 ? shoulderWidth : 0.22;
+
+    // ── Hips ──────────────────────────────────────────────────────────────
     const hips = pivot(legLength, 'hips');
     this.hips  = hips;
     this.root.add(hips);
@@ -319,8 +288,7 @@ export class ProceduralFigure {
 
     const buildArm = (side: -1 | 1, name: string) => {
       const sh = pivot(0, `${name}_shoulder`);
-      // Ensure shoulder pivot sits outside torso regardless of small shoulderWidth configs
-      const safeShoulderX = Math.max(shoulderWidth / 2 + armR, torsoRadius + armR * 1.5);
+      const safeShoulderX = Math.min(baseWidth / 2, torsoRadius + armR * 0.2);
       sh.position.x = safeShoulderX * side;
       shoulderBar.add(sh);
 
@@ -344,11 +312,6 @@ export class ProceduralFigure {
       hand.position.y = -fArmLen - handR;
       this.skinMeshes.push(hand);
       elbow.add(hand);
-
-      // FIX-E: A-pose rotation removed — applyR() sets rotation.z each frame
-      // from shL_z/shR_z targets (minimum 0.30 rad enforced in update()).
-      // Old code: sh.rotation.z = side * 0.30; — was overwritten and caused clipping.
-
       return { sh, elbow };
     };
 
@@ -413,7 +376,6 @@ export class ProceduralFigure {
     mouth.position.set(0, eyeOffY - headRadius * 0.42, eyeOffZ + headRadius * 0.02);
     headPivot.add(mouth);
 
-    // Cast/receive shadows on all meshes
     this.root.traverse(o => {
       if ((o as THREE.Mesh).isMesh) {
         o.castShadow    = true;
@@ -422,704 +384,263 @@ export class ProceduralFigure {
     });
   }
 
-  // ─── Per-frame update ───────────────────────────────────────────────────
   update(dt: number, entry?: ActionEntry | null) {
     let action  = entry?.a ?? 'idle';
     const emotion = entry?.e ?? 'neutral';
-
-    // FIX #17: Enforce minimum action duration — ignore action changes that happen
-    // too fast (< 0.3s), unless moving to a higher-priority state like 'hurt' or 'fall'
+    
     this._actionTimer += dt;
     const PRIORITY_ACTIONS = ['fall', 'falling', 'free_fall', 'fall_forward', 'hurt_light', 'hurt_medium', 'hurt_heavy', 'recoil'];
+    
     if (action !== this._lastAction) {
       if (this._actionTimer < ProceduralFigure.MIN_ACTION_DURATION && !PRIORITY_ACTIONS.includes(action)) {
-        // Keep the previous action — too early to switch
         action = this._lastAction || action;
       } else {
         this._lastAction = action;
         this._actionTimer = 0;
+        // Bỏ đóng băng khi kích hoạt chạy lại hoặc đổi trạng thái
+        if (action === 'idle' || entry?.v === 0) {
+          this.cycle = 0; 
+        }
       }
     }
-    this.wading   = !!(entry?.wadingIn);
+    this.wading = !!(entry?.wadingIn);
 
-    // Action classification
-    const isWalk  = ['walk', 'walk_to', 'walk_random', 'investigate', 'reach'].includes(action);
-    const isRun   = ['run', 'sprint', 'run_unstable'].includes(action);
+    // Phân nhóm bộ hành động độc lập đầy đủ (Khôi phục trạng thái climb)
+    const isWalk  = ['walk', 'walk_to', 'walk_random', 'investigate'].includes(action); 
+    const isRun   = ['run', 'run_unstable'].includes(action); 
+    const isSprint = action === 'sprint';
     const isWade  = action === 'wade';
     const isCrawl = action === 'crawl';
-    const isFall  = ['falling', 'free_fall', 'stumble', 'trip', 'fall_forward', 'lose_balance'].includes(action);
-    const isClimb = ['climb_on', 'climb', 'climb_approach', 'climb_reach', 'climb_pull', 'climb_mount', 'climb_down', 'step_up', 'step_down'].includes(action);
-    const isClimbFail = action === 'climb_fail';
-    // Hurt/pain states (NEW)
+    const isFall  = ['falling', 'free_fall', 'fall_forward', 'fall_under', 'furniture_tips'].includes(action); // Bổ sung fall_under đè tủ
+    const isStumble = ['stumble', 'trip', 'lose_balance'].includes(action);    
+    const isClimb = ['climb_on', 'climb', 'climb_approach', 'climb_reach', 'climb_pull', 
+                     'climb_mount', 'climb_down', 'step_up', 'step_down', 
+                     'pull_to_stand', 'climb_drawer', 'open_cabinet'].includes(action);                     
     const isHurt     = ['hurt_light', 'hurt_medium', 'hurt_heavy', 'hurt_shock', 'recoil'].includes(action);
     const isCrying   = ['crying_stand', 'crying_sit'].includes(action);
-    const isGetUp    = ['get_up_slow', 'get_up_fast'].includes(action);
-    // Interaction actions
-    const isGrab     = ['grab', 'grab_mouth'].includes(action);
-    const isReach    = action === 'reach_up';
-    const isPull     = ['pull', 'pull_to_stand', 'open_drawer'].includes(action);
-    const isLunge    = action === 'lunge';
-    const isLookAround = action === 'look_around';
-    const isPause    = action === 'pause';
-    // F7 + Group G rare events
-    const isSlide     = action === 'slide';
-    const isRareEvent = ['dodge', 'push', 'throw', 'pick_up', 'sit_down', 'stand_up', 'jump', 'land'].includes(action);
-    const isInteract = isGrab || isReach || isPull || isLunge || isLookAround || isPause || isHurt || isCrying || isGetUp || isClimbFail || isSlide || isRareEvent;
-    const isIdle  = !isWalk && !isRun && !isWade && !isCrawl && !isFall && !isClimb && !isInteract;
-
-    // ── Velocity-proportional cycle rate (Froude gait model) ─────────────
-    // stepFreq (Hz) = velocity / strideLength
-    // strideLength ≈ legLength × 1.2 (walk) | legLength × 1.8 (run)
-    // cycleRate (rad/s) = stepFreq × 2π
-    //
-    // Example early_toddler (legLen=0.37m):
-    //   walk 0.72 m/s → stride=0.444m → stepFreq=1.62Hz → cycleRate=10.2 rad/s
-    //   run  1.40 m/s → stride=0.666m → stepFreq=2.10Hz → cycleRate=13.2 rad/s
-    //   Clamped to [4.0, 12.0] for walk and [6.0, 16.0] for run.
+    const isSitting  = ['sitting', 'sit_down'].includes(action); 
+    const isGetUp    = ['get_up_slow', 'get_up_fast', 'stand_up'].includes(action);
+    const isGrab     = ['grab', 'grab_mouth', 'grab_bottle'].includes(action);    
+    const isReach    = ['reach', 'reach_up', 'swing_open', 'swing_close', 'pull_item', 'insert_object'].includes(action);    
+    const isInteract = isGrab || isReach || isHurt || isCrying || isSitting || isGetUp || isStumble || action === 'drink' || action === 'jump';
+    const isIdle  = !isWalk && !isRun && !isSprint && !isWade && !isCrawl && !isFall && !isClimb && !isInteract;
     const vel = entry?.v ?? 0;
     const legLen = this.a.legLength;
 
+    // Tần số chu kỳ bước chân hoạt họa
     let cycleRate: number;
-    if (isWalk || isRun) {
-      const strideLen = isRun ? legLen * 1.80 : legLen * 1.20;
-      const vEff      = Math.max(0.1, vel);  // avoid division by zero
+    if (isWalk || isRun || isSprint) {
+      const strideLen = isSprint ? legLen * 2.0 : isRun ? legLen * 1.6 : legLen * 1.0;
+      const vEff      = Math.max(0.05, vel);
       const rawRate   = (vEff / strideLen) * 2 * Math.PI;
-      if (isRun) {
-        cycleRate = Math.max(6.0, Math.min(16.0, rawRate));
-      } else {
-        cycleRate = Math.max(4.0, Math.min(12.0, rawRate));
-      }
-    } else if (isWade) {
-      cycleRate = 2.5;                          // wading: slow, heavy steps
+      if (isSprint) cycleRate = Math.max(10.0, Math.min(20.0, rawRate * 1.2));
+      else if (isRun)  cycleRate = Math.max(7.0, Math.min(14.0, rawRate));
+      else             cycleRate = Math.max(2.2, Math.min(4.8, rawRate * 0.5));
     } else if (isCrawl) {
-      // Crawl: slow deliberate motion. Froude for crawl: ~0.5-1.0 Hz gait
-      const strideCrawl = legLen * 0.80;
-      const vCrawl = Math.max(0.08, vel);
-      cycleRate = Math.max(2.0, Math.min(5.0, (vCrawl / strideCrawl) * 2 * Math.PI));
-    } else if (isFall) {
-      cycleRate = 5.0;                          // flailing during fall
+      // Nhịp bò chậm, bập bênh nhịp nhàng theo vận tốc
+      const vCrawl = vel > 0 ? vel : 0.15;
+      cycleRate = Math.max(3.0, Math.min(6.0, (vCrawl / (legLen * 1.1)) * 2 * Math.PI));
     } else if (isClimb) {
-      cycleRate = 2.5;                          // steady climb rhythm
-    } else if (isHurt) {
-      cycleRate = 2.0;
-    } else if (isCrying) {
-      cycleRate = 1.5;
-    } else if (isGetUp) {
-      cycleRate = 0.8;
-    } else if (action === 'push') {
-      cycleRate = 1.0;
-    } else if (action === 'pick_up') {
-      cycleRate = 0.8;
-    } else if (action === 'sit_down' || action === 'stand_up') {
-      cycleRate = 0.5;
-    } else if (isSlide || isRareEvent) {
-      cycleRate = 0;
-    } else if (isInteract) {
-      cycleRate = 1.0;
+      cycleRate = 2.8; // Nhịp bám trèo điều độ
     } else {
-      cycleRate = 0;   // idle: no limb cycle
+      cycleRate = (isFall || isWade) ? 3.0 : (vel > 0 ? 2.0 : 0);
     }
+    
+    if (vel === 0 && (isWalk || isRun || isSprint || isCrawl)) {
+      cycleRate = 0;
+    }
+    
     this.cycle += dt * cycleRate;
-    this._breathTimer2 += dt;  // always ticks for idle breathing
+    this._breathTimer2 += dt;
 
     const s = Math.sin(this.cycle);
     const c = Math.cos(this.cycle);
-    const bt = this._breathTimer2;  // for idle-only effects
+    const bt = this._breathTimer2;
 
     // ══════════════════════════════════════════════════════════════════════
-    // LAYER 1 — ACTION BASE POSE
-    // These values are set first. Emotions may override select joints on top.
+    // LAYER 1 — TẠO POSE CHI DƯỚI (LEGS)
     // ══════════════════════════════════════════════════════════════════════
+    
+    // FIX KHÓA TRỌNG TÂM: Luôn tự động hoàn trả hips_bob về 0 nếu không ở trạng thái Ngồi/Bò/Trèo
+    if (!isSitting && !isCrawl && !isClimb) {
+      this._setTarget('hips_bob', 0);
+    }
 
-    // ── Leg swing ─────────────────────────────────────────────────────────
-    // FIX-F: run legSwing reduced 1.40→1.22 to keep hip within 70° anatomy limit
-    const legSwing  = isRun ? 1.22 : isWalk ? 0.90 : isWade ? 0.42 : 0;
-    // FIX-F: run kneeSwing kept at 1.05 (60°) — anatomically OK for sprinting
-    const kneeSwing = isRun ? 1.05 : isWalk ? 0.55 : isWade ? 0.25 : 0;
+    const legSwing  = isSprint ? 1.30 : isRun ? 1.10 : isWalk ? 0.65 : isWade ? 0.42 : 0;
+    const kneeSwing = isSprint ? 1.15 : isRun ? 0.95 : isWalk ? 0.40 : isWade ? 0.25 : 0;
 
-    if (legSwing > 0) {
-      // Walk / run / wade: alternating hip swing + knee flex on trailing leg
+    if (legSwing > 0 && !isFall && !isStumble && !isHurt && !isSitting && vel > 0) {
       this._setTarget('hipL_x',   s * legSwing);
       this._setTarget('hipR_x',  -s * legSwing);
-      // Knee bends on the leg swinging BACK (negative hip = trailing leg)
       this._setTarget('kneeL_x',  Math.max(0, -c * kneeSwing));
       this._setTarget('kneeR_x',  Math.max(0,  c * kneeSwing));
-    } else if (isCrawl) {
-      // Crawl: hip highly flexed (knees near chest), alternating push/pull
-      // Hip: −60° to −80° flexion (toward chest). Knee: 70°-90° flex.
-      // With spine 80° forward, resultant leg position = knee on/near floor ✓
-      this._setTarget('hipL_x',  -(1.22 + s * 0.26));   // 56°–82° hip flexion
-      this._setTarget('hipR_x',  -(1.22 - s * 0.26));
-      this._setTarget('kneeL_x',  1.40 + s * 0.17);     // 73°–87° knee flex
-      this._setTarget('kneeR_x',  1.40 - s * 0.17);
-    } else if (isFall) {
-      // Fall / stumble: legs slightly bent backward (natural stumble reflex)
-      const flail = Math.sin(this.cycle * 5) * 0.28; // slightly slower flail, less extreme
-      this._setTarget('hipL_x',  -0.40 + flail);
-      this._setTarget('hipR_x',  -0.40 - flail);
-      this._setTarget('kneeL_x',  0.52);
-      this._setTarget('kneeR_x',  0.52);
-    } else if (isClimb) {
-      // Multi-phase climb: alternating step-up with arm pull
-      // FIX #8: Use s directly (not abs(s)) for true left/right alternation
-      if (action === 'step_up' || action === 'step_down') {
-        // Simple step: one leg up, one stable
-        const dir = action === 'step_up' ? -1 : 1;
-        this._setTarget('hipL_x',  dir * 0.70);
-        this._setTarget('hipR_x',  0);
-        this._setTarget('kneeL_x', action === 'step_up' ? 1.22 * (1 - Math.abs(s)) : 0.52);
-        this._setTarget('kneeR_x', 0.35);
-      } else {
-        // Full climb: alternating legs — left goes up while right pushes, then swap
-        this._setTarget('hipL_x',  -(0.87 + s * 0.35));   // alternates −52° to −122° 
-        this._setTarget('hipR_x',  -(0.87 - s * 0.35));   // opposite phase
-        this._setTarget('kneeL_x',  0.87 + s * 0.35);     // knee bends with hip
-        this._setTarget('kneeR_x',  0.87 - s * 0.35);
-        // Hip vertical bob to simulate pulling body upward
-        this._setTarget('hips_bob', Math.abs(s) * 0.03);
-      }
-    } else if (isHurt) {
-      // ── HURT / PAIN REACTIONS (NEW) ──
-      if (action === 'hurt_light' || action === 'recoil') {
-        // Startle: step back, slight knee bend
-        this._setTarget('hipL_x',   0.10);
-        this._setTarget('hipR_x',   0.10);
-        this._setTarget('kneeL_x',  0.17);
-        this._setTarget('kneeR_x',  0.17);
-      } else if (action === 'hurt_medium') {
-        // Crouch down in pain: deep knee bend, hips flexed
-        this._setTarget('hipL_x',  -0.70);
-        this._setTarget('hipR_x',  -0.70);
-        this._setTarget('kneeL_x',  1.22);
-        this._setTarget('kneeR_x',  1.22);
-      } else if (action === 'hurt_heavy') {
-        // Fall down: phase-based (legs buckle then curl)
-        const phase = Math.min(1, this.cycle * 0.5);
-        this._setTarget('hipL_x',  -(0.35 + phase * 0.70));
-        this._setTarget('hipR_x',  -(0.35 + phase * 0.70));
-        this._setTarget('kneeL_x',  0.52 + phase * 1.57);
-        this._setTarget('kneeR_x',  0.52 + phase * 1.57);
-      } else {
-        // hurt_shock: lying curled
-        this._setTarget('hipL_x',  -1.05);
-        this._setTarget('hipR_x',  -1.05);
-        this._setTarget('kneeL_x',  2.09);
-        this._setTarget('kneeR_x',  2.09);
-      }
-    } else if (isCrying) {
-      if (action === 'crying_sit') {
-        // Sitting on ground: hips flexed 50°, knees 90°
-        this._setTarget('hipL_x',  -0.87);
-        this._setTarget('hipR_x',  -0.87);
-        this._setTarget('kneeL_x',  1.57);
-        this._setTarget('kneeR_x',  1.57);
-      } else {
-        // crying_stand: knees slightly bent, wobbly
-        this._setTarget('hipL_x',   0);
-        this._setTarget('hipR_x',   0);
-        this._setTarget('kneeL_x',  0.10);
-        this._setTarget('kneeR_x',  0.10);
-      }
-    } else if (isGetUp) {
-      // Get up from ground: progressive straightening
-      const progress = Math.min(1, this.cycle * 0.8);
-      const hipFlex = -0.87 * (1 - progress);
-      const kneeFlex = 1.57 * (1 - progress);
-      this._setTarget('hipL_x',  hipFlex);
-      this._setTarget('hipR_x',  hipFlex);
-      this._setTarget('kneeL_x', kneeFlex);
-      this._setTarget('kneeR_x', kneeFlex);
-    } else if (isClimbFail) {
-      // Climb fail: stumble back
-      this._setTarget('hipL_x',   0.17);
-      this._setTarget('hipR_x',   0.17);
-      this._setTarget('kneeL_x',  0.52);
-      this._setTarget('kneeR_x',  0.52);
-    } else if (isGrab) {
-      // Grab: slight knee bend (lowering to pick up), weight forward
-      this._setTarget('hipL_x',  -0.17);
-      this._setTarget('hipR_x',  -0.17);
-      this._setTarget('kneeL_x',  0.35);
-      this._setTarget('kneeR_x',  0.35);
-    } else if (isReach) {
-      // Reach up: tip-toe — ankle plantarflex, knees straight, hips neutral
-      this._setTarget('hipL_x',   0);
-      this._setTarget('hipR_x',   0);
-      this._setTarget('kneeL_x',  0);
-      this._setTarget('kneeR_x',  0);
-    } else if (isPull) {
-      // Pull: wide stance, weight back, knees bent
-      this._setTarget('hipL_x',  -0.26);
-      this._setTarget('hipR_x',  -0.26);
-      this._setTarget('kneeL_x',  0.52);
-      this._setTarget('kneeR_x',  0.52);
-    } else if (isLunge) {
-      // Lunge: one leg forward, one back — quick burst motion
-      this._setTarget('hipL_x',  -0.70);
-      this._setTarget('hipR_x',   0.35);
-      this._setTarget('kneeL_x',  0.87);
-      this._setTarget('kneeR_x',  0.17);
-    } else if (isSlide) {
-      // F7: Sliding on slippery surface — knees bent, lean back
-      this._setTarget('hipL_x',  -0.17);  this._setTarget('hipR_x',  -0.17);
-      this._setTarget('kneeL_x',  0.35);  this._setTarget('kneeR_x',  0.35);
-    } else if (isRareEvent) {
-      // Group G: Rare event poses
-      switch (action) {
-        case 'dodge':     // G1 — step sideways to dodge
-          this._setTarget('hipL_x',  0.17);  this._setTarget('hipR_x', -0.17);
-          this._setTarget('kneeL_x', 0.26);  this._setTarget('kneeR_x', 0.17);
-          break;
-        case 'push':      // G2 — pushing object, wide stance
-          this._setTarget('hipL_x', -0.17);  this._setTarget('hipR_x', -0.17);
-          this._setTarget('kneeL_x', 0.26);  this._setTarget('kneeR_x', 0.26);
-          break;
-        case 'throw':     // G3 — throwing, hip rotation
-          this._setTarget('hipL_x',  0.17);  this._setTarget('hipR_x', -0.10);
-          this._setTarget('kneeL_x', 0.10);  this._setTarget('kneeR_x', 0.10);
-          break;
-        case 'pick_up':   // G4 — deep bend to pick up
-          this._setTarget('hipL_x', -0.52);  this._setTarget('hipR_x', -0.52);
-          this._setTarget('kneeL_x', 0.87);  this._setTarget('kneeR_x', 0.87);
-          break;
-        case 'sit_down': { // G5 — sitting down progressively
-          const sitProg = Math.min(1, this.cycle * 0.5);
-          this._setTarget('hipL_x', -1.22 * sitProg);
-          this._setTarget('hipR_x', -1.22 * sitProg);
-          this._setTarget('kneeL_x', 1.57 * sitProg);
-          this._setTarget('kneeR_x', 1.57 * sitProg);
-          break;
-        }
-        case 'stand_up': { // G6 — standing up from sitting
-          const standProg = Math.min(1, this.cycle * 0.8);
-          this._setTarget('hipL_x', -1.22 * (1 - standProg));
-          this._setTarget('hipR_x', -1.22 * (1 - standProg));
-          this._setTarget('kneeL_x', 1.57 * (1 - standProg));
-          this._setTarget('kneeR_x', 1.57 * (1 - standProg));
-          break;
-        }
-        case 'jump': { // G7 — squat then extend
-          const jumpPhase = Math.min(1, this.cycle * 2);
-          if (jumpPhase < 0.4) {
-            this._setTarget('hipL_x', -0.52);  this._setTarget('hipR_x', -0.52);
-            this._setTarget('kneeL_x', 1.05);  this._setTarget('kneeR_x', 1.05);
-          } else {
-            this._setTarget('hipL_x',  0.10);  this._setTarget('hipR_x',  0.10);
-            this._setTarget('kneeL_x', 0);     this._setTarget('kneeR_x', 0);
-          }
-          break;
-        }
-        case 'land':      // G8 — absorb landing impact
-          this._setTarget('hipL_x', -0.35);  this._setTarget('hipR_x', -0.35);
-          this._setTarget('kneeL_x', 0.70);  this._setTarget('kneeR_x', 0.70);
-          break;
-      }
-    } else {
-      // Idle / look_around / pause
-      this._setTarget('hipL_x',  0);
-      this._setTarget('hipR_x',  0);
-      this._setTarget('kneeL_x', 0);
-      this._setTarget('kneeR_x', 0);
+    } 
+    else if (isCrawl) {
+      this._setTarget('hips_bob', -this.a.legLength * 0.45); 
+      // Chân di chuyển nhịp nhàng tịnh tiến so le với tay
+      this._setTarget('hipL_x',  -0.15- s * 0.2);  
+      this._setTarget('hipR_x',  -0.15 + s * 0.2);
+      this._setTarget('kneeL_x',  2 + c * 0.18);  
+      this._setTarget('kneeR_x',  2 - c * 0.18);
+    } 
+    else if (isClimb) {
+      this._setTarget('hips_bob', -this.a.legLength * 0.20 + Math.abs(s) * 0.04);
+      this._setTarget('hipL_x',  -0.85 - s * 0.35);   
+      this._setTarget('hipR_x',  -0.85 + s * 0.35);   
+      this._setTarget('kneeL_x',  1.10 + c * 0.30);     
+      this._setTarget('kneeR_x',  1.10 - c * 0.30);
+    }
+    else if (isFall) {
+      const factor = (action === 'fall_under') ? 0.98 : 0.25;
+      this._setTarget('hips_bob', -this.a.legLength * factor);
+      this._setTarget('hipL_x',   0.25);  
+      this._setTarget('hipR_x',   0.25);
+      this._setTarget('kneeL_x',  0.10);  
+      this._setTarget('kneeR_x',  0.10);
+    } 
+    else if (isSitting) {
+      this._setTarget('hips_bob', -this.a.legLength * 0.95); 
+      this._setTarget('hipL_x', -1.65); 
+      this._setTarget('hipR_x', -1.65);
+      this._setTarget('kneeL_x', 0.20); 
+      this._setTarget('kneeR_x', 0.20);
+    } 
+    else {
+      this._setTarget('hipL_x',  0); this._setTarget('hipR_x',  0);
+      this._setTarget('kneeL_x', 0); this._setTarget('kneeR_x', 0);
     }
 
-    // ── Arm swing ─────────────────────────────────────────────────────────
-    // Walk ±40°(0.70 rad), Run ±63°(1.10 rad) — both anatomically OK
-    const armSwing = isRun ? 1.10 : isWalk ? 0.70 : isWade ? 0.30 : 0;
+    // ══════════════════════════════════════════════════════════════════════
+    // LAYER 2 — TẠO POSE CHI TRÊN (ARMS) - HỆ TRỤC GÓC ÂM (-) ĐƯA RA TRƯỚC
+    // ══════════════════════════════════════════════════════════════════════
+    const armSwing = isSprint ? 1.30 : isRun ? 1.00 : isWalk ? 0.65 : 0;
 
-    if (armSwing > 0) {
-      // Natural arm counter-swing (opposite to legs)
-      // Positive X = forward (toward face), Negative X = backward
-      // When left leg forward (s>0), left arm goes backward (-s*swing)
+    this._setTarget('shL_z', -0.08);
+    this._setTarget('shR_z',  0.08);
+
+    if (armSwing > 0 && !isFall && !isHurt && vel > 0) {
       this._setTarget('shL_x', -s * armSwing);
       this._setTarget('shR_x',  s * armSwing);
-    } else if (isCrawl) {
-      // Crawl: arms reach FORWARD alternately (positive X = forward flexion in this rig)
-      // Weight-bearing: shoulder at ~60°-80° forward flexion, elbow nearly straight
-      // Joint convention: shL_x positive = forward (arm swings toward face direction)
-      // Phase: s>0 → L arm reaching forward, s<0 → R arm reaching forward
-      this._setTarget('shL_x',  (1.22 + s * 0.26));   // 56°–82° forward flexion
-      this._setTarget('shR_x',  (1.22 - s * 0.26));   // opposite phase
-    } else if (isFall) {
-      // Fall: arms instinctively fly up/forward to ~90°-100°
-      // FIX-A: was -PI*0.8 = −144°. Correct reflex is forward-upward, not backward.
-      // Children instinctively extend arms forward when falling (APTA pediatric)
-      const flailA = Math.sin(this.cycle * 5) * 0.28;
-      this._setTarget('shL_x', -(1.22 + flailA));  // ~−70° ± 16°  (was −144° IMPOSSIBLE)
-      this._setTarget('shR_x', -(1.22 - flailA));
-    } else if (isClimb) {
-      // FIX #8: Alternating arm reach — left up while right pulls, then swap
-      // Shoulder counter-rotation for natural climbing motion
-      if (action === 'step_up' || action === 'step_down') {
-        this._setTarget('shL_x', -0.17);
-        this._setTarget('shR_x',  0.17);
-      } else if (action === 'climb_pull' || action === 'climb_mount') {
-        // Extreme overhead reach during pull/mount phases
-        this._setTarget('shL_x', -(2.09 + s * 0.35));   // alternating overhead
-        this._setTarget('shR_x', -(2.09 - s * 0.35));
+      this._setTarget('elbL_x', -0.35 - Math.abs(s) * 0.3);
+      this._setTarget('elbR_x', -0.35 - Math.abs(s) * 0.3);
+    } 
+    else if (isCrawl) {
+      this._setTarget('shL_x',  -1.25 + s * 0.40); 
+      this._setTarget('shR_x',  -1.25 - s * 0.40);
+      
+      // Khớp vai hơi khép khum nhẹ vào lồng ngực cho tự nhiên như em bé
+      this._setTarget('shL_z',  -0.12);
+      this._setTarget('shR_z',   0.12);
+      
+      // Khuỷu tay hơi chùng góc vuông nhẹ để nâng đỡ cơ thể chịu lực
+      this._setTarget('elbL_x', -0.55 - Math.max(0, s) * 0.25);           
+      this._setTarget('elbR_x', -0.55 - Math.max(0, -s) * 0.25);
+    } 
+    else if (isClimb) {
+      this._setTarget('shL_x',  -2.20 + s * 0.45);  
+      this._setTarget('shR_x',  -2.20 - s * 0.45);
+      this._setTarget('shL_z',  -0.25);
+      this._setTarget('shR_z',   0.25);
+      this._setTarget('elbL_x', -0.80); 
+      this._setTarget('elbR_x', -0.80);
+    }
+    else if (isFall) {
+      const angle = (action === 'fall_under') ? -2.40 : -1.40;
+      this._setTarget('shL_x',  angle);  
+      this._setTarget('shR_x',  angle);
+      this._setTarget('elbL_x', -0.80); 
+      this._setTarget('elbR_x', -0.80);
+    }
+    else if (isSitting) {
+      this._setTarget('shL_x',  -0.20); 
+      this._setTarget('shR_x',  -0.20);
+      this._setTarget('shL_z',  -0.35); 
+      this._setTarget('shR_z',   0.35);
+      this._setTarget('elbL_x', -0.40); 
+      this._setTarget('elbR_x', -0.40);
+    }
+    else if (isGrab) {
+      this._setTarget('shL_x',  -1.20);  
+      this._setTarget('shR_x',  -1.20);
+      this._setTarget('shL_z',   0.15);  
+      this._setTarget('shR_z',  -0.15);
+      this._setTarget('elbL_x', -1.35);  
+      this._setTarget('elbR_x', -1.35);
+    } 
+    else if (isReach) {
+      this._setTarget('shL_x',  -1.65); 
+      this._setTarget('shR_x',  -1.65);
+      this._setTarget('elbL_x', -0.05); 
+      this._setTarget('elbR_x', -0.05);
+    }
+    else if (action === 'drink') {
+      this._setTarget('shL_x',  -1.10);  
+      this._setTarget('shR_x',  -0.20);
+      this._setTarget('elbL_x', -2.30); // Gập khuỷu cực sâu ép sát miệng
+      this._setTarget('elbR_x', -0.15);
+    }
+    else if (action === 'jump') {
+      const jumpPhase = Math.sin(bt * 4.0);
+      if (jumpPhase > 0) {
+        this._setTarget('hipL_x', -0.60);  this._setTarget('hipR_x', -0.60);
+        this._setTarget('kneeL_x', 1.10);  this._setTarget('kneeR_x', 1.10);
+        this._setTarget('shL_x',   0.45);  this._setTarget('shR_x',   0.45); 
       } else {
-        // Standard climb: alternating arm reach (one up, one down)
-        this._setTarget('shL_x', -(1.40 + s * 0.45));   // left reaches vs pulls
-        this._setTarget('shR_x', -(1.40 - s * 0.45));   // right opposite
+        this._setTarget('hipL_x',  0.10);  this._setTarget('hipR_x',  0.10);
+        this._setTarget('kneeL_x', 0.00);  this._setTarget('kneeR_x', 0.00);
+        this._setTarget('shL_x',  -2.65);  this._setTarget('shR_x',  -2.65); 
       }
-    } else if (isHurt) {
-      if (action === 'hurt_light' || action === 'recoil') {
-        this._setTarget('shL_x', -0.52);  this._setTarget('shR_x', -0.52);
-      } else if (action === 'hurt_medium') {
-        this._setTarget('shL_x', -0.87);  this._setTarget('shR_x', -0.87);
-      } else if (action === 'hurt_heavy') {
-        const phase = Math.min(1, this.cycle * 0.5);
-        this._setTarget('shL_x', -(1.57 - phase * 0.70));
-        this._setTarget('shR_x', -(1.57 - phase * 0.70));
-      } else {
-        this._setTarget('shL_x', -0.52);  this._setTarget('shR_x', -0.52);
-      }
-    } else if (isCrying) {
-      // Crying: arms hugging self or rubbing eyes
-      this._setTarget('shL_x', -0.87);  this._setTarget('shR_x', -0.87);
-    } else if (isGetUp) {
-      const progress = Math.min(1, this.cycle * 0.8);
-      this._setTarget('shL_x', -(1.05 * (1 - progress)));
-      this._setTarget('shR_x', -(1.05 * (1 - progress)));
-    } else if (isClimbFail) {
-      this._setTarget('shL_x', -0.87);  this._setTarget('shR_x', -0.87);
-    } else if (isGrab) {
-      this._setTarget('shL_x', -1.22);  this._setTarget('shR_x', -1.22);
-    } else if (isReach) {
-      this._setTarget('shL_x', -(2.27 + s * 0.10));
-      this._setTarget('shR_x', -(2.27 - s * 0.10));
-    } else if (isPull) {
-      this._setTarget('shL_x', -(0.87 - s * 0.17));
-      this._setTarget('shR_x', -(0.87 + s * 0.17));
-    } else if (isLunge) {
-      this._setTarget('shL_x', -0.52);  this._setTarget('shR_x', -0.52);
-    } else if (isSlide) {
-      // F7: arms out to sides for balance
-      this._setTarget('shL_x', 0);  this._setTarget('shR_x', 0);
-    } else if (isRareEvent) {
-      switch (action) {
-        case 'dodge':    this._setTarget('shL_x', -0.52);  this._setTarget('shR_x', -0.52);  break;
-        case 'push':     this._setTarget('shL_x', -1.22);  this._setTarget('shR_x', -1.22);  break;
-        case 'throw':    this._setTarget('shL_x', -1.57);  this._setTarget('shR_x',  0.35);  break;
-        case 'pick_up':  this._setTarget('shL_x', -1.40);  this._setTarget('shR_x', -1.40);  break;
-        case 'sit_down': this._setTarget('shL_x', -0.17);  this._setTarget('shR_x', -0.17);  break;
-        case 'stand_up': {
-          const sp = Math.min(1, this.cycle * 0.8);
-          this._setTarget('shL_x', -(0.52 * (1 - sp)));  this._setTarget('shR_x', -(0.52 * (1 - sp)));
-          break;
-        }
-        case 'jump': {
-          const jp = Math.min(1, this.cycle * 2);
-          if (jp < 0.4) { this._setTarget('shL_x', -0.52); this._setTarget('shR_x', -0.52); }
-          else           { this._setTarget('shL_x', -1.57); this._setTarget('shR_x', -1.57); }
-          break;
-        }
-        case 'land':     this._setTarget('shL_x', -0.17);  this._setTarget('shR_x', -0.17);  break;
-      }
-    } else if (isLookAround) {
-      this._setTarget('shL_x', -s * 0.10);
-      this._setTarget('shR_x',  s * 0.10);
-    } else {
-      this._setTarget('shL_x', isWade ? -s * 0.30 : 0);
-      this._setTarget('shR_x', isWade ?  s * 0.30 : 0);
+    } 
+    else {
+      this._setTarget('shL_x',  0); this._setTarget('shR_x',  0);
+      this._setTarget('elbL_x', -0.15); this._setTarget('elbR_x', -0.15);
     }
 
-    // FIX-E: Arm abduction — compute proportionally to prevent arm-torso clipping for broader body types.
-    // FIX #16: DYNAMIC abduction — widen proportionally to arm swing magnitude.
-    // When arms swing forward/back (high |shL_x|), the forearm sweeps closer to torso.
-    // Adding swing-proportional abduction pushes the arm out during swing.
-    const bodyRatio = this.a.torsoRadius / (this.a.shoulderWidth / 2);
-    const A_POSE_BASE = Math.max(0.40, 0.30 + bodyRatio * 0.25);
-    const rawAbduct = isHurt ? (action === 'hurt_medium' ? 0.45 : 0.52)
-      : isCrying ? 0.52 : isSlide ? 0.87
-      : action === 'dodge' ? 0.52 : action === 'push' ? 0.40 : action === 'throw' ? 0.40
-      : action === 'pick_up' ? 0.40 : action === 'sit_down' ? 0.40 : action === 'stand_up' ? 0.40
-      : action === 'jump' ? 0.45 : action === 'land' ? 0.52
-      : isGrab ? 0.40 : isReach ? 0.35 : isCrawl ? 0.30 : isClimb ? 0.35 : A_POSE_BASE;
-    const baseAbduct = Math.max(rawAbduct, A_POSE_BASE);
-    // Dynamic component: wider abduction when arm swings forward/backward
-    const armSwingMag = Math.abs(this.targets['shL_x'] ?? 0);
-    const dynamicAbduct = baseAbduct + armSwingMag * 0.18; // 18% of swing angle added as extra abduction
-    this._setTarget('shL_z', -dynamicAbduct);
-    this._setTarget('shR_z',  dynamicAbduct);
-
-    // Elbow bend per action
-    let elbowBend = isRun ? 0.60 : isWalk ? 0.30 : isCrawl ? 0.17 : isClimb ? 0.52  // crawl: slight elbow bend for weight-bearing
-      : isHurt ? (action === 'hurt_light' ? 1.05 : action === 'hurt_medium' ? 1.40 : 0.52)
-      : isCrying ? 1.40 : isGetUp ? (1.57 * (1 - Math.min(1, this.cycle * 0.8)))
-      : isSlide ? 0.17
-      : action === 'dodge' ? 1.05 : action === 'push' ? 0.26 : action === 'throw' ? 0.17
-      : action === 'pick_up' ? 0.35 : action === 'sit_down' ? 0.35
-      : action === 'stand_up' ? 0.52 : action === 'jump' ? 0.26 : action === 'land' ? 0.35
-      : isGrab ? 0.52 : isReach ? 0.17 : isPull ? 0.70 : isLunge ? 0.35 : 0.10;
-    
-    // Safety clamp to prevent forearm from folding directly into upper arm geometry
-    const maxSafeElbow = Math.PI - 0.15; // ~170° to avoid complete fold-over
-    elbowBend = Math.max(0, Math.min(maxSafeElbow, elbowBend));
-
-    this._setTarget('elbL_x', -elbowBend);
-    this._setTarget('elbR_x', -elbowBend);
-
-    // ── Spine ─────────────────────────────────────────────────────────────
+    // ── Spine & Head Xoay Nghiêng Theo Ảnh ────────────────────────────────
     if (isCrawl) {
-      // Quadrupedal crawl: torso nearly horizontal (80°-85° lean forward)
-      // spine_x = 1.40 rad (80°) — proper flat-back crawl posture
-      // Old 0.70 rad (40°) was "bending over" not "crawling on all fours"
-      this._setTarget('spine_x',  1.40);
-      this._setTarget('spine_y',  s * 0.06);  // slight lateral sway from weight shift
-    } else if (isRun) {
-      this._setTarget('spine_x',  0.18);
-      this._setTarget('spine_y',  s * 0.10);
+
+      this._setTarget('spine_x',  1.5); 
+      // Đầu ngẩng lên tự nhiên nhìn về phía trước giống ảnh
+      this._setTarget('head_x',  -0.8); 
+    } else if (isClimb) {
+      this._setTarget('spine_x',  0.30); // Người hơi hướng nghiêng bám tường
+      this._setTarget('head_x',  -0.25); // Ngẩng cổ ngó lên trên
+    } else if (isSprint) {
+      this._setTarget('spine_x',  0.38); 
+      this._setTarget('head_x',   0);
     } else if (isFall) {
-      this._setTarget('spine_x',  0.52);
-      this._setTarget('spine_y',  0);
-    } else if (isClimb) {
-      // FIX #8: Spine tilts FORWARD (leaning into the wall/object when climbing)
-      this._setTarget('spine_x',  0.35);
-      // Shoulder counter-rotation: slight lateral sway opposite to reaching arm
-      this._setTarget('spine_y',  s * 0.12);
-    } else if (isHurt) {
-      if (action === 'hurt_light' || action === 'recoil') {
-        this._setTarget('spine_x', -0.15);  // flinch backward
-        this._setTarget('spine_y',  0);
-      } else if (action === 'hurt_medium') {
-        this._setTarget('spine_x',  0.52);  // curl forward in pain
-        this._setTarget('spine_y',  0);
-      } else if (action === 'hurt_heavy') {
-        const phase = Math.min(1, this.cycle * 0.5);
-        this._setTarget('spine_x',  0.87 + phase * 0.18);
-        this._setTarget('spine_y',  0);
-      } else {
-        this._setTarget('spine_x',  0.70);  // hurt_shock: curled
-        this._setTarget('spine_y',  0);
-      }
-    } else if (isCrying) {
-      this._setTarget('spine_x',  action === 'crying_sit' ? 0.44 : 0.26);
-      this._setTarget('spine_y',  Math.sin(this.cycle * 3) * 0.06);  // sobbing shudder
-    } else if (isGetUp) {
-      const progress = Math.min(1, this.cycle * 0.8);
-      this._setTarget('spine_x',  0.52 * (1 - progress));
-      this._setTarget('spine_y',  0);
-    } else if (isClimbFail) {
-      this._setTarget('spine_x',  0);  this._setTarget('spine_y', 0);
-    } else if (isGrab) {
-      this._setTarget('spine_x',  0.44);
-      this._setTarget('spine_y',  0);
-    } else if (isReach) {
-      this._setTarget('spine_x', -0.18);
-      this._setTarget('spine_y',  0);
-    } else if (isPull) {
-      this._setTarget('spine_x', -0.35);
-      this._setTarget('spine_y',  s * 0.05);
-    } else if (isLunge) {
-      this._setTarget('spine_x',  0.26);
-      this._setTarget('spine_y',  0);
-    } else if (isSlide) {
-      this._setTarget('spine_x', -0.17);  // lean back while sliding
-      this._setTarget('spine_y',  0);
-    } else if (isRareEvent) {
-      switch (action) {
-        case 'dodge':    this._setTarget('spine_x', -0.10);  break;
-        case 'push':     this._setTarget('spine_x',  0.26);  break;
-        case 'throw':    this._setTarget('spine_x',  0.17);  break;
-        case 'pick_up':  this._setTarget('spine_x',  0.52);  break;
-        case 'sit_down': this._setTarget('spine_x',  0);     break;
-        case 'stand_up': this._setTarget('spine_x',  0.26 * (1 - Math.min(1, this.cycle * 0.8))); break;
-        case 'jump':     this._setTarget('spine_x', -0.10);  break;
-        case 'land':     this._setTarget('spine_x',  0.10);  break;
-      }
-      this._setTarget('spine_y', 0);
+      const spineAngle = (action === 'fall_under') ? 1.30 : 0.75;
+      this._setTarget('spine_x',  spineAngle); 
+      this._setTarget('head_x',   0.20);
+    }else if (action === 'drink') {
+      this._setTarget('spine_x', -0.05);
+      this._setTarget('head_x',   0.30); // Ngửa đầu ra sau đón nước tu chai
     } else {
-      // FIX #1: Use breathTimer (bt) instead of cycle for idle breathing
-      const breathe = (isIdle || isPause) ? Math.sin(bt * 0.5) * 0.022 : 0;
+      const breathe = isIdle ? Math.sin(bt * 1.5) * 0.025 : 0;
       this._setTarget('spine_x',  breathe);
-      this._setTarget('spine_y',  (isWalk || isWade) ? s * 0.08 : 0);
+      this._setTarget('head_x',   0);
     }
-
-    // ── Head ──────────────────────────────────────────────────────────────
-    if (isFall) {
-      this._setTarget('head_x', -0.26);
-    } else if (isCrawl) {
-      this._setTarget('head_x', -0.52);
-    } else if (isHurt) {
-      if (action === 'hurt_light' || action === 'recoil') {
-        this._setTarget('head_x', -0.20);  // jerk head back
-      } else if (action === 'hurt_medium') {
-        this._setTarget('head_x',  0.35);  // head down in pain
-      } else if (action === 'hurt_heavy') {
-        const phase = Math.min(1, this.cycle * 0.5);
-        this._setTarget('head_x',  phase > 0.5 ? 0.44 : Math.sin(this.cycle * 8) * 0.20);
-      } else {
-        this._setTarget('head_x',  0.44);  // shock: face down
-      }
-    } else if (isCrying) {
-      this._setTarget('head_x',  0.35 + Math.sin(this.cycle * 10) * 0.08);  // sobbing nod
-    } else if (isGetUp) {
-      const progress = Math.min(1, this.cycle * 0.8);
-      this._setTarget('head_x',  0.35 * (1 - progress));
-    } else if (isClimb) {
-      this._setTarget('head_x', -0.35);  // look up while climbing
-    } else if (isGrab) {
-      this._setTarget('head_x',  0.26);
-    } else if (isReach) {
-      this._setTarget('head_x', -0.35);
-    } else if (isPull) {
-      this._setTarget('head_x',  0.17);
-    } else if (isLookAround) {
-      this._setTarget('head_x',  0);
-    } else if (isSlide) {
-      this._setTarget('head_x',  0);
-    } else if (isRareEvent) {
-      switch (action) {
-        case 'dodge':    this._setTarget('head_x', -0.15); break;
-        case 'push':     this._setTarget('head_x',  0);    break;
-        case 'throw':    this._setTarget('head_x',  0);    break;
-        case 'pick_up':  this._setTarget('head_x',  0.35); break;
-        case 'sit_down': this._setTarget('head_x',  0);    break;
-        case 'stand_up': this._setTarget('head_x',  0.17 * (1 - Math.min(1, this.cycle * 0.8))); break;
-        case 'jump':     this._setTarget('head_x', -0.20); break;
-        case 'land':     this._setTarget('head_x',  0);    break;
-      }
-    } else {
-      this._setTarget('head_x', 0);
-    }
-    // Head Y: use breathTimer for idle sway instead of stopped cycle
-    const headYaw = isLookAround ? Math.sin(this.cycle * 0.8) * 0.78
-      : isCrying ? Math.sin(this.cycle * 5) * 0.10  // crying head shake
-      : isHurt ? 0
-      : action === 'dodge' ? (Math.random() > 0.5 ? 0.35 : -0.35)
-      : (isIdle || isPause) ? Math.sin(bt * 0.3) * 0.06 : 0;
-    this._setTarget('head_y', headYaw);
-
-    // ── Hips bob ──────────────────────────────────────────────────────────
-    const bob = (isRun || isWalk) ? Math.abs(s) * (isRun ? 0.025 : 0.012) : 0;
-    this._setTarget('hips_bob', bob);
+    this._setTarget('spine_y', (isWalk && vel > 0) ? s * 0.06 : 0);
+    this._setTarget('head_y', isIdle ? Math.sin(bt * 0.4) * 0.05 : 0);
 
     // ══════════════════════════════════════════════════════════════════════
-    // LAYER 2 — EMOTION OVERRIDES
-    // FIX-B: Emotions override only upper-body / expressive joints.
-    //        Leg/hip locomotion joints are NEVER overwritten by emotions.
-    //        All values validated against JOINT_LIMITS.
+    // LAYER 3 — EMOTION OVERRIDES 
     // ══════════════════════════════════════════════════════════════════════
-
-    const baseShL_x = this.targets['shL_x'];
-    const baseShR_x = this.targets['shR_x'];
-    const isLocomotion = isWalk || isRun || isWade || isCrawl;
-
     if (emotion !== 'neutral') {
       switch (emotion) {
         case 'crying':
-          this._setTarget('head_x',   0.42 + Math.sin(this.cycle * 10) * 0.08);
-          this._setTarget('spine_x',  0.32);
-          // Arms: held across chest. Negative X = forward (toward face).
-          this._setTarget('shL_x',   -0.87);  this._setTarget('shL_z', -0.52);
-          this._setTarget('shR_x',   -0.87);  this._setTarget('shR_z',  0.52);
-          this._setTarget('elbL_x',  -1.40);
-          this._setTarget('elbR_x',  -1.40);
-          break;
-
-        case 'mischievous':
-          this._setTarget('spine_x', -0.18);
-          this._setTarget('head_y',   0.30);
-          this._setTarget('shL_x',   -0.52);  this._setTarget('shL_z', -0.52);
-          this._setTarget('shR_x',   -0.52);  this._setTarget('shR_z',  0.52);
-          this._setTarget('elbL_x',  -1.57);
-          this._setTarget('elbR_x',  -1.57);
-          break;
-
-        case 'excited':
-          // Excited: arms raised overhead (cheering/jumping)
-          // FIX-A: was -(PI+0.32)=−198°. CORRECT excited pose: arms UP, forward ~150°-170°
-          //        Children raise hands UPWARD when excited, not behind their back.
-          this._setTarget('shL_x',  2.62 + Math.sin(this.cycle * 8) * 0.26);  // ~150°±15°
-          this._setTarget('shR_x',  2.62 + Math.sin(this.cycle * 8 + Math.PI) * 0.26);
-          this._setTarget('shL_z', -0.26);  // slightly outward for V shape
-          this._setTarget('shR_z',  0.26);
-          this._setTarget('elbL_x', -0.26);
-          this._setTarget('elbR_x', -0.26);
-          this._setTarget('spine_x', 0.08);  // slight forward lean
-          break;
-
-        case 'scared':
           this._setTarget('head_x',   0.35);
-          this._setTarget('spine_x',  0.26);
-          this._setTarget('shL_x',   -0.52);
-          this._setTarget('shR_x',   -0.52);
-          this._setTarget('shL_z',   -0.87);
-          this._setTarget('shR_z',    0.87);
-          this._setTarget('elbL_x',  -1.57);
-          this._setTarget('elbR_x',  -1.57);
+          this._setTarget('shL_x',   -0.65); this._setTarget('shR_x', -0.65);
+          this._setTarget('elbL_x',  -1.20); this._setTarget('elbR_x', -1.20);
           break;
-
-        case 'focused':
-          this._setTarget('spine_x',  0.14);
-          this._setTarget('head_x',  -0.18);
-          this._setTarget('shL_x',   -0.87);
-          this._setTarget('shR_x',   -0.87);
-          this._setTarget('elbL_x',  -0.52);
-          this._setTarget('elbR_x',  -0.52);
+        case 'excited':
+          this._setTarget('shL_x',  -2.50); this._setTarget('shR_x', -2.50);
           break;
-
-        case 'curious':
-          this._setTarget('shL_x',  -0.35);  this._setTarget('shL_z', -0.15);
-          this._setTarget('shR_x',   0);     this._setTarget('shR_z',  0.15);
-          this._setTarget('elbL_x', -0.87);  this._setTarget('elbR_x', -0.10);
-          this._setTarget('spine_x', 0.10);
-          this._setTarget('head_x', -0.15);
-          this._setTarget('head_y', Math.sin(bt * 0.5) * 0.25);
-          break;
-
-        case 'surprised':
-          this._setTarget('shL_x',  -0.70);  this._setTarget('shL_z', -0.70);
-          this._setTarget('shR_x',  -0.70);  this._setTarget('shR_z',  0.70);
-          this._setTarget('elbL_x', -0.26);  this._setTarget('elbR_x', -0.26);
-          this._setTarget('spine_x', -0.10);
-          this._setTarget('head_x',  -0.20);
-          break;
-
-        case 'tired':        // E9 — arms drooping, back slightly curved
-          this._setTarget('shL_x',   0);     this._setTarget('shL_z', -0.12);
-          this._setTarget('shR_x',   0);     this._setTarget('shR_z',  0.12);
-          this._setTarget('elbL_x', -0.05);  this._setTarget('elbR_x', -0.05);
-          this._setTarget('spine_x', 0.15);
-          this._setTarget('head_x',  0.15);
-          break;
-
-        case 'frustrated':
-          this._setTarget('shL_x',  -0.87);  this._setTarget('shL_z', -0.30);
-          this._setTarget('shR_x',  -0.87);  this._setTarget('shR_z',  0.30);
-          this._setTarget('elbL_x', -0.52);  this._setTarget('elbR_x', -0.52);
-          this._setTarget('spine_x', 0.10);
-          this._setTarget('head_x',  0);     this._setTarget('head_y', 0);
-          break;
-
-        case 'happy':
-          this._setTarget('shL_x', -(0.35 + Math.sin(bt * 4) * 0.17));
-          this._setTarget('shR_x', -(0.35 + Math.sin(bt * 4 + Math.PI) * 0.17));
-          this._setTarget('shL_z', -0.20);   this._setTarget('shR_z',  0.20);
-          this._setTarget('elbL_x', -0.35);  this._setTarget('elbR_x', -0.35);
-          this._setTarget('spine_x', -0.05);
-          this._setTarget('head_x', -0.10);
-          this._setTarget('head_y', Math.sin(bt * 1.5) * 0.10);
-          break;
-      }
-
-      // Restore locomotion arm swings to maintain balance and prevent robotic locked arms
-      if (isLocomotion) {
-        if (baseShL_x !== undefined) this._setTarget('shL_x', baseShL_x);
-        if (baseShR_x !== undefined) this._setTarget('shR_x', baseShR_x);
       }
     }
 
-    // ══════════════════════════════════════════════════════════════════════
-    // APPLY LERPED ROTATIONS
-    // LERP = min(1, dt × λ)   — exponential convergence
-    // λ=12: 99% convergence in 4.6/12 = 383ms at 60fps
-    // λ=4 (old): 99% in 1.15s — too sluggish for dynamic child motion
-    // Priority states (hurt/fall) get faster λ=20 for immediate reaction
-    // ══════════════════════════════════════════════════════════════════════
-    const LERP_NORMAL   = Math.min(1, dt * 12);
-    const LERP_PRIORITY = Math.min(1, dt * 20);  // hurt/fall: snap faster
-    const LERP = (isFall || isHurt) ? LERP_PRIORITY : LERP_NORMAL;
+    // NỘI SUY GÓC LERP CONVERGENCE
+    const LERP = (isFall || isHurt) ? Math.min(1, dt * 20) : Math.min(1, dt * 12);
 
     const applyR = (target: THREE.Object3D, xKey: string, yKey = '', zKey = '') => {
       if (xKey) target.rotation.x = this._lerpAngle(xKey, LERP);
@@ -1138,10 +659,8 @@ export class ProceduralFigure {
     applyR(this.spine,     'spine_x', 'spine_y');
     applyR(this.headPivot, 'head_x',  'head_y');
 
-    // FIX-P4: Add subtle secondary motion for child-like softness
-    // Gentle body sway (children move their torso slightly when walking)
-    if (isWalk || isRun) {
-      const sway = Math.sin(this.cycle * 1.3) * (isRun ? 0.04 : 0.025);
+    if (isWalk || isRun || isSprint) {
+      const sway = Math.sin(this.cycle * 1.3) * (isSprint ? 0.055 : isRun ? 0.04 : 0.025);
       this.spine.rotation.z = sway;
     }
 
@@ -1151,43 +670,32 @@ export class ProceduralFigure {
     this._updateBlink(dt);
   }
 
-  // ─── FIX-A: Anatomical clamp helper ─────────────────────────────────────
   private _clamp(key: string, value: number): number {
     const lim = JOINT_LIMITS[key];
     if (!lim) return value;
     return Math.max(lim[0], Math.min(lim[1], value));
   }
 
-  // ─── FIX-A: _setTarget now clamps value against anatomical limits ────────
   private _setTarget(key: string, value: number) {
     const clamped = this._clamp(key, value);
     this.targets[key] = clamped;
-    // Initialize current to target on first use to avoid start-of-sim snap
     if (!(key in this.current)) this.current[key] = clamped;
   }
 
-  // ─── FIX-C: Short-arc lerp — always takes the shortest angle path ────────
-  // Prevents lerp from going the "long way" through ±180° on state transitions.
-  // FIX-D: Normalize current[key] to [−π, +π] to prevent unbounded drift
-  //        which causes arm-torso clipping after thousands of frames.
   private _lerpAngle(key: string, alpha: number): number {
     const t   = this.targets[key] ?? 0;
     const cv  = this.current[key] ?? t;
-    // Compute the difference modulo 2π to pick the shortest arc
     let diff  = t - cv;
     const TWO_PI = Math.PI * 2;
-    // Wrap diff into [−π, +π]
     while (diff >  Math.PI) diff -= TWO_PI;
     while (diff < -Math.PI) diff += TWO_PI;
     let n = cv + diff * alpha;
-    // FIX-D: Normalize accumulated value to prevent drift
     while (n >  Math.PI) n -= TWO_PI;
     while (n < -Math.PI) n += TWO_PI;
     this.current[key] = n;
     return n;
   }
 
-  // ─── Wading blue tint ──────────────────────────────────────────────────
   private _wadingColor = new THREE.Color(0.2, 0.5, 1.0);
   private _blinkTimer  = 3 + Math.random() * 4;
   private _blinking    = false;
@@ -1211,7 +719,6 @@ export class ProceduralFigure {
     this.skinMeshes.forEach(m =>   tintMesh(m, this.a.skinColor));
   }
 
-  // ─── Eye blink ─────────────────────────────────────────────────────────
   private _updateBlink(dt: number) {
     this._blinkTimer -= dt;
     if (this._blinkTimer <= 0 && !this._blinking) {
@@ -1232,7 +739,6 @@ export class ProceduralFigure {
     }
   }
 
-  // ─── Public setters ──────────────────────────────────────────────────────
   setPosition(x: number, y: number, z: number) {
     this.root.position.set(x, y, z);
   }
@@ -1256,9 +762,7 @@ export class ProceduralFigure {
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Factory
-// ─────────────────────────────────────────────────────────────────────────────
+
 export const PROCEDURAL_AGE_GROUPS = new Set(['infant', 'school_age', 'preteen']);
 
 export function createFigure(
@@ -1268,5 +772,3 @@ export function createFigure(
 ): ProceduralFigure {
   return new ProceduralFigure(ageGroupId, agentId, accentColor);
 }
-
-// FIX-N5: AGENT_PALETTE removed — canonical export is in Figuredriver.ts

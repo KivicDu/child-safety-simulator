@@ -18,11 +18,15 @@ interface CollisionEvent {
     riskTier: string;
     riskColor: string;
     bodyPart: string;
+    specificInjury?: string;
     gForce?: number;
     gForceTier?: string;
     gForceColor?: string;
     gForceAction?: string;
     gForceIcon?: string;
+    hic15?: number;
+    impactForceN?: number;
+    collisionDurationMs?: number;
     components?: any;
     metadata?: any;
   };
@@ -48,6 +52,12 @@ interface HeatmapObject {
     searchUrl: string;
     priority: string;
   }[];
+  fractureCount?: number;
+  specificInjuries?: string[];
+  maxHIC?: number;
+  maxImpactForceN?: number;
+  avgCollisionDurationMs?: number;
+  bodyPartDistribution?: Record<string, number>;
 }
 
 interface SimulationResult {
@@ -478,7 +488,7 @@ const Simulator = () => {
               className="text-xs font-bold text-[#FFE4A0]/70 tracking-widest uppercase italic"
               style={{ fontFamily: "'Cormorant Garamond', serif" }}
             >
-              The Magic Box
+              Configuration Panel
             </span>
             <h2 
               className="text-3xl font-black text-[#FFE4A0] mt-1"
@@ -504,7 +514,7 @@ const Simulator = () => {
                   className="block text-sm font-bold text-[#FFE4A0]/90 mb-1.5 italic"
                   style={{ fontFamily: "'Cormorant Garamond', serif" }}
                 >
-                  📂 Enchanted Model (GLB/GLTF)
+                  📂 Environment Model (GLB/GLTF)
                 </label>
                 <label className="cursor-pointer bg-[#0A0F1D]/80 px-4 py-2 flex items-center justify-center rounded-xl shadow-inner border border-[#FFE4A0]/40 hover:border-[#FFE4A0] hover:shadow-[0_0_10px_rgba(255,228,160,0.2)] transition-all font-bold text-sm min-w-[160px] h-11 group">
                   <input
@@ -515,7 +525,7 @@ const Simulator = () => {
                     className="hidden"
                   />
                   <span className="text-[#FDFDFD] group-hover:text-[#FFE4A0] transition-colors truncate max-w-[200px]">
-                    {fileName || "📜 Select Scroll..."}
+                    {fileName || "Select File..."}
                   </span>
                 </label>
               </div>
@@ -526,7 +536,7 @@ const Simulator = () => {
                   className="block text-sm font-bold text-[#FFE4A0]/90 mb-1.5 italic"
                   style={{ fontFamily: "'Cormorant Garamond', serif" }}
                 >
-                  👶 Kingdom Explorer
+                  👶 Subject Age Group
                 </label>
                 <select
                   value={ageGroup}
@@ -547,7 +557,7 @@ const Simulator = () => {
                   className="block text-sm font-bold text-[#FFE4A0]/90 mb-1.5 italic"
                   style={{ fontFamily: "'Cormorant Garamond', serif" }}
                 >
-                  ✨ Illusions
+                  👥 Agent Count
                 </label>
                 <input
                   type="number"
@@ -565,7 +575,7 @@ const Simulator = () => {
                   className="block text-sm font-bold text-[#FFE4A0]/90 mb-1.5 italic"
                   style={{ fontFamily: "'Cormorant Garamond', serif" }}
                 >
-                  ⏳ Time Span (s)
+                  ⏱️ Duration (seconds)
                 </label>
                 <input
                   type="number"
@@ -584,7 +594,7 @@ const Simulator = () => {
                 className="px-8 h-11 rounded-xl font-black shadow-[0_0_15px_rgba(212,175,55,0.3)] bg-gradient-to-br from-[#FFE4A0] via-[#D4AF37] to-[#996515] text-[#3A2B00] hover:shadow-[0_0_25px_rgba(212,175,55,0.5)] hover:brightness-110 transition-all disabled:opacity-50 disabled:cursor-not-allowed text-sm uppercase tracking-wider relative overflow-hidden group"
               >
                 <div className="absolute inset-0 bg-white/20 -skew-x-12 -translate-x-full group-hover:animate-[shimmer_1.5s_infinite]" />
-                <span className="relative z-10">{running ? "⏳ Conjuring..." : "🎇 Cast Magic"}</span>
+                <span className="relative z-10">{running ? "⏳ Processing..." : "▶ Run Simulation"}</span>
               </button>
             </div>
 
@@ -598,13 +608,13 @@ const Simulator = () => {
                     : "bg-[#0A0F1D] border-[#FFE4A0]/30 text-[#FDFDFD] hover:border-[#FFE4A0]/70 hover:bg-[#FFE4A0]/10 hover:shadow-[0_0_10px_rgba(255,228,160,0.1)]"
                 }`}
               >
-                {isBabyView ? "👁️ Child's Gaze Active" : "👁️ Enter Child's Gaze"}
+                {isBabyView ? "👁️ Child-Eye View Active" : "👁️ Child-Eye View"}
               </button>
               <button
                 onClick={handleScreenshot}
                 className="px-5 py-2 rounded-xl font-bold text-xs bg-[#0A0F1D] border border-[#FFE4A0]/30 text-[#FDFDFD] hover:border-[#FFE4A0]/70 hover:bg-[#FFE4A0]/10 hover:shadow-[0_0_10px_rgba(255,228,160,0.1)] transition-all"
               >
-                📸 Capture Memory
+                📸 Screenshot
               </button>
             </div>
           </div>
@@ -617,7 +627,7 @@ const Simulator = () => {
                   className="font-bold text-[#FFE4A0] text-sm italic tracking-wide"
                   style={{ fontFamily: "'Cormorant Garamond', serif" }}
                 >
-                  Conjuring Simulation...
+                  Running Simulation...
                 </span>
                 <span className="font-black text-lg text-[#D4AF37]" style={{ textShadow: "0 0 10px rgba(212,175,55,0.5)" }}>
                   {simResult.progress}%
@@ -643,7 +653,7 @@ const Simulator = () => {
             
             {isBabyView && (
               <div className="absolute top-4 left-1/2 -translate-x-1/2 z-20 px-5 py-2 rounded-full bg-[#0A0F1D]/90 border border-[#FFE4A0] text-[#FFE4A0] text-sm font-bold backdrop-blur-md shadow-[0_0_15px_rgba(255,228,160,0.3)] animate-pulse-glow italic" style={{ fontFamily: "'Cormorant Garamond', serif" }}>
-                👁️ Child's Gaze — Camera at eye level (~60cm)
+                👁️ Child-Eye View — Camera at eye level (~60cm)
               </div>
             )}
             <Canvas3D
@@ -676,14 +686,14 @@ const Simulator = () => {
                     className="text-lg font-black text-[#FFE4A0]"
                     style={{ fontFamily: "'Cinzel Decorative', serif" }}
                   >
-                    ✨ Illusions Inspector
+                    🔍 Agent Inspector
                   </h3>
                   {selectedAgentId !== null && (
                      <button
                        onClick={() => setSelectedAgentId(null)}
                        className="text-xs px-4 py-1.5 rounded-full bg-transparent border border-[#FFE4A0]/30 text-[#FDFDFD] hover:bg-[#FFE4A0]/20 hover:border-[#FFE4A0] font-bold transition-all"
                      >
-                       Show All Illusions
+                       Show All Agents
                      </button>
                    )}
                 </div>
@@ -737,7 +747,7 @@ const Simulator = () => {
                           </span>
                           {collisions > 0 && (
                             <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-red-900/60 border border-red-500/50 text-red-200 font-bold">
-                              {collisions} 💥
+                              {collisions}
                             </span>
                           )}
                           <span className="text-[10px] text-[#FFE4A0]/50 ml-1">
@@ -903,8 +913,8 @@ const Simulator = () => {
                         </div>
                         {nonSafeEvents.length > 0 && (
                           <div className="bg-red-900/20 border border-red-500/30 rounded-xl p-4">
-                            <div className="text-sm font-bold text-red-300 mb-3 flex items-center gap-2">
-                              <span>⚠️</span> Risk Events Encountered ({nonSafeEvents.length})
+                            <div className="text-sm font-bold text-red-300 mb-3">
+                              Risk Events Encountered ({nonSafeEvents.length})
                             </div>
                             <div className="space-y-2 max-h-32 overflow-y-auto custom-scrollbar pr-2">
                               {nonSafeEvents.slice(0, 8).map((evt, idx) => {
@@ -950,8 +960,8 @@ const Simulator = () => {
                           </div>
                         )}
                         {nonSafeEvents.length === 0 && (
-                          <div className="bg-green-900/20 border border-green-500/30 rounded-xl p-4 text-sm text-green-400 font-bold flex items-center gap-2">
-                            <span>✨</span> The illusion remained safely protected
+                          <div className="bg-green-900/20 border border-green-500/30 rounded-xl p-4 text-sm text-green-400 font-bold">
+                            No risk events detected for this agent
                           </div>
                         )}
                       </div>
@@ -968,7 +978,7 @@ const Simulator = () => {
                           className="font-black text-sm text-[#FFE4A0] tracking-widest uppercase italic"
                           style={{ fontFamily: "'Cormorant Garamond', serif" }}
                         >
-                          📜 Time Scroll Playback
+                          ▶ Trajectory Playback
                         </h4>
                       </div>
                       <div className="flex items-center gap-4 relative z-10">
@@ -1049,7 +1059,7 @@ const Simulator = () => {
                     {simResult.progress}%
                   </div>
                   <div className="text-xs font-bold text-[#FFE4A0]/70 mt-1 uppercase tracking-widest italic" style={{ fontFamily: "'Cormorant Garamond', serif" }}>
-                    Magic Resolved
+                    Progress
                   </div>
                 </div>
                 <div className="bg-[#0A0F1D]/80 border border-[#FFE4A0]/20 shadow-[inset_0_0_15px_rgba(255,228,160,0.05)] rounded-2xl p-4 text-center">
@@ -1057,7 +1067,7 @@ const Simulator = () => {
                     {simResult.totalEvents}
                   </div>
                   <div className="text-xs font-bold text-[#FFE4A0]/70 mt-1 uppercase tracking-widest italic" style={{ fontFamily: "'Cormorant Garamond', serif" }}>
-                    Encounters
+                    Collision Events
                   </div>
                 </div>
                 <div className="bg-[#0A0F1D]/80 border border-[#FFE4A0]/20 shadow-[inset_0_0_15px_rgba(255,228,160,0.05)] rounded-2xl p-4 text-center">
@@ -1070,10 +1080,10 @@ const Simulator = () => {
                     }
                     style={{ textShadow: "0 0 10px currentColor" }}
                   >
-                    {simResult.status === "complete" ? "✨" : "⏳"}
+                    {simResult.status === "complete" ? "Done" : "..."}
                   </div>
                   <div className="text-xs font-bold text-[#FFE4A0]/70 mt-1 uppercase tracking-widest italic" style={{ fontFamily: "'Cormorant Garamond', serif" }}>
-                    {simResult.status === "complete" ? "Prophecy Sealed" : "Scrying..."}
+                    {simResult.status === "complete" ? "Complete" : "Processing..."}
                   </div>
                 </div>
               </div>
@@ -1085,7 +1095,7 @@ const Simulator = () => {
                     className="text-xl font-black text-[#FFE4A0] mb-4"
                     style={{ fontFamily: "'Cinzel Decorative', serif" }}
                   >
-                    📜 Chronicle of Encounters
+                    Collision Event Log
                   </h3>
                   <div className="overflow-x-auto custom-scrollbar pb-2">
                     <table className="w-full text-sm">
@@ -1095,19 +1105,19 @@ const Simulator = () => {
                             Time
                           </th>
                           <th className="text-left py-3 px-4 font-bold text-[#FFE4A0] uppercase tracking-wider text-xs">
-                            Illusion
+                            Agent
                           </th>
                           <th className="text-left py-3 px-4 font-bold text-[#FFE4A0] uppercase tracking-wider text-xs">
-                            Entity
+                            Object
                           </th>
                           <th className="text-left py-3 px-4 font-bold text-[#FFE4A0] uppercase tracking-wider text-xs hidden md:table-cell">
                             Position
                           </th>
                           <th className="text-left py-3 px-4 font-bold text-[#FFE4A0] uppercase tracking-wider text-xs">
-                            Impact Rate
+                            Injury Score
                           </th>
                           <th className="text-left py-3 px-4 font-bold text-[#FFE4A0] uppercase tracking-wider text-xs">
-                            Vulnerability
+                            Risk Level
                           </th>
                         </tr>
                       </thead>
@@ -1149,12 +1159,6 @@ const Simulator = () => {
                                     : riskTier === "watch"
                                       ? "bg-amber-900/30 text-amber-400 border border-amber-500/30"
                                       : "bg-[#0A0F1D] text-[#FFE4A0] border border-[#FFE4A0]/20";
-                            const gForceIcon =
-                              gForceTier === "Serious Injury"
-                                ? "🚨"
-                                : gForceTier === "Soft Injury"
-                                  ? "⚠️"
-                                  : "👀";
                             const gForceColor =
                               gForceTier === "Serious Injury"
                                 ? "text-red-400"
@@ -1197,7 +1201,6 @@ const Simulator = () => {
                                     <span
                                       className={`text-xs w-16 inline-block font-bold ml-3 ${gForceColor}`}
                                     >
-                                      {gForceIcon}{" "}
                                       {evt.injury.gForce.toFixed(1)}g
                                     </span>
                                   )}
@@ -1224,15 +1227,15 @@ const Simulator = () => {
                     ).length;
                     return (
                       <p className="text-[#FFE4A0]/50 mt-5 text-sm italic" style={{ fontFamily: "'Cormorant Garamond', serif" }}>
-                        Showing {Math.min(total, 30)} of {total} prophecies
+                        Showing {Math.min(total, 30)} of {total} events
                         {nonSafeCount > 0 && (
                           <span className="font-bold text-orange-400 ml-2 not-italic font-sans">
-                            ({nonSafeCount} elevated warnings)
+                            ({nonSafeCount} elevated risk events)
                           </span>
                         )}
                         {nonSafeCount === 0 && (
                           <span className="text-green-400 ml-2 not-italic font-sans">
-                            (All visions are peaceful)
+                            (All events within safe range)
                           </span>
                         )}
                       </p>
@@ -1249,13 +1252,13 @@ const Simulator = () => {
                       className="text-3xl font-black text-[#FFE4A0]"
                       style={{ fontFamily: "'Cinzel Decorative', serif", textShadow: "0 0 15px rgba(255,228,160,0.4)" }}
                     >
-                      ✨ A Peaceful Kingdom
+                      No Hazards Detected
                     </p>
                     <p 
                       className="text-[#FDFDFD]/90 mt-3 text-lg italic"
                       style={{ fontFamily: "'Cormorant Garamond', serif" }}
                     >
-                      The prophecy shows no dangers. The environment is perfectly safe for this age group.
+                      The simulation detected no collision hazards. The environment is safe for this age group.
                     </p>
                   </div>
                 )}
@@ -1271,7 +1274,7 @@ const Simulator = () => {
                   className="text-xl font-black flex items-center gap-3 text-[#FFE4A0] style={{ textShadow: '0 0 10px rgba(255,228,160,0.3)' }}"
                   style={{ fontFamily: "'Cinzel Decorative', serif" }}
                 >
-                  <span className="text-2xl">✨</span> Safety Grimoire Report
+                  Safety Analysis Report
                 </h2>
                 <div className="flex flex-wrap gap-2">
                   <button
@@ -1282,7 +1285,7 @@ const Simulator = () => {
                         : "bg-transparent border-[#FFE4A0]/30 text-[#FDFDFD] hover:bg-[#FFE4A0]/10"
                     }`}
                   >
-                    {showHeatmap ? "Hide Danger Veins" : "Show Danger Veins"}
+                    {showHeatmap ? "Hide Heatmap" : "Show Heatmap"}
                   </button>
                   <button
                     onClick={() => setShowBoundingBoxes(!showBoundingBoxes)}
@@ -1292,13 +1295,13 @@ const Simulator = () => {
                         : "bg-transparent border-[#FFE4A0]/30 text-[#FDFDFD] hover:bg-[#FFE4A0]/10"
                     }`}
                   >
-                    {showBoundingBoxes ? "Hide Magical Wards" : "Show Magical Wards"}
+                    {showBoundingBoxes ? "Hide Bounding Boxes" : "Show Bounding Boxes"}
                   </button>
                   <button
                     onClick={exportToExcel}
                     className="px-4 py-2 bg-[#0A0F1D] border border-[#FFE4A0]/30 hover:border-[#FFE4A0] hover:bg-[#FFE4A0]/10 rounded-xl text-xs font-bold text-[#FDFDFD] transition-all"
                   >
-                    📊 Scribe CSV
+                    Export CSV
                   </button>
                   <button
                     onClick={() => {
@@ -1314,7 +1317,7 @@ const Simulator = () => {
                     }}
                     className="px-4 py-2 bg-gradient-to-br from-[#FFE4A0] to-[#D4AF37] hover:brightness-110 text-[#3A2B00] rounded-xl text-xs font-black shadow-[0_0_15px_rgba(212,175,55,0.3)] transition-all"
                   >
-                    📄 Produce Scroll (PDF)
+                    Generate PDF Report
                   </button>
                 </div>
               </div>
@@ -1329,7 +1332,7 @@ const Simulator = () => {
                     className="text-[#FFE4A0] text-sm font-bold uppercase tracking-widest italic mb-2"
                     style={{ fontFamily: "'Cormorant Garamond', serif" }}
                   >
-                    Sanctuary Grade
+                    Room Safety Grade
                   </h3>
                   <div className="flex items-end gap-3 gap-y-1 flex-wrap mb-4">
                     <span
@@ -1352,13 +1355,13 @@ const Simulator = () => {
                   </div>
                   <div className="flex gap-6 mt-auto border-t border-[#FFE4A0]/10 pt-4">
                     <div className="flex-1">
-                      <div className="text-xs text-[#FFE4A0]/70 uppercase tracking-wider mb-1">Critical Taint</div>
+                      <div className="text-xs text-[#FFE4A0]/70 uppercase tracking-wider mb-1">Critical Events</div>
                       <div className="font-black text-red-400 text-lg">
                         {simResult.roomSafetyIndex?.breakdown?.critical ?? 0}
                       </div>
                     </div>
                     <div className="flex-1 border-l border-[#FFE4A0]/10 pl-6">
-                      <div className="text-xs text-[#FFE4A0]/70 uppercase tracking-wider mb-1">Serious Taint</div>
+                      <div className="text-xs text-[#FFE4A0]/70 uppercase tracking-wider mb-1">Serious Events</div>
                       <div className="font-black text-orange-400 text-lg">
                         {simResult.roomSafetyIndex?.breakdown?.serious ?? 0}
                       </div>
@@ -1372,13 +1375,13 @@ const Simulator = () => {
                     className="text-[#FFE4A0] text-sm font-bold uppercase tracking-widest italic mb-2"
                     style={{ fontFamily: "'Cormorant Garamond', serif" }}
                   >
-                    Total Anomalies
+                    Total Incidents
                   </h3>
                   <div className="text-4xl font-black text-[#D4AF37] my-3 drop-shadow-[0_0_10px_rgba(212,175,55,0.4)]">
                     {simResult.events.length}
                   </div>
                   <div className="text-xs text-[#FFE4A0]/50 leading-relaxed max-w-[120px] mx-auto">
-                    Visions of encounters
+                    Collision events detected
                   </div>
                 </div>
                 
@@ -1387,7 +1390,7 @@ const Simulator = () => {
                     className="text-[#FFE4A0] text-sm font-bold uppercase tracking-widest italic mb-2"
                     style={{ fontFamily: "'Cormorant Garamond', serif" }}
                   >
-                    Realm Explorer
+                    Age Group
                   </h3>
                   <div className="text-xl font-bold text-[#FDFDFD] my-3 leading-tight uppercase font-serif tracking-wide py-2">
                     {ageGroup.split('(')[0].trim() || "Unknown"}
@@ -1410,24 +1413,24 @@ const Simulator = () => {
                   className="text-lg font-black text-[#FFE4A0] mb-5 uppercase tracking-widest italic"
                   style={{ fontFamily: "'Cormorant Garamond', serif" }}
                 >
-                  🗺️ Codex of Danger Veins
+                  Hazard Object Analysis
                 </h3>
 
                 {/* Color Legend */}
                 <div className="flex flex-wrap items-center gap-6 mb-4 bg-[#0A0F1D] rounded-xl p-4 border border-[#FFE4A0]/10 shadow-inner">
                   <span className="text-sm font-bold text-[#FFE4A0]/70 uppercase">
-                    Aura Scale:
+                    Risk Scale:
                   </span>
                   <div className="flex items-center gap-2">
                     <div className="w-8 h-2 rounded-full bg-green-500 shadow-[0_0_10px_rgba(34,197,94,0.5)]"></div>
                     <span className="text-xs font-bold text-[#FDFDFD]">
-                      Tranquil
+                      Safe
                     </span>
                   </div>
                   <div className="flex items-center gap-2">
                     <div className="w-8 h-2 rounded-full bg-yellow-400 shadow-[0_0_10px_rgba(250,204,21,0.5)]"></div>
                     <span className="text-xs font-bold text-[#FDFDFD]">
-                      Watchful
+                      Watch
                     </span>
                   </div>
                   <div className="flex items-center gap-2">
@@ -1439,7 +1442,7 @@ const Simulator = () => {
                   <div className="flex items-center gap-2">
                     <div className="w-8 h-2 rounded-full bg-red-600 shadow-[0_0_10px_rgba(220,38,38,0.5)]"></div>
                     <span className="text-xs font-bold text-[#FDFDFD]">
-                      Perilous
+                      Critical
                     </span>
                   </div>
                 </div>
@@ -1450,19 +1453,19 @@ const Simulator = () => {
                     Impact Force:
                   </span>
                   <div className="flex items-center gap-2">
-                    <span className="text-lg">👀</span>
+                    <div className="w-2 h-2 rounded-full bg-green-400"></div>
                     <span className="text-xs font-bold text-green-400">
                       &lt;20g Observe
                     </span>
                   </div>
                   <div className="flex items-center gap-2">
-                    <span className="text-lg">⚠️</span>
+                    <div className="w-2 h-2 rounded-full bg-orange-400"></div>
                     <span className="text-xs font-bold text-orange-400">
                       20-50g Soft Injury
                     </span>
                   </div>
                   <div className="flex items-center gap-2">
-                    <span className="text-lg">🚨</span>
+                    <div className="w-2 h-2 rounded-full bg-red-500"></div>
                     <span className="text-xs font-bold text-red-500">
                       &ge;50g Serious
                     </span>
@@ -1481,7 +1484,7 @@ const Simulator = () => {
                   className="text-xl font-black text-[#FFE4A0] mb-5 uppercase tracking-widest italic"
                   style={{ fontFamily: "'Cormorant Garamond', serif" }}
                 >
-                  🛡️ Wards & Recommendations
+                  Safety Recommendations
                 </h3>
                 <div className="space-y-4">
                   {heatmapData
@@ -1493,12 +1496,6 @@ const Simulator = () => {
                           : obj.worstGForceTier === "Soft Injury"
                             ? "border-orange-500/50 bg-orange-900/30 shadow-[inset_0_0_15px_rgba(249,115,22,0.1)]"
                             : "border-green-500/50 bg-green-900/20 shadow-[inset_0_0_15px_rgba(34,197,94,0.1)]";
-                      const tierIcon =
-                        obj.worstGForceTier === "Serious Injury"
-                          ? "🚨"
-                          : obj.worstGForceTier === "Soft Injury"
-                            ? "⚠️"
-                            : "👀";
                       const tierTextColor =
                         obj.worstGForceTier === "Serious Injury"
                           ? "text-red-400"
@@ -1515,7 +1512,7 @@ const Simulator = () => {
                           <div className="flex items-center justify-between mb-4">
                             <div>
                               <h4 className="text-xl font-black text-[#FDFDFD]">
-                                {tierIcon} {obj.objectName}
+                                {obj.objectName}
                               </h4>
                               <p className="text-sm text-[#FFE4A0]/60 mt-1">
                                 {obj.totalHits} encounter
@@ -1548,13 +1545,92 @@ const Simulator = () => {
                             className={`text-sm font-bold ${tierTextColor} mb-5 bg-[#0A0F1D]/60 border border-[#FFE4A0]/20 rounded-xl p-4`}
                           >
                             {obj.worstGForceTier === "Serious Injury"
-                              ? "🚨 REQUIRED ACTION — high risk of tragedy, immediate warding needed"
+                              ? "REQUIRED — High risk of serious injury, immediate protection needed"
                               : obj.worstGForceTier === "Soft Injury"
-                                ? "⚠️ PREVENTIVE CHARMS — padding or relocation strongly advised"
-                                : "👀 MONITOR ONLY — no potent danger foreseen"}
+                                ? "PREVENTIVE — Padding or relocation strongly recommended"
+                                : "MONITOR — No significant risk detected"}
                           </div>
 
-                          {/* Product Recommendations */}
+                          {/* Biomechanics Detail Panel */}
+                          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
+                            {/* Fracture Risk */}
+                            <div className={`rounded-xl p-3 border ${(obj.fractureCount ?? 0) > 0 ? 'bg-red-900/30 border-red-500/40' : 'bg-[#0A0F1D] border-[#FFE4A0]/15'}`}>
+                              <div className="text-[10px] font-bold uppercase tracking-wider text-[#FFE4A0]/60 mb-1">Bone Fracture Risk</div>
+                              <div className={`text-sm font-black leading-tight ${(obj.fractureCount ?? 0) > 0 ? 'text-red-400' : 'text-green-400'}`}>
+                                {(obj.fractureCount ?? 0) > 0
+                                  ? `Possible (${obj.fractureCount} case${(obj.fractureCount ?? 0) > 1 ? 's' : ''})`
+                                  : 'No fracture risk'}
+                              </div>
+                              {obj.specificInjuries && obj.specificInjuries.length > 0 && (
+                                <div className="text-[10px] text-red-300/80 mt-1 leading-tight">
+                                  {obj.specificInjuries.map((s: string) => {
+                                    const injuryLabels: Record<string, string> = {
+                                      skull_fracture: 'skull fracture',
+                                      wrist_fracture: 'wrist fracture',
+                                      clavicle_fracture: 'collarbone fracture',
+                                      arm_fracture: 'arm fracture',
+                                      leg_fracture: 'leg fracture',
+                                      rib_fracture: 'rib fracture',
+                                      spine_fracture: 'spine fracture',
+                                      hip_fracture: 'hip fracture',
+                                      femur_fracture: 'thigh bone fracture',
+                                      tibia_fracture: 'shin fracture',
+                                    };
+                                    return injuryLabels[s] || s.replace(/_/g, ' ');
+                                  }).join(', ')}
+                                </div>
+                              )}
+                            </div>
+                            {/* HIC₁₅ */}
+                            <div className="rounded-xl p-3 border bg-[#0A0F1D] border-[#FFE4A0]/15">
+                              <div className="text-[10px] font-bold uppercase tracking-wider text-[#FFE4A0]/60 mb-1">Head Impact Score</div>
+                              <div className={`text-lg font-black ${(obj.maxHIC ?? 0) > 700 ? 'text-red-400' : (obj.maxHIC ?? 0) > 200 ? 'text-orange-400' : 'text-green-400'}`}>
+                                {(obj.maxHIC ?? 0).toFixed(0)}
+                              </div>
+                              <div className="text-[10px] text-[#FFE4A0]/40 mt-0.5">
+                                {(obj.maxHIC ?? 0) > 700 ? 'Dangerous — seek help' : (obj.maxHIC ?? 0) > 200 ? 'Caution — monitor closely' : 'Normal range'}
+                              </div>
+                            </div>
+                            {/* Impact Force */}
+                            <div className="rounded-xl p-3 border bg-[#0A0F1D] border-[#FFE4A0]/15">
+                              <div className="text-[10px] font-bold uppercase tracking-wider text-[#FFE4A0]/60 mb-1">Peak Impact</div>
+                              <div className={`text-sm font-black ${
+                                (obj.maxImpactForceN ?? 0) > 5000 ? 'text-red-400' :
+                                (obj.maxImpactForceN ?? 0) > 2000 ? 'text-orange-400' :
+                                (obj.maxImpactForceN ?? 0) > 500 ? 'text-yellow-400' : 'text-green-400'
+                              }`}>
+                                {(obj.maxImpactForceN ?? 0) > 5000 ? 'Very High' :
+                                 (obj.maxImpactForceN ?? 0) > 2000 ? 'High' :
+                                 (obj.maxImpactForceN ?? 0) > 500 ? 'Moderate' : 'Low'}
+                              </div>
+                              <div className="text-[10px] text-[#FFE4A0]/40 mt-0.5">
+                                {(obj.maxImpactForceN ?? 0)} N
+                              </div>
+                            </div>
+                            {/* Collision Duration */}
+                            <div className="rounded-xl p-3 border bg-[#0A0F1D] border-[#FFE4A0]/15">
+                              <div className="text-[10px] font-bold uppercase tracking-wider text-[#FFE4A0]/60 mb-1">Avg Duration</div>
+                              <div className="text-lg font-black text-[#FDFDFD]">
+                                {(obj.avgCollisionDurationMs ?? 0).toFixed(1)} <span className="text-xs text-[#FFE4A0]/50">ms</span>
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Body Part Distribution */}
+                          {obj.bodyPartDistribution && Object.keys(obj.bodyPartDistribution).length > 0 && (
+                            <div className="mb-5 bg-[#0A0F1D]/60 border border-[#FFE4A0]/15 rounded-xl p-4">
+                              <div className="text-[10px] font-bold uppercase tracking-wider text-[#FFE4A0]/60 mb-2">Body Part Impact Distribution</div>
+                              <div className="flex flex-wrap gap-2">
+                                {Object.entries(obj.bodyPartDistribution)
+                                  .sort(([, a]: any, [, b]: any) => b - a)
+                                  .map(([part, count]: [string, any], i: number) => (
+                                    <span key={i} className="text-xs px-2.5 py-1 rounded-lg bg-[#FFE4A0]/10 border border-[#FFE4A0]/20 text-[#FDFDFD] font-bold">
+                                      {part}: <span className="text-[#D4AF37]">{count}</span>
+                                    </span>
+                                  ))}
+                              </div>
+                            </div>
+                          )}
                           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                             {obj.recommendations.map((rec, rIdx) => (
                               <a
@@ -1604,11 +1680,11 @@ const Simulator = () => {
                 className="text-xl font-black text-[#FFE4A0] mb-3 uppercase tracking-widest italic"
                 style={{ fontFamily: "'Cormorant Garamond', serif" }}
               >
-                📍 Grid of Fate (Zone Analysis)
+                Zone Risk Analysis
               </h3>
               <p className="text-sm text-[#FFE4A0]/50 mb-5 italic" style={{ fontFamily: "'Cormorant Garamond', serif" }}>
-                The Kingdom divided into a {zoneAnalysis.summary?.gridSize || 8}×
-                {zoneAnalysis.summary?.gridSize || 8} matrix. Each cell reveals its intrinsic alignment with danger.
+                Room divided into a {zoneAnalysis.summary?.gridSize || 8}×
+                {zoneAnalysis.summary?.gridSize || 8} grid. Each cell shows its aggregate risk level.
               </p>
 
               {/* Zone Summary Badges */}
@@ -1618,7 +1694,7 @@ const Simulator = () => {
                     {zoneAnalysis.summary?.safe || 0}
                   </div>
                   <div className="text-xs font-bold text-green-500/80 mt-1 uppercase tracking-wider">
-                    ✅ Safe Havens
+                    Safe Zones
                   </div>
                 </div>
                 <div className="rounded-2xl bg-yellow-900/20 border border-yellow-500/30 p-4 text-center shadow-inner">
@@ -1626,7 +1702,7 @@ const Simulator = () => {
                     {zoneAnalysis.summary?.caution || 0}
                   </div>
                   <div className="text-xs font-bold text-yellow-500/80 mt-1 uppercase tracking-wider">
-                    👀 Watchful 
+                    Caution 
                   </div>
                 </div>
                 <div className="rounded-2xl bg-orange-900/20 border border-orange-500/30 p-4 text-center shadow-inner">
@@ -1634,7 +1710,7 @@ const Simulator = () => {
                     {zoneAnalysis.summary?.hazard || 0}
                   </div>
                   <div className="text-xs font-bold text-orange-500/80 mt-1 uppercase tracking-wider">
-                    ⚠️ Hazard Marks
+                    Hazard Zones
                   </div>
                 </div>
                 <div className="rounded-2xl bg-red-900/20 border border-red-500/30 p-4 text-center shadow-inner">
@@ -1642,7 +1718,7 @@ const Simulator = () => {
                     {zoneAnalysis.summary?.danger || 0}
                   </div>
                   <div className="text-xs font-bold text-red-500/80 mt-1 uppercase tracking-wider">
-                    🚨 Perilous Hexes
+                    Danger Zones
                   </div>
                 </div>
               </div>
@@ -1679,7 +1755,6 @@ const Simulator = () => {
                             <span
                               className={`text-sm font-black uppercase tracking-wider ${zone.classification === "danger" ? "text-red-400" : "text-orange-400"}`}
                             >
-                              {zone.classification === "danger" ? "🚨 " : "⚠️ "}{" "}
                               Coordinate [{zone.row},{zone.col}]
                             </span>
                             <p className="text-xs text-[#FDFDFD]/70 mt-1.5">

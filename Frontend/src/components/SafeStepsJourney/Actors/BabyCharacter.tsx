@@ -6,29 +6,23 @@
  *   baby_animation.glb     → clip "stand_up"   (Frame 2 đầu)
  *   baby_animation.glb     → clip "walk"       (Frame 2 đi)
  *   baby_animation.glb     → clip "idle"       (Frame 3 + 4)
- *
- * IMPROVEMENTS (C1):
- *   • Scale: 0.068849 → 0.08 (slightly larger, clearer detail)
- *   • Walk bob: subtle sinusoidal Y offset during walk
- *   • Contact shadow: circular shadow blob under baby
- *   • Smoother animation crossfade with overlap
  */
-import { useRef, useEffect } from "react";
+import { useRef, useEffect, useMemo } from "react";
 import { useGLTF, useAnimations } from "@react-three/drei";
 import { useFrame } from "@react-three/fiber";
 import * as THREE from "three";
 
-const SCALE    = 0.08;       // ← C1: 0.068849 → 0.08 for clearer detail
-const FLOOR_Y  = 0.1335;
+const SCALE = 0.08; 
+const FLOOR_Y = 0.1335;
 
 /* Start: Đứng xa hơn để đi lại gần bàn an toàn */
 const WALK_START: [number, number, number] = [0.05, 0, 0.8];
-/* End: đi chéo sang góc lồi bên trái của bàn (x=-0.25) */
-const WALK_END: [number, number, number]   = [-0.25, 0, 0.40];
+/* End: baby dừng TRƯỚC góc trái bàn, nhìn thẳng vào corner */
+const WALK_END: [number, number, number] = [-0.45, 0, 0.13]; 
 
 /* Walk bob parameters */
-const BOB_AMPLITUDE = 0.008;  // subtle Y bounce
-const BOB_FREQUENCY = 8.0;    // steps per second
+const BOB_AMPLITUDE = 0.008; // subtle Y bounce
+const BOB_FREQUENCY = 8.0; // steps per second
 
 /* ── Helper: apply opacity to all meshes in scene ────── */
 function applyOpacity(scene: THREE.Object3D, opacity: number) {
@@ -40,8 +34,8 @@ function applyOpacity(scene: THREE.Object3D, opacity: number) {
       const sm = mat as THREE.MeshStandardMaterial;
       if (sm.isMeshStandardMaterial) {
         sm.transparent = true;
-        sm.opacity     = opacity;
-        sm.depthWrite  = opacity > 0.5;
+        sm.opacity = opacity;
+        sm.depthWrite = opacity > 0.5;
       }
     });
   });
@@ -63,29 +57,46 @@ function ContactShadow() {
 }
 
 /* ── Model: play_toys_animated.glb ───────────────────── */
-function PlayModel({ active }: { active: boolean }) {
-  const groupRef   = useRef<THREE.Group>(null!);
+function PlayModel({ active, phase }: { active: boolean; phase: BabyPhase }) {
+  const groupRef = useRef<THREE.Group>(null!);
   const { scene, animations } = useGLTF("/models/play_toys_animated.glb");
   const { actions } = useAnimations(animations, groupRef);
-  const opRef      = useRef(0);
+  const opRef = useRef(0);
 
   useEffect(() => {
-    if (!active) { Object.values(actions).forEach(a => a?.fadeOut(0.4)); return; }
+    if (!active) {
+      Object.values(actions).forEach((a) => a?.fadeOut(0.4));
+      return;
+    }
+    /* T-07: Use sitting_standup as exit bridge when transitioning to 'stand' */
+    if (phase === "stand") {
+      const bridge = actions["sitting_standup"] ?? null;
+      if (bridge && !bridge.isRunning()) {
+        bridge.setLoop(THREE.LoopOnce, 1).reset().play();
+        bridge.clampWhenFinished = true;
+      }
+      return;
+    }
     const a = actions["play_toys"] ?? Object.values(actions).find(Boolean);
     if (!a) return;
     a.reset().setLoop(THREE.LoopRepeat, Infinity).fadeIn(0.4).play();
-    return () => { a.fadeOut(0.4); };
-  }, [active, actions]);
+    return () => {
+      a.fadeOut(0.4);
+    };
+  }, [active, phase, actions]);
 
   useEffect(() => {
-    scene.traverse(c => {
+    scene.traverse((c) => {
       const m = c as THREE.Mesh;
-      if (m.isMesh) { m.castShadow = true; m.receiveShadow = true; }
+      if (m.isMesh) {
+        m.castShadow = true;
+        m.receiveShadow = true;
+      }
     });
   }, [scene]);
 
   useFrame((_s, dt) => {
-    opRef.current += (( active ? 1 : 0) - opRef.current) * Math.min(1, 5 * dt);
+    opRef.current += ((active ? 1 : 0) - opRef.current) * Math.min(1, 5 * dt);
     applyOpacity(scene, opRef.current);
     if (groupRef.current) groupRef.current.visible = opRef.current > 0.01;
   });
@@ -98,51 +109,61 @@ function PlayModel({ active }: { active: boolean }) {
 }
 
 /* ── Model: baby_animation.glb (stand/walk/idle) ─────── */
-function BabyModel({
-  active,
-  phase,
-}: {
-  active: boolean;
-  phase: BabyPhase;
-}) {
-  const groupRef   = useRef<THREE.Group>(null!);
+function BabyModel({ active, phase }: { active: boolean; phase: BabyPhase }) {
+  const groupRef = useRef<THREE.Group>(null!);
   const { scene, animations } = useGLTF("/models/baby_animation.glb");
   const { actions } = useAnimations(animations, groupRef);
-  const opRef      = useRef(0);
+  const opRef = useRef(0);
 
   useEffect(() => {
-    if (!active || phase === "play") { 
-      Object.values(actions).forEach(a => { if (a?.isRunning()) a.fadeOut(0.4); }); 
-      return; 
+    if (!active || phase === "play") {
+      Object.values(actions).forEach((a) => {
+        if (a?.isRunning()) a.fadeOut(0.4);
+      });
+      return;
     }
-    
+
     let clipName = "idle";
     let loopOnce = false;
-    if (phase === "stand") { clipName = "stand_up"; loopOnce = true; }
-    else if (phase === "walk") { clipName = "walk"; }
-    else if (phase === "idle") { clipName = "idle"; }
+    if (phase === "stand") {
+      clipName = "stand_up";
+      loopOnce = true;
+    } else if (phase === "walk") {
+      clipName = "walk";
+    } else if (phase === "idle") {
+      clipName = "idle";
+    }
 
-    const a = actions[clipName] ?? Object.values(actions).find((_, idx) => idx === 0);
+    const a =
+      actions[clipName] ?? Object.values(actions).find((_, idx) => idx === 0);
     if (!a) return;
-    
+
     // crossfade: tắt các clip đang chạy khác
-    Object.values(actions).forEach(act => {
+    Object.values(actions).forEach((act) => {
       if (act && act !== a && act.isRunning()) {
         act.fadeOut(0.4);
       }
     });
 
     a.reset();
-    a.setLoop(loopOnce ? THREE.LoopOnce : THREE.LoopRepeat,
-              loopOnce ? 1 : Infinity);
+    a.setLoop(
+      loopOnce ? THREE.LoopOnce : THREE.LoopRepeat,
+      loopOnce ? 1 : Infinity,
+    );
     a.clampWhenFinished = loopOnce;
-    a.fadeIn(0.4).play();
+    /* T-07: FIX — Delay nhỏ trước fadeIn để clip load xong, tránh T-pose */
+    setTimeout(() => {
+      a.fadeIn(0.4).play();
+    }, 16);
   }, [active, phase, actions]);
 
   useEffect(() => {
-    scene.traverse(c => {
+    scene.traverse((c) => {
       const m = c as THREE.Mesh;
-      if (m.isMesh) { m.castShadow = true; m.receiveShadow = true; }
+      if (m.isMesh) {
+        m.castShadow = true;
+        m.receiveShadow = true;
+      }
     });
   }, [scene]);
 
@@ -166,18 +187,34 @@ interface Props {
   scrollProgress: number;
   phase: BabyPhase;
   position?: [number, number, number];
+  walkEnd?: [number, number, number]; // Dynamic walk endpoint từ HazardTable
 }
 
 export default function BabyCharacter({
   scrollProgress,
   phase,
   position = [0, 0, 0],
+  walkEnd = WALK_END,
 }: Props) {
-  const rootRef    = useRef<THREE.Group>(null!);
-  const worldPos   = useRef(new THREE.Vector3(...WALK_START));
-  const targetPos  = useRef(new THREE.Vector3(...WALK_START));
+  const rootRef = useRef<THREE.Group>(null!);
+  const worldPos = useRef(new THREE.Vector3(...WALK_START));
+  const targetPos = useRef(new THREE.Vector3(...WALK_START));
   const targetRotY = useRef(0);
-  const timeRef    = useRef(0);
+  const timeRef = useRef(0);
+
+  /* ── Compute buffered walkEnd (offset từ corner để em bé đứng cách xa + sang phải) ── */
+  const bufferedWalkEnd = useMemo(() => {
+    const dX = walkEnd[0] - WALK_START[0];
+    const dZ = walkEnd[2] - WALK_START[2];
+    const dist = Math.sqrt(dX * dX + dZ * dZ);
+    if (dist < 0.01) return walkEnd;
+    /* Lùi lại 0.18 unit từ walkEnd theo hướng quay về, + offset sang phải (X+) */
+    const backupDist = 0.18;
+    const backX = (dX / dist) * backupDist;
+    const backZ = (dZ / dist) * backupDist;
+    const rightOffset = 0.08; /* Offset sang phải */
+    return [walkEnd[0] - backX + rightOffset, walkEnd[1], walkEnd[2] - backZ] as [number, number, number];
+  }, [walkEnd]);
 
   useEffect(() => {
     if (phase === "play") {
@@ -187,25 +224,23 @@ export default function BabyCharacter({
     } else if (phase === "stand") {
       targetPos.current.set(...WALK_START);
       /* Bắt đầu đứng lên: Rục rịch quay người sang hướng cái bàn */
-      targetRotY.current = Math.atan2(
-        WALK_END[0] - WALK_START[0],
-        WALK_END[2] - WALK_START[2],
-      );
+      const dX = bufferedWalkEnd[0] - WALK_START[0];
+      const dZ = bufferedWalkEnd[2] - WALK_START[2];
+      targetRotY.current = Math.atan2(dX, dZ) + 0.45; /* +0.45 rad = xoay phải thêm */
     } else if (phase === "walk" || phase === "idle") {
-      /* Walk progress — baby stops when it reaches WALK_END */
-      const wp   = Math.min(1, Math.max(0, (scrollProgress - 0.58) / 0.12));
+      /* Walk progress — baby stops when it reaches bufferedWalkEnd */
+      const wp = Math.min(1, Math.max(0, (scrollProgress - 0.58) / 0.12));
       const ease = wp * wp * (3 - 2 * wp);
       targetPos.current.set(
-        WALK_START[0] + (WALK_END[0] - WALK_START[0]) * ease,
+        WALK_START[0] + (bufferedWalkEnd[0] - WALK_START[0]) * ease,
         0,
-        WALK_START[2] + (WALK_END[2] - WALK_START[2]) * ease,
+        WALK_START[2] + (bufferedWalkEnd[2] - WALK_START[2]) * ease,
       );
-      targetRotY.current = Math.atan2(
-        WALK_END[0] - WALK_START[0],
-        WALK_END[2] - WALK_START[2],
-      );
+      const dX = bufferedWalkEnd[0] - WALK_START[0];
+      const dZ = bufferedWalkEnd[2] - WALK_START[2];
+      targetRotY.current = Math.atan2(dX, dZ) + 0.1;
     }
-  }, [scrollProgress, phase]);
+  }, [scrollProgress, phase, bufferedWalkEnd]);
 
   useFrame((_, delta) => {
     if (!rootRef.current) return;
@@ -216,7 +251,8 @@ export default function BabyCharacter({
     /* ── Walk bob: sinusoidal Y offset during walk phase ── */
     let bobY = 0;
     if (phase === "walk") {
-      bobY = Math.abs(Math.sin(timeRef.current * BOB_FREQUENCY)) * BOB_AMPLITUDE;
+      bobY =
+        Math.abs(Math.sin(timeRef.current * BOB_FREQUENCY)) * BOB_AMPLITUDE;
     }
 
     rootRef.current.position.set(
@@ -225,14 +261,14 @@ export default function BabyCharacter({
       position[2] + worldPos.current.z,
     );
     rootRef.current.rotation.y +=
-      (targetRotY.current - rootRef.current.rotation.y) * 0.07;
+      (targetRotY.current - rootRef.current.rotation.y) * 0.12;
   });
 
   if (scrollProgress < 0.35) return null;
 
   return (
     <group ref={rootRef} scale={SCALE}>
-      <PlayModel active={phase === "play"} />
+      <PlayModel active={phase === "play"} phase={phase} />
       <BabyModel active={phase !== "play"} phase={phase} />
       {/* Contact shadow blob under baby */}
       <ContactShadow />

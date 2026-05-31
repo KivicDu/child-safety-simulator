@@ -11,7 +11,11 @@ import Home from "./pages/Home";
 const Simulator = lazy(() => import("./pages/Simulator"));
 const SafetyTips = lazy(() => import("./pages/SafetyTips"));
 const TestLab = lazy(() => import("./pages/TestLab"));
-const ModelDiagnostic = lazy(() => import("./components/SafeStepsJourney/ModelDiagnostic"));
+const AboutUs = lazy(() => import("./pages/AboutUs"));
+const ActionViewer = lazy(() => import("./pages/ActionViewer"));
+const ModelDiagnostic = lazy(
+  () => import("./components/SafeStepsJourney/ModelDiagnostic"),
+);
 
 // Loading fallback — Fairytale theme
 const LoadingPage = () => (
@@ -28,7 +32,6 @@ const LoadingPage = () => (
     }}
   >
     <div style={{ textAlign: "center" }}>
-      {/* Gold spinner ring */}
       <div
         style={{
           width: 48,
@@ -41,7 +44,6 @@ const LoadingPage = () => (
           boxShadow: "0 0 20px rgba(255,228,160,0.15)",
         }}
       />
-      {/* Sparkle star */}
       <div
         style={{
           fontSize: 14,
@@ -54,7 +56,6 @@ const LoadingPage = () => (
       >
         ✦
       </div>
-      {/* Loading text */}
       <p
         style={{
           color: "rgba(255,248,230,0.6)",
@@ -84,7 +85,6 @@ function AnimatedRoutes() {
           });
           if (response.data.success) {
             localStorage.setItem("user", JSON.stringify(response.data.user));
-            // Redirect to simulator if authenticated and trying to access auth pages
             if (
               [
                 "/login",
@@ -93,7 +93,6 @@ function AnimatedRoutes() {
                 "/reset-password",
               ].some((path) => location.pathname.startsWith(path))
             ) {
-              // Use window.location for a clean redirect if navigate is tricky here
               window.location.href = "/simulator";
             }
           }
@@ -107,8 +106,9 @@ function AnimatedRoutes() {
     initAuth();
   }, []);
 
-  // Group login and register under the same key to prevent Unmount/Mount wiping out the sliding animation
-  const routeKey = ["/login", "/register"].includes(location.pathname) ? "auth-portal" : location.pathname;
+  const routeKey = ["/login", "/register"].includes(location.pathname)
+    ? "auth-portal"
+    : location.pathname;
 
   return (
     <AnimatePresence mode="wait">
@@ -130,6 +130,14 @@ function AnimatedRoutes() {
             </Suspense>
           }
         />
+        <Route
+          path="/about"
+          element={
+            <Suspense fallback={<LoadingPage />}>
+              <AboutUs />
+            </Suspense>
+          }
+        />
         <Route path="/login" element={<AuthPortal />} />
         <Route path="/register" element={<AuthPortal />} />
         <Route path="/forgot-password" element={<ForgotPassword />} />
@@ -147,6 +155,14 @@ function AnimatedRoutes() {
           element={
             <Suspense fallback={<LoadingPage />}>
               <ModelDiagnostic />
+            </Suspense>
+          }
+        />
+        <Route
+          path="/action-viewer"
+          element={
+            <Suspense fallback={<LoadingPage />}>
+              <ActionViewer />
             </Suspense>
           }
         />

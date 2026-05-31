@@ -14,8 +14,9 @@ import { useFrame } from "@react-three/fiber";
 import * as THREE from "three";
 
 /* ═══ Star Field — Enhanced ══════════════════════════ */
-function StarField({ opacity }: { opacity: number }) {
-  const COUNT = 800;
+function StarField({ opacity, phaseGroup = 0 }: { opacity: number; phaseGroup?: number }) {
+  const COUNT = 267;  // T-13: 800/3 per group
+  const PHASE_OFFSET = phaseGroup * Math.PI * 0.66;
   const pointsRef = useRef<THREE.Points>(null!);
 
   const [{ positions }] = useState(() => {
@@ -67,8 +68,8 @@ function StarField({ opacity }: { opacity: number }) {
     if (!pointsRef.current || opacity <= 0.01) return;
     const mat = pointsRef.current.material as THREE.PointsMaterial;
     const t = clock.getElapsedTime();
-    // Global shimmer modulation
-    mat.opacity = opacity * (0.55 + 0.45 * Math.sin(t * 1.3 + phaseOffsets[0]));
+    // T-13: Per-group phase offset for independent twinkle
+    mat.opacity = opacity * (0.55 + 0.45 * Math.sin(t * 1.3 + PHASE_OFFSET + phaseOffsets[0]));
   });
 
   return (
@@ -109,7 +110,7 @@ function Moon({ opacity }: { opacity: number }) {
   });
 
   return (
-    <group position={[-18, 38, -55]}>
+    <group position={[-18, 65, 15]}>
       {/* Outer glow halo — larger, dimmer */}
       <mesh ref={outerGlowRef}>
         <sphereGeometry args={[9.0, 16, 16]} />
@@ -335,7 +336,10 @@ export default function StarrySky({ scrollProgress }: Props) {
 
   return (
     <group>
-      <StarField opacity={skyOpacity} />
+      {/* T-13: 3 star groups with independent twinkle phases */}
+      <StarField opacity={skyOpacity} phaseGroup={0} />
+      <StarField opacity={skyOpacity} phaseGroup={1} />
+      <StarField opacity={skyOpacity} phaseGroup={2} />
       <Moon opacity={skyOpacity} />
       <ConstellationLines opacity={skyOpacity} />
       <ShootingStars opacity={skyOpacity} />
