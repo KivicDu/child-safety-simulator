@@ -747,7 +747,7 @@ const Simulator = () => {
                           </span>
                           {collisions > 0 && (
                             <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-red-900/60 border border-red-500/50 text-red-200 font-bold">
-                              {collisions} 💥
+                              {collisions}
                             </span>
                           )}
                           <span className="text-[10px] text-[#FFE4A0]/50 ml-1">
@@ -913,8 +913,8 @@ const Simulator = () => {
                         </div>
                         {nonSafeEvents.length > 0 && (
                           <div className="bg-red-900/20 border border-red-500/30 rounded-xl p-4">
-                            <div className="text-sm font-bold text-red-300 mb-3 flex items-center gap-2">
-                              <span>⚠️</span> Risk Events Encountered ({nonSafeEvents.length})
+                            <div className="text-sm font-bold text-red-300 mb-3">
+                              Risk Events Encountered ({nonSafeEvents.length})
                             </div>
                             <div className="space-y-2 max-h-32 overflow-y-auto custom-scrollbar pr-2">
                               {nonSafeEvents.slice(0, 8).map((evt, idx) => {
@@ -960,8 +960,8 @@ const Simulator = () => {
                           </div>
                         )}
                         {nonSafeEvents.length === 0 && (
-                          <div className="bg-green-900/20 border border-green-500/30 rounded-xl p-4 text-sm text-green-400 font-bold flex items-center gap-2">
-                            <span>✅</span> No risk events detected for this agent
+                          <div className="bg-green-900/20 border border-green-500/30 rounded-xl p-4 text-sm text-green-400 font-bold">
+                            No risk events detected for this agent
                           </div>
                         )}
                       </div>
@@ -1080,7 +1080,7 @@ const Simulator = () => {
                     }
                     style={{ textShadow: "0 0 10px currentColor" }}
                   >
-                    {simResult.status === "complete" ? "✨" : "⏳"}
+                    {simResult.status === "complete" ? "Done" : "..."}
                   </div>
                   <div className="text-xs font-bold text-[#FFE4A0]/70 mt-1 uppercase tracking-widest italic" style={{ fontFamily: "'Cormorant Garamond', serif" }}>
                     {simResult.status === "complete" ? "Complete" : "Processing..."}
@@ -1095,7 +1095,7 @@ const Simulator = () => {
                     className="text-xl font-black text-[#FFE4A0] mb-4"
                     style={{ fontFamily: "'Cinzel Decorative', serif" }}
                   >
-                    📋 Collision Event Log
+                    Collision Event Log
                   </h3>
                   <div className="overflow-x-auto custom-scrollbar pb-2">
                     <table className="w-full text-sm">
@@ -1159,12 +1159,6 @@ const Simulator = () => {
                                     : riskTier === "watch"
                                       ? "bg-amber-900/30 text-amber-400 border border-amber-500/30"
                                       : "bg-[#0A0F1D] text-[#FFE4A0] border border-[#FFE4A0]/20";
-                            const gForceIcon =
-                              gForceTier === "Serious Injury"
-                                ? "🚨"
-                                : gForceTier === "Soft Injury"
-                                  ? "⚠️"
-                                  : "👀";
                             const gForceColor =
                               gForceTier === "Serious Injury"
                                 ? "text-red-400"
@@ -1207,7 +1201,6 @@ const Simulator = () => {
                                     <span
                                       className={`text-xs w-16 inline-block font-bold ml-3 ${gForceColor}`}
                                     >
-                                      {gForceIcon}{" "}
                                       {evt.injury.gForce.toFixed(1)}g
                                     </span>
                                   )}
@@ -1259,7 +1252,7 @@ const Simulator = () => {
                       className="text-3xl font-black text-[#FFE4A0]"
                       style={{ fontFamily: "'Cinzel Decorative', serif", textShadow: "0 0 15px rgba(255,228,160,0.4)" }}
                     >
-                      ✅ No Hazards Detected
+                      No Hazards Detected
                     </p>
                     <p 
                       className="text-[#FDFDFD]/90 mt-3 text-lg italic"
@@ -1281,7 +1274,7 @@ const Simulator = () => {
                   className="text-xl font-black flex items-center gap-3 text-[#FFE4A0] style={{ textShadow: '0 0 10px rgba(255,228,160,0.3)' }}"
                   style={{ fontFamily: "'Cinzel Decorative', serif" }}
                 >
-                  <span className="text-2xl">📊</span> Safety Analysis Report
+                  Safety Analysis Report
                 </h2>
                 <div className="flex flex-wrap gap-2">
                   <button
@@ -1308,7 +1301,7 @@ const Simulator = () => {
                     onClick={exportToExcel}
                     className="px-4 py-2 bg-[#0A0F1D] border border-[#FFE4A0]/30 hover:border-[#FFE4A0] hover:bg-[#FFE4A0]/10 rounded-xl text-xs font-bold text-[#FDFDFD] transition-all"
                   >
-                    📊 Export CSV
+                    Export CSV
                   </button>
                   <button
                     onClick={() => {
@@ -1324,7 +1317,7 @@ const Simulator = () => {
                     }}
                     className="px-4 py-2 bg-gradient-to-br from-[#FFE4A0] to-[#D4AF37] hover:brightness-110 text-[#3A2B00] rounded-xl text-xs font-black shadow-[0_0_15px_rgba(212,175,55,0.3)] transition-all"
                   >
-                    📄 Generate PDF Report
+                    Generate PDF Report
                   </button>
                 </div>
               </div>
@@ -1420,7 +1413,7 @@ const Simulator = () => {
                   className="text-lg font-black text-[#FFE4A0] mb-5 uppercase tracking-widest italic"
                   style={{ fontFamily: "'Cormorant Garamond', serif" }}
                 >
-                  🗺️ Hazard Object Analysis
+                  Hazard Object Analysis
                 </h3>
 
                 {/* Color Legend */}
@@ -1460,19 +1453,19 @@ const Simulator = () => {
                     Impact Force:
                   </span>
                   <div className="flex items-center gap-2">
-                    <span className="text-lg">👀</span>
+                    <div className="w-2 h-2 rounded-full bg-green-400"></div>
                     <span className="text-xs font-bold text-green-400">
                       &lt;20g Observe
                     </span>
                   </div>
                   <div className="flex items-center gap-2">
-                    <span className="text-lg">⚠️</span>
+                    <div className="w-2 h-2 rounded-full bg-orange-400"></div>
                     <span className="text-xs font-bold text-orange-400">
                       20-50g Soft Injury
                     </span>
                   </div>
                   <div className="flex items-center gap-2">
-                    <span className="text-lg">🚨</span>
+                    <div className="w-2 h-2 rounded-full bg-red-500"></div>
                     <span className="text-xs font-bold text-red-500">
                       &ge;50g Serious
                     </span>
@@ -1491,7 +1484,7 @@ const Simulator = () => {
                   className="text-xl font-black text-[#FFE4A0] mb-5 uppercase tracking-widest italic"
                   style={{ fontFamily: "'Cormorant Garamond', serif" }}
                 >
-                  🛡️ Safety Recommendations
+                  Safety Recommendations
                 </h3>
                 <div className="space-y-4">
                   {heatmapData
@@ -1503,12 +1496,6 @@ const Simulator = () => {
                           : obj.worstGForceTier === "Soft Injury"
                             ? "border-orange-500/50 bg-orange-900/30 shadow-[inset_0_0_15px_rgba(249,115,22,0.1)]"
                             : "border-green-500/50 bg-green-900/20 shadow-[inset_0_0_15px_rgba(34,197,94,0.1)]";
-                      const tierIcon =
-                        obj.worstGForceTier === "Serious Injury"
-                          ? "🚨"
-                          : obj.worstGForceTier === "Soft Injury"
-                            ? "⚠️"
-                            : "👀";
                       const tierTextColor =
                         obj.worstGForceTier === "Serious Injury"
                           ? "text-red-400"
@@ -1525,7 +1512,7 @@ const Simulator = () => {
                           <div className="flex items-center justify-between mb-4">
                             <div>
                               <h4 className="text-xl font-black text-[#FDFDFD]">
-                                {tierIcon} {obj.objectName}
+                                {obj.objectName}
                               </h4>
                               <p className="text-sm text-[#FFE4A0]/60 mt-1">
                                 {obj.totalHits} encounter
@@ -1558,41 +1545,66 @@ const Simulator = () => {
                             className={`text-sm font-bold ${tierTextColor} mb-5 bg-[#0A0F1D]/60 border border-[#FFE4A0]/20 rounded-xl p-4`}
                           >
                             {obj.worstGForceTier === "Serious Injury"
-                              ? "🚨 REQUIRED — High risk of serious injury, immediate protection needed"
+                              ? "REQUIRED — High risk of serious injury, immediate protection needed"
                               : obj.worstGForceTier === "Soft Injury"
-                                ? "⚠️ PREVENTIVE — Padding or relocation strongly recommended"
-                                : "👀 MONITOR — No significant risk detected"}
+                                ? "PREVENTIVE — Padding or relocation strongly recommended"
+                                : "MONITOR — No significant risk detected"}
                           </div>
 
                           {/* Biomechanics Detail Panel */}
                           <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
                             {/* Fracture Risk */}
                             <div className={`rounded-xl p-3 border ${(obj.fractureCount ?? 0) > 0 ? 'bg-red-900/30 border-red-500/40' : 'bg-[#0A0F1D] border-[#FFE4A0]/15'}`}>
-                              <div className="text-[10px] font-bold uppercase tracking-wider text-[#FFE4A0]/60 mb-1">Fracture Risk</div>
-                              <div className={`text-lg font-black ${(obj.fractureCount ?? 0) > 0 ? 'text-red-400' : 'text-green-400'}`}>
-                                {(obj.fractureCount ?? 0) > 0 ? `⚠ ${obj.fractureCount}` : '✓ None'}
+                              <div className="text-[10px] font-bold uppercase tracking-wider text-[#FFE4A0]/60 mb-1">Bone Fracture Risk</div>
+                              <div className={`text-sm font-black leading-tight ${(obj.fractureCount ?? 0) > 0 ? 'text-red-400' : 'text-green-400'}`}>
+                                {(obj.fractureCount ?? 0) > 0
+                                  ? `Possible (${obj.fractureCount} case${(obj.fractureCount ?? 0) > 1 ? 's' : ''})`
+                                  : 'No fracture risk'}
                               </div>
                               {obj.specificInjuries && obj.specificInjuries.length > 0 && (
                                 <div className="text-[10px] text-red-300/80 mt-1 leading-tight">
-                                  {obj.specificInjuries.map((s: string) => s.replace(/_/g, ' ')).join(', ')}
+                                  {obj.specificInjuries.map((s: string) => {
+                                    const injuryLabels: Record<string, string> = {
+                                      skull_fracture: 'skull fracture',
+                                      wrist_fracture: 'wrist fracture',
+                                      clavicle_fracture: 'collarbone fracture',
+                                      arm_fracture: 'arm fracture',
+                                      leg_fracture: 'leg fracture',
+                                      rib_fracture: 'rib fracture',
+                                      spine_fracture: 'spine fracture',
+                                      hip_fracture: 'hip fracture',
+                                      femur_fracture: 'thigh bone fracture',
+                                      tibia_fracture: 'shin fracture',
+                                    };
+                                    return injuryLabels[s] || s.replace(/_/g, ' ');
+                                  }).join(', ')}
                                 </div>
                               )}
                             </div>
                             {/* HIC₁₅ */}
                             <div className="rounded-xl p-3 border bg-[#0A0F1D] border-[#FFE4A0]/15">
-                              <div className="text-[10px] font-bold uppercase tracking-wider text-[#FFE4A0]/60 mb-1">HIC₁₅</div>
+                              <div className="text-[10px] font-bold uppercase tracking-wider text-[#FFE4A0]/60 mb-1">Head Impact Score</div>
                               <div className={`text-lg font-black ${(obj.maxHIC ?? 0) > 700 ? 'text-red-400' : (obj.maxHIC ?? 0) > 200 ? 'text-orange-400' : 'text-green-400'}`}>
                                 {(obj.maxHIC ?? 0).toFixed(0)}
                               </div>
                               <div className="text-[10px] text-[#FFE4A0]/40 mt-0.5">
-                                {(obj.maxHIC ?? 0) > 700 ? 'Critical' : (obj.maxHIC ?? 0) > 200 ? 'Warning' : 'Safe'}
+                                {(obj.maxHIC ?? 0) > 700 ? 'Dangerous — seek help' : (obj.maxHIC ?? 0) > 200 ? 'Caution — monitor closely' : 'Normal range'}
                               </div>
                             </div>
                             {/* Impact Force */}
                             <div className="rounded-xl p-3 border bg-[#0A0F1D] border-[#FFE4A0]/15">
-                              <div className="text-[10px] font-bold uppercase tracking-wider text-[#FFE4A0]/60 mb-1">Peak Force</div>
-                              <div className="text-lg font-black text-[#FDFDFD]">
-                                {(obj.maxImpactForceN ?? 0)} <span className="text-xs text-[#FFE4A0]/50">N</span>
+                              <div className="text-[10px] font-bold uppercase tracking-wider text-[#FFE4A0]/60 mb-1">Peak Impact</div>
+                              <div className={`text-sm font-black ${
+                                (obj.maxImpactForceN ?? 0) > 5000 ? 'text-red-400' :
+                                (obj.maxImpactForceN ?? 0) > 2000 ? 'text-orange-400' :
+                                (obj.maxImpactForceN ?? 0) > 500 ? 'text-yellow-400' : 'text-green-400'
+                              }`}>
+                                {(obj.maxImpactForceN ?? 0) > 5000 ? 'Very High' :
+                                 (obj.maxImpactForceN ?? 0) > 2000 ? 'High' :
+                                 (obj.maxImpactForceN ?? 0) > 500 ? 'Moderate' : 'Low'}
+                              </div>
+                              <div className="text-[10px] text-[#FFE4A0]/40 mt-0.5">
+                                {(obj.maxImpactForceN ?? 0)} N
                               </div>
                             </div>
                             {/* Collision Duration */}
@@ -1668,7 +1680,7 @@ const Simulator = () => {
                 className="text-xl font-black text-[#FFE4A0] mb-3 uppercase tracking-widest italic"
                 style={{ fontFamily: "'Cormorant Garamond', serif" }}
               >
-                📍 Zone Risk Analysis
+                Zone Risk Analysis
               </h3>
               <p className="text-sm text-[#FFE4A0]/50 mb-5 italic" style={{ fontFamily: "'Cormorant Garamond', serif" }}>
                 Room divided into a {zoneAnalysis.summary?.gridSize || 8}×
@@ -1682,7 +1694,7 @@ const Simulator = () => {
                     {zoneAnalysis.summary?.safe || 0}
                   </div>
                   <div className="text-xs font-bold text-green-500/80 mt-1 uppercase tracking-wider">
-                    ✅ Safe Zones
+                    Safe Zones
                   </div>
                 </div>
                 <div className="rounded-2xl bg-yellow-900/20 border border-yellow-500/30 p-4 text-center shadow-inner">
@@ -1690,7 +1702,7 @@ const Simulator = () => {
                     {zoneAnalysis.summary?.caution || 0}
                   </div>
                   <div className="text-xs font-bold text-yellow-500/80 mt-1 uppercase tracking-wider">
-                    👀 Caution 
+                    Caution 
                   </div>
                 </div>
                 <div className="rounded-2xl bg-orange-900/20 border border-orange-500/30 p-4 text-center shadow-inner">
@@ -1698,7 +1710,7 @@ const Simulator = () => {
                     {zoneAnalysis.summary?.hazard || 0}
                   </div>
                   <div className="text-xs font-bold text-orange-500/80 mt-1 uppercase tracking-wider">
-                    ⚠️ Hazard Zones
+                    Hazard Zones
                   </div>
                 </div>
                 <div className="rounded-2xl bg-red-900/20 border border-red-500/30 p-4 text-center shadow-inner">
@@ -1706,7 +1718,7 @@ const Simulator = () => {
                     {zoneAnalysis.summary?.danger || 0}
                   </div>
                   <div className="text-xs font-bold text-red-500/80 mt-1 uppercase tracking-wider">
-                    🚨 Danger Zones
+                    Danger Zones
                   </div>
                 </div>
               </div>
@@ -1743,7 +1755,6 @@ const Simulator = () => {
                             <span
                               className={`text-sm font-black uppercase tracking-wider ${zone.classification === "danger" ? "text-red-400" : "text-orange-400"}`}
                             >
-                              {zone.classification === "danger" ? "🚨 " : "⚠️ "}{" "}
                               Coordinate [{zone.row},{zone.col}]
                             </span>
                             <p className="text-xs text-[#FDFDFD]/70 mt-1.5">

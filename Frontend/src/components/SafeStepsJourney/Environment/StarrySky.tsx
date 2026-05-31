@@ -110,7 +110,7 @@ function Moon({ opacity }: { opacity: number }) {
   });
 
   return (
-    <group position={[-18, 38, -55]}>
+    <group position={[-18, 65, 15]}>
       {/* Outer glow halo — larger, dimmer */}
       <mesh ref={outerGlowRef}>
         <sphereGeometry args={[9.0, 16, 16]} />

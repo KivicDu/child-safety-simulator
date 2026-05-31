@@ -297,8 +297,8 @@ const HUD_PHASES = [
   { label: "Entering", range: [0.18, 0.35] },
   { label: "Wonderland", range: [0.35, 0.5] },
   { label: "First Steps", range: [0.5, 0.7] },
-  { label: "Guardian", range: [0.7, 0.84] },   // T-08: 0.82→0.84
-  { label: "Blueprint", range: [0.84, 1.0] },   // T-08: 0.82→0.84
+  { label: "Guardian", range: [0.7, 0.84] },   
+  { label: "Blueprint", range: [0.84, 1.0] },   
 ];
 
 function ScrollHUD({ progress }: { progress: number }) {
@@ -573,6 +573,7 @@ export default function JourneyScene() {
               scrollProgress={sp}
               phase={babyPhase}
               position={[0, 0, 0]}
+              walkEnd={tableCorner ? [tableCorner.x, tableCorner.y, tableCorner.z] : undefined}
             />
 
             {/* Toys — chỉ dùng trong animation "play" Frame 1. Đặt cao lên (y=0.16) để không lún thảm */}

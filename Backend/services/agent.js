@@ -98,29 +98,28 @@ const AGE_MOVEMENT_PROFILES = {
   infant: {
     locomotion:         'crawl',
     velocityProfile: {
-      crawl: { mean: 0.15, stdDev: 0.04 },
-      walk:  { mean: 0.15, stdDev: 0.04 },
+      crawl: { mean: 0.15, stdDev: 0.04 }
     },
-    wobbleAmplitude:    0.07,
-    wobbleFrequency:    1.5,
-    pauseInterval:      [2.0, 5.0],
-    pauseDuration:      [1.0, 3.5],
-    burstProb:          0.0,
-    dirChangeProb:      0.02,
-    stumbleProb:        0.000079,
-    curiosityRadius:    1.2,
-    attentionSpan:      5.0,
-    boredomRate:        0.10,
-    explorationBias:    0.25,
-    headBobAmplitude:   0.012,
+    wobbleAmplitude:    0.07, // biên độ lắc 0.05 radian
+    wobbleFrequency:    1.5, // tần suất lắc lư 1,5/lần một giây
+    pauseInterval:      [2.0, 5.0], // dừng lại quan sát trong khoảng 2 ->5 giây trước khi tiếp tục di chuyển
+    pauseDuration:      [1.0, 3.5], // mỗi lần dừng lại sẽ kéo dài từ 1 đến 3.5 giây
+    burstProb:          0.0, // trẻ sơ sinh chưa có khả năng bứt tốc, giữ nguyên 0
+    dirChangeProb:      0.02, // xác suất thay đổi hướng di chuyển mỗi giây, trẻ sơ sinh có thể thay đổi hướng một cách ngẫu nhiên nhưng không quá thường xuyên
+    stumbleProb:        0.0047, // Xác suất quy đổi trực tiếp theo giây (Per-second rate)
+    curiosityRadius:    1.2, // bán kính quan sát và tương tác với đồ vật xung quanh, trẻ sơ sinh có tầm nhìn hạn chế và thường chỉ quan tâm đến những vật thể rất gần mình
+    attentionSpan:      5.0, // thời gian trung bình mà trẻ sơ sinh có thể duy trì
+    boredomRate:        0.10, // tốc độ tăng mức độ chán nản khi ở trong cùng một khu vực hoặc hoạt động lặp đi lặp lại
+    explorationBias:    0.25, // xu hướng ưu tiên khám phá khu vực mới so với quay lại khu vực đã biết
+    headBobAmplitude:   0.012, // biên độ gật đầu khi di chuyển, trẻ sơ sinh thường có chuyển động đầu nhẹ nhàng hơn
   },
 
+  // EARLY TODDLER (12-18 tháng): Đi bộ chập chững, loại bỏ bứt tốc quá mạnh
   early_toddler: {
     locomotion:         'walk',
     velocityProfile: {
       walk:  { mean: 0.82, stdDev: 0.20 },
-      run:   { mean: 1.40, stdDev: 0.25 },
-      crawl: { mean: 0.70, stdDev: 0.15 },
+      crawl: { mean: 0.70, stdDev: 0.15 }
     },
     wobbleAmplitude:    0.09,
     wobbleFrequency:    1.8,
@@ -128,9 +127,9 @@ const AGE_MOVEMENT_PROFILES = {
     pauseDuration:      [0.8, 2.5],
     burstProb:          0.015,
     burstDuration:      [0.5, 2.0],
-    burstSpeedMult:     1.6,
+    burstSpeedMult:     1.3, // Giảm bớt để phù hợp độ tuổi đi chưa vững
     dirChangeProb:      0.07,
-    stumbleProb:        0.000069,
+    stumbleProb:        0.0041, // Per-second rate bám sát nghiên cứu Adolph
     curiosityRadius:    2.0,
     attentionSpan:      8.0,
     boredomRate:        0.06,
@@ -138,13 +137,13 @@ const AGE_MOVEMENT_PROFILES = {
     armsHighGuard:      true,
   },
 
+  // LATE TODDLER (18-36 tháng): Chạy ổn định, dọn dẹp từ khóa sprint bị trùng lặp
   late_toddler: {
     locomotion:         'run',
     velocityProfile: {
       walk:  { mean: 0.92, stdDev: 0.17 },
       run:   { mean: 1.80, stdDev: 0.35 },
-      sprint:{ mean: 2.70, stdDev: 0.40 },
-      crawl: { mean: 0.70, stdDev: 0.15 },
+      crawl: { mean: 0.70, stdDev: 0.15 }
     },
     wobbleAmplitude:    0.06,
     wobbleFrequency:    2.0,
@@ -152,9 +151,9 @@ const AGE_MOVEMENT_PROFILES = {
     pauseDuration:      [0.5, 2.0],
     burstProb:          0.055,
     burstDuration:      [1.0, 3.5],
-    burstSpeedMult:     1.9,
+    burstSpeedMult:     1.5,
     dirChangeProb:      0.055,
-    stumbleProb:        0.000046,
+    stumbleProb:        0.0027, 
     forwardLunge:       0.12,
     curiosityRadius:    3.0,
     attentionSpan:      12.0,
@@ -162,13 +161,13 @@ const AGE_MOVEMENT_PROFILES = {
     explorationBias:    0.65,
   },
 
+  // PRESCHOOL (3-5 tuổi): Vận động khéo léo, xóa bỏ sprint
   preschool: {
     locomotion:         'run',
     velocityProfile: {
       walk:   { mean: 1.05, stdDev: 0.13 },
       run:    { mean: 2.00, stdDev: 0.40 },
-      sprint: { mean: 3.20, stdDev: 0.35 },
-      crawl:  { mean: 0.90, stdDev: 0.18 },
+      crawl:  { mean: 0.90, stdDev: 0.18 }
     },
     wobbleAmplitude:    0.025,
     wobbleFrequency:    2.5,
@@ -176,23 +175,29 @@ const AGE_MOVEMENT_PROFILES = {
     pauseDuration:      [0.4, 2.0],
     burstProb:          0.050,
     burstDuration:      [1.5, 5.0],
-    burstSpeedMult:     1.75,
+    burstSpeedMult:     1.6,
     circleProb:         0.035,
     circleDuration:     [2.0, 5.0],
     dirChangeProb:      0.025,
-    stumbleProb:        0.000037,
+    stumbleProb:        0.0022, 
     curiosityRadius:    4.5,
     attentionSpan:      20.0,
     boredomRate:        0.028,
     explorationBias:    0.82,
   },
 
+  // SCHOOL AGE (6-12 tuổi): Đầy đủ bộ tính năng vận động nâng cao bao gồm Sprint bứt tốc
   school_age: {
     locomotion:         'run',
     velocityProfile: {
       walk:   { mean: 1.25, stdDev: 0.13 },
-      run:    { mean: 2.50, stdDev: 0.45 },
-      sprint: { mean: 4.00, stdDev: 0.50 },
+      // [BUG-FIX-SPEED] run.mean giảm từ 2.50 → 2.20 m/s.
+      // Decker et al. (2012) & CDC: tốc độ chạy tự nhiên trẻ 6-8 tuổi ~1.80-2.20 m/s.
+      // 2.50 m/s là tốc độ của người lớn — không phù hợp với nhóm 6-8 tuổi.
+      // Trẻ 10-12 tuổi có thể đạt 2.40 m/s nhưng đây là mean cho cả nhóm → 2.20 hợp lý hơn.
+      run:    { mean: 2.20, stdDev: 0.40 },
+      // sprint giữ nguyên 3.50 — hợp lý cho trẻ 10-12 tuổi bứt tốc ngắn
+      sprint: { mean: 3.50, stdDev: 0.45 },
       crawl:  { mean: 1.10, stdDev: 0.20 },
     },
     wobbleAmplitude:    0.010,
@@ -201,9 +206,12 @@ const AGE_MOVEMENT_PROFILES = {
     pauseDuration:      [0.3, 2.5],
     burstProb:          0.038,
     burstDuration:      [2.0, 7.0],
-    burstSpeedMult:     1.85,
+    // [BUG-FIX-SPEED] burstSpeedMult giảm từ 1.85 → 1.60.
+    // 1.85 × 2.50 = 4.63 m/s ≈ tốc độ chạy nước rút người lớn amateur — vô lý với trẻ em.
+    // 1.60 × 2.20 = 3.52 m/s — hợp lý, gần với sprint.mean và không vượt quá sinh lý học.
+    burstSpeedMult:     1.60,
     dirChangeProb:      0.012,
-    stumbleProb:        0.000019,
+    stumbleProb:        0.0011, // Per-second rate
     scanBeforeMove:     true,
     curiosityRadius:    7.0,
     attentionSpan:      45.0,
@@ -217,7 +225,8 @@ function getAgeMovementProfile(ageGroupId) {
   if (ageGroupId === 'early_toddler') return AGE_MOVEMENT_PROFILES.early_toddler;
   if (ageGroupId === 'late_toddler')  return AGE_MOVEMENT_PROFILES.late_toddler;
   if (ageGroupId === 'preschool')     return AGE_MOVEMENT_PROFILES.preschool;
-  if (ageGroupId === 'child')         return AGE_MOVEMENT_PROFILES.child;
+  if (ageGroupId === 'child')         return AGE_MOVEMENT_PROFILES.school_age; // Map 'child' to school_age profile
+  if (ageGroupId === 'school_age')    return AGE_MOVEMENT_PROFILES.school_age;
   return AGE_MOVEMENT_PROFILES.early_toddler;
 }
 
@@ -238,12 +247,7 @@ class Agent {
     this.collider = null;
     if (world && physicsEngine.rapier) {
       try {
-        // [BUG-M9 FIX] Unified kccOffset to 0.04m for all age groups.
-        // Old values (infant=0.15m, toddler=0.10m) caused agent to be blocked
-        // in any gap < 0.54m (radius 0.12 + offset 0.15 = 0.27m per side).
-        // Most furniture gaps in a room are 0.30–0.50m → infant was completely stuck.
-        // 0.04m gives adequate anti-clip margin without blocking movement.
-        const kccOffset = 0.04; // [BUG-M9 FIX] was: infant=0.15, toddler=0.10, else=0.05
+        const kccOffset = 0.04;
 
         const legLen = groupData?.anthropometry?.legLength
                     ?? (groupData?.height ?? 0.8) * 0.40;
@@ -391,15 +395,6 @@ class Agent {
     
     if (isCrawling) {
       const accelMult = 0.02; 
-      // ─── BUG-ROOT-4 FIX: clamp acceleration for COM calculation ───────────
-      // On the first frame of movement, velocity jumps from 0 → targetSpeed in one
-      // step. Raw EMA acceleration = 0.08 * (speed/dt) ≈ 0.08 * 49.2 = 3.94 m/s².
-      // comOffset = 3.94 * 0.05 = 0.197 m → marginOfStability = 0.225 - 0.197 = 0.028
-      // 0.028 < 0.04 → fall_failed branch → velocity=0, targetPosition=null immediately.
-      // This fires on every single movement start, even on perfectly flat ground.
-      // Fix: cap the acceleration used here to a physically plausible walking value
-      // (≤ 5 m/s² = sprint-level for a toddler), preserving the balance model for
-      // real sustained high-acceleration events while eliminating startup false positives.
       const clampedAccX = Math.max(-5, Math.min(5, this.acceleration?.[0] || 0));
       const clampedAccZ = Math.max(-5, Math.min(5, this.acceleration?.[2] || 0));
       comX -= clampedAccX * accelMult;
@@ -449,18 +444,79 @@ class Agent {
     if (this.frameCount % this.trajectorySampleRate !== 0) return;
     this.trajectory.push(position.map(v => Math.round(v * 100) / 100));
     const wanderAction = (this.state === 'MOVING' && !this.currentBehavior) ? 'walk' : null;
+    const rawAction = wanderAction || this.currentBehavior?.action || this.currentBehavior?.type || 'idle';
     const entry = {
       s: this.state,
-      a: wanderAction || this.currentBehavior?.action || this.currentBehavior?.type || 'idle',
+      a: rawAction,
       v: Math.round(Math.hypot(this.velocity[0], this.velocity[2]) * 100) / 100,
     };
     if (this.emotion && this.emotion !== 'neutral')    entry.e        = this.emotion;
     if (this.wadingObjectId)                           { entry.wadingIn = this.wadingObjectId; entry.a = 'wade'; }
     if (this.recoveryTimer > 0)                        entry.recovery  = true;
+
+    // [FIX-ANIMATION] Tính toán animation clip phù hợp để frontend 3D biết phải chạy clip nào.
+    // Trước đây agent.js không emit animation state → renderer luôn hiển thị idle dù nhân vật đang đi.
+    this.currentAnimation = this._resolveAnimationClip(rawAction, this.state);
+    entry.anim = this.currentAnimation;
+
     this.actionLog.push(entry);
     if (this.trajectory.length > this.MAX_TRAJECTORY_POINTS) {
       this.trajectory.shift();
       this.actionLog.shift();
+    }
+  }
+
+  /**
+   * [FIX-ANIMATION] Map action/state → animation clip name.
+   * Frontend đọc getStatus().animation để biết clip cần blend.
+   */
+  _resolveAnimationClip(action, state) {
+    if (state === 'FALLING') return 'fall';
+    if (state === 'IDLE' || state === 'INTERACTING') {
+      switch (action) {
+        case 'pause':        return 'idle';
+        case 'look_around':  return 'look_around';
+        case 'lose_balance': return 'stumble';
+        case 'fall_forward': return 'fall_forward';
+        case 'trip':         return 'stumble';
+        case 'grab':         return 'grab';
+        case 'grab_mouth':   return 'grab_mouth';
+        case 'reach_up':     return 'reach_up';
+        case 'pull':
+        case 'pull_to_stand':return 'pull';
+        case 'climb_on':     return 'climb';
+        case 'open_drawer':  return 'pull';
+        case 'hurt_light':   return 'hurt_light';
+        case 'hurt_medium':  return 'hurt_medium';
+        case 'hurt_heavy':   return 'hurt_heavy';
+        case 'hurt_shock':   return 'hurt_shock';
+        case 'crying_stand': return 'cry_stand';
+        case 'crying_sit':   return 'cry_sit';
+        case 'get_up_slow':  return 'get_up_slow';
+        case 'get_up_fast':  return 'get_up_fast';
+        case 'recoil':       return 'recoil';
+        default:             return 'idle';
+      }
+    }
+    // state === 'MOVING' hoặc RARE_EVENT
+    switch (action) {
+      case 'crawl':        return 'crawl';
+      case 'run':
+      case 'run_unstable': return 'run';
+      case 'sprint':       return 'sprint';
+      case 'lunge':        return 'run'; // lunge dùng chung clip run
+      case 'walk_to':
+      case 'walk_random':
+      case 'walk':
+      default: {
+        // Phân biệt walk/run dựa trên tốc độ thực tế — tránh nhân vật chạy nhanh mà vẫn dùng clip walk
+        const prof = this._ageProfile;
+        const walkMean = prof?.velocityProfile?.walk?.mean ?? 1.0;
+        const runThreshold = walkMean * 1.35;
+        const curSpeed = this._currentSpeed ?? 0;
+        if (curSpeed >= runThreshold && prof?.velocityProfile?.run) return 'run';
+        return this.ageGroupId === 'infant' ? 'crawl' : 'walk';
+      }
     }
   }
 
@@ -526,17 +582,11 @@ class Agent {
     if (this.pendingReaction) return;
     if (this.behaviorQueue && this.behaviorQueue.length && ['investigate', 'grab_mouth', 'hurt', 'crying', 'recovery'].includes(this.behaviorQueue[0]?.type)) return;
 
-    // [BUG-M10 FIX] Hyper-Distractibility Cooldown
-    // Old: Agent could be distracted again immediately after finishing an interaction
-    // (or even while just walking), constantly aborting paths.
-    // New: If recently distracted, ignore new attractions for a few seconds.
     const nowSim = this.simTime ?? (Date.now() / 1000);
     if (this._distractionCooldown && nowSim < this._distractionCooldown) return;
 
     const isWandering = !this.currentBehavior || (this.currentBehavior.action && this.currentBehavior.action.includes('random'));
-    // [BUG-M10 FIX] Lowered interruption rates for long-distance tracking
-    // Was Math.random() > 0.02 (2%) and 0.15 (15%) per frame! (~1.0s to interrupt).
-    // Now: 0.1% for active behaviors and 0.5% for wandering (per frame at 60Hz).
+
     if (!isWandering && Math.random() > 0.001) return;
     if (isWandering && Math.random() > 0.005) return;
 
@@ -571,7 +621,6 @@ class Agent {
         this.reactionTimer = stats.reactionLatency;
       }
       this.pendingReaction = best;
-      // [BUG-M10 FIX] Apply 3 to 6 second immunity to further distractions
       this._distractionCooldown = nowSim + 3.0 + Math.random() * 3.0; 
     }
   }
@@ -668,13 +717,6 @@ class Agent {
       const comDistX = dynamicCOM[0] - pos[0];
       const comDistZ = dynamicCOM[2] - pos[2];
       const comDistXZ = Math.hypot(comDistX, comDistZ);
-
-      // [GEOM-3 FIX] Include vertical COM elevation in stability calculation.
-      // When comY rises above neutral (55% of height), the inverted-pendulum effect
-      // amplifies the XZ instability. The correction factor uses the principle that
-      // a taller pendulum needs less horizontal displacement to become unstable:
-      //   effectiveDist = comDistXZ × sqrt(1 + (comElevation / supportRadius)²)
-      // where comElevation = max(0, comY - neutralComY) (only elevations count).
       const neutralComY   = pos[1] + (agData.height || 0.8) * 0.55;
       const comY          = dynamicCOM[1];
       const comElevation  = Math.max(0, comY - neutralComY);
@@ -743,12 +785,6 @@ class Agent {
     if (this.idleCooldown > 0) {
       const prevCooldown = this.idleCooldown;
       this.idleCooldown = Math.max(0, this.idleCooldown - deltaTime);
-      // [BUG-3 FIX] Reset lastMovePos ngay khi idleCooldown về 0.
-      // Old: lastMovePos không được cập nhật trong suốt idle period → khi agent bắt
-      //      đầu movement episode mới, stuckDist = posNow − lastMovePos ≈ 0 trong khi
-      //      intendedDist ≈ 0.014m → isEffectivelyStuck = true ngay frame đầu tiên
-      //      → stuckCounter bắt đầu từ 1, khuếch đại cùng Bug #2.
-      // Fix: snapshot lastMovePos tại thời điểm transition idle→moving.
       if (prevCooldown > 0 && this.idleCooldown === 0 && this.body) {
         const pos = this.body.translation();
         this.lastMovePos = [pos.x, pos.y, pos.z];
@@ -766,12 +802,42 @@ class Agent {
         this.executeAction(this.currentBehavior, deltaTime, colliders, bounds);
       }
     } else if (this.state === 'MOVING' && this.targetPosition) {
-      this.moveTowardsTarget(deltaTime, 'walk');
+      this.moveTowardsTarget(deltaTime, 'walk', bounds);
       if (!this.targetPosition) this.state = 'IDLE';
     } else {
       this.pickNextBehavior(deltaTime, bounds);
-      if (this.state === 'MOVING' && this.targetPosition) this.moveTowardsTarget(deltaTime, 'walk');
+      if (this.state === 'MOVING' && this.targetPosition) this.moveTowardsTarget(deltaTime, 'walk', bounds);
     }
+  }
+
+  /**
+   * [REALISM FIX] Adjust behavior duration based on actual target distance and age speed.
+   * Prevents infant from being stuck in unrealistic crawl-to-distant-target behavior.
+   */
+  _adjustBehaviorDuration(behavior, actionType = 'walk') {
+    if (!behavior || !behavior.sequence) return behavior;
+    
+    const movements = behavior.sequence.filter(a => ['walk', 'crawl', 'run', 'walk_to'].includes(a.action));
+    
+    if (movements.length === 0) return behavior; // No movement actions, keep as is
+    
+    // Ensure all actions have valid duration
+    if (behavior.sequence) {
+      behavior.sequence.forEach(a => {
+        if (!a.duration || a.duration <= 0) {
+          a.duration = 0.5; // Default 0.5s for any action without duration
+        }
+        a.duration = Math.min(a.duration, 10); // Cap single action at 10s
+      });
+    }
+    
+    // Ensure total behavior duration is reasonable
+    const minDuration = 0.5;
+    const maxDuration = 20; // Max 20s per behavior
+    const totalSequenceDuration = (behavior.sequence || []).reduce((sum, a) => sum + (a.duration || 0.5), 0);
+    behavior.duration = Math.max(minDuration, Math.min(totalSequenceDuration, maxDuration));
+    
+    return behavior;
   }
 
   pickNextBehavior(deltaTime, bounds) {
@@ -827,11 +893,6 @@ class Agent {
     if (next.sequence && next.sequence.length > 0) {
       const act = next.sequence.find(a => !a.completed);
       if (act) {
-        // [BUG-M3 FIX] Clear stale targetPosition before resolving new non-stationary action.
-        // Old code: `if (this.targetPosition) return` in _resolveActionTarget was too broad —
-        // it reused the previous action's targetPosition for the new action, sending the agent
-        // back to the wrong location (e.g. furniture edge from walk_to being reused by crawl).
-        // Fix: null out targetPosition here so _resolveActionTarget always computes fresh target.
         const _stationaryActions = ['grab', 'grab_mouth', 'reach_up', 'pull', 'pull_to_stand',
           'open_drawer', 'pause', 'look_around', 'lose_balance', 'climb_on'];
         if (!_stationaryActions.includes(act.action)) {
@@ -897,9 +958,6 @@ class Agent {
         const toCurLen = Math.hypot(toCurX, toCurZ) || 1;
         const hx = (obj.boundingBox.max[0] - obj.boundingBox.min[0]) / 2;
         const hz = (obj.boundingBox.max[2] - obj.boundingBox.min[2]) / 2;
-        // [GEOM-1 FIX] Project approach direction onto AABB surface (exact surface distance)
-        // Old: max(hx,hz) over-estimated distance by up to 2× for thin rectangular objects
-        // New: |nx|*hx + |nz|*hz = exact distance from center to surface in approach direction
         const nx = toCurX / toCurLen;
         const nz = toCurZ / toCurLen;
         const edgeSurfaceDist = this._aabbSurfaceDist(hx, hz, nx, nz);
@@ -917,12 +975,6 @@ class Agent {
 
     if (targetType && targetType !== 'random' && this.availableObjects.length > 0) {
       const cur = this.getPosition();
-      
-      // [BUG-M10 FIX] Greedy Target Selection Fix
-      // Old: Always picked the absolute closest object (`bestDist`), causing ping-ponging
-      // between two adjacent correct items instead of exploring the room.
-      // New: Collect all candidates for this type. Prefer items > 1.5m away to encourage
-      // room traversal. If none exist, randomly pick from the nearby ones.
       let candidates = [];
       for (const obj of this.availableObjects) {
         if (!obj.boundingBox) continue;
@@ -1016,33 +1068,33 @@ class Agent {
         } else if (!this.targetPosition) {
           this.setRandomTarget(bounds);
         }
-        this.moveTowardsTarget(deltaTime, 'walk');
+        this.moveTowardsTarget(deltaTime, 'walk', bounds);
         break;
 
       case 'walk_random':
         this.state = 'MOVING';
         if (!this.targetPosition) this.setRandomTarget(bounds);
-        this.moveTowardsTarget(deltaTime, 'walk');
+        this.moveTowardsTarget(deltaTime, 'walk', bounds);
         if (!this.targetPosition) this.setRandomTarget(bounds);
         break;
 
       case 'crawl':
         this.state = 'MOVING';
         if (!this.targetPosition) this.setRandomTarget(bounds);
-        this.moveTowardsTarget(deltaTime, 'crawl');
+        this.moveTowardsTarget(deltaTime, 'crawl', bounds);
         if (!this.targetPosition) this.setRandomTarget(bounds);
         break;
 
       case 'run': case 'run_unstable':
         this.state = 'MOVING';
         if (!this.targetPosition) this.setRandomTarget(bounds);
-        this.moveTowardsTarget(deltaTime, 'run');
+        this.moveTowardsTarget(deltaTime, 'run', bounds);
         break;
 
       case 'lunge':
         this.state = 'MOVING';
         if (!this.targetPosition) this.setRandomTarget(bounds);
-        this.moveTowardsTarget(deltaTime, 'lunge');
+        this.moveTowardsTarget(deltaTime, 'lunge', bounds);
         break;
 
       case 'trip': case 'stumble': case 'fall_forward': {
@@ -1073,11 +1125,6 @@ class Agent {
       }
 
       case 'free_fall': {
-        // Physics-accurate fall via KCC + _vertVel.
-        // Old: normalized-time lerp with setSafeTranslation bypassed KCC → agent clipped
-        // through thin floors. Landing was timer-based, not physics-based.
-        // New: KCC owns vertical movement. Landing detected by isGrounded() — works on
-        // slopes and furniture surfaces without any hardcoded landing Y.
         this.state = 'FALLING';
         if (!this.body) break;
         const pos = this.body.translation();
@@ -1086,8 +1133,6 @@ class Agent {
           const currentFeetY = pos.y - this._agentHalfH;
           const h = Math.max(0.05, currentFeetY - (this._knownFloorY ?? this.spawnY));
           const landingY = (this._knownFloorY ?? this.spawnY) + this._agentHalfH;
-          // Prime _vertVel with energy-conserving initial speed: v0 = -sqrt(2*g*h)
-          // If already falling faster (e.g. tumbled off stairs), keep the larger magnitude.
           const v0 = -Math.sqrt(2 * 9.81 * h);
           this._vertVel = Math.min(this._vertVel, v0);
           this.fallState = { startY: pos.y, targetY: landingY, fallHeight: h, elapsed: 0 };
@@ -1388,7 +1433,7 @@ class Agent {
           const edgeZ = cz - (toObjZ / toObjLen) * Math.min(edgeDist, Math.max(objHalfX, objHalfZ));
           if (progress < 0.3) {
             this.targetPosition = [edgeX, pos_c.y, edgeZ];
-            this.moveTowardsTarget(deltaTime, 'walk');
+            this.moveTowardsTarget(deltaTime, 'walk', bounds);
           } else {
             const dObject = Math.hypot(cx - pos_c.x, cz - pos_c.z);
             if (dObject > 1.2) { this.state = 'IDLE'; this.targetPosition = null; break; }
@@ -1431,12 +1476,12 @@ class Agent {
       default: {
         this.state = 'MOVING';
         if (!this.targetPosition) this.setRandomTarget(bounds);
-        this.moveTowardsTarget(deltaTime, t === 'crawl' ? 'crawl' : 'walk');
+        this.moveTowardsTarget(deltaTime, t === 'crawl' ? 'crawl' : 'walk', bounds);
       }
     }
   }
 
-  moveTowardsTarget(deltaTime, actionType = 'walk') {
+  moveTowardsTarget(deltaTime, actionType = 'walk', bounds = null) {
     if (!this.targetPosition || !this.body) return;
     if (this.simTime < this.failedMovementCooldown) return;
 
@@ -1464,12 +1509,6 @@ class Agent {
       return;
     }
 
-    // ── [AUTO-CRAWL] Phát hiện clearance thấp — chuyển sang bò ─────────────
-    // Khi agent đang đi nhưng phía trước có vật thể mà khoảng hở < chiều cao đứng
-    // nhưng >= chiều cao bò → tự động chuyển sang 'crawl'.
-    // Logic: scan các solid obstacles trong radius 0.8m theo hướng đi.
-    // Nếu tìm thấy object có: min[1] (đáy) ≈ sàn VÀ max[1] < agentHeight * 0.85
-    // → agent cần bò để chui qua.
     if (actionType === 'walk' || actionType === 'run') {
       const agData = getAgeGroup(this.ageGroupId);
       const agentH = agData?.height || 0.8;
@@ -1545,14 +1584,6 @@ class Agent {
     if (this.burstState && this.simTime < this.burstState.endTime) {
       targetSpeed *= this.burstState.speedMult;
     }
-
-    // ── [FIX MOVEMENT 1] Acceleration ramp ──────────────────────────────────
-    // Old: speed applied instantly each frame → agent teleports from 0 to full
-    //      speed in 1 frame (16ms), creating unphysical jerky starts/stops and
-    //      inflated initial acceleration that could trigger false stumble/fall.
-    // New: ramp _currentSpeed toward targetSpeed using age-appropriate accelTime.
-    //   accelTime: time (s) to reach full speed from rest (from ageGroups kinematics).
-    //   decelTime: time (s) to stop from full speed (shorter for abrupt stops).
     {
       const ag       = getAgeGroup(this.ageGroupId);
       const accelTime = ag?.kinematics?.accelerationTime ?? 0.4;
@@ -1561,10 +1592,6 @@ class Agent {
       if (!Number.isFinite(this._currentSpeed)) this._currentSpeed = 0;
 
       const delta = targetSpeed - this._currentSpeed;
-      // [BUG-1 FIX] decel branch PHẢI âm để giảm tốc đúng hướng.
-      // Old: (targetSpeed / decelTime) * deltaTime → luôn dương kể cả khi delta < 0
-      //      → _currentSpeed += dương khi cần giảm → speed tăng vô hạn.
-      // Fix: thêm dấu âm cho nhánh decel.
       const rampRate = delta > 0
         ? (targetSpeed / accelTime) * deltaTime   // accelerating ✓
         : -(targetSpeed / decelTime) * deltaTime; // decelerating ✓ (âm → giảm speed)
@@ -1577,14 +1604,6 @@ class Agent {
       this._currentSpeed = Math.max(0, this._currentSpeed);
     }
     const speed = this._currentSpeed;
-
-    // ── [FIX MOVEMENT 2] Gait cycle footfall oscillation ────────────────────
-    // Real walking produces a lateral sway tied to step frequency:
-    //   sway = sin(2π × stepFreq × t) × lateralAmplitude
-    // This is DIFFERENT from the existing wobbleDelta (which is a heading wobble).
-    // Footfall oscillation affects SPEED (slower mid-swing, faster at heel-strike)
-    // making movement look natural rather than constant-velocity robot glide.
-    // stepFreq ≈ 1 / (2 × stride_length / speed)  using Froude scaling.
     {
       const ag         = getAgeGroup(this.ageGroupId);
       const legLen     = ag?.anthropometry?.legLength ?? (ag?.height ?? 0.8) * 0.40;
@@ -1600,19 +1619,9 @@ class Agent {
       const swayAmp = actionType === 'crawl' ? 0.02 : 0.08;
       this._gaitSpeedMult = 1.0 + Math.sin(this._gaitPhase) * swayAmp;
     }
-
-    // [BUG-PHYS-1 FIX] stumbleProb was per-frame probability, not per-second.
-    // Old: P(stumble/frame) = 0.000079  → depends on fps, not physical time.
-    // New: P(stumble/second) = stumbleProb × dt  → deterministic regardless of fps.
-    //
-    // Derived per-second rates from AGE_MOVEMENT_PROFILES:
-    //   infant:        0.000079 per frame × 60fps = 0.00474/s → ~211 stumbles/hour
-    //   early_toddler: 0.000069/frame              0.00414/s   ~242 s/hour  (Adolph 17/hr → ~0.0047/s ✓)
-    //   late_toddler:  0.000046/frame              0.00276/s   ~363 s/hour
-    //   preschool:     0.000037/frame              0.00222/s   ~450 s/hour
-    //   child:         0.000019/frame              0.00114/s   ~877 s/hour
-    // Values are already calibrated for /second; just multiply by deltaTime.
-    const stumbleP = (prof.stumbleProb || 0) * 60;  // convert stored per-frame to per-second rate
+    // [BUG-FIX-STUMBLE] stumbleProb trong AGE_MOVEMENT_PROFILES đã là per-second rate (có comment rõ ràng).
+    // Nhân thêm 60 là sai hoàn toàn — tăng xác suất vấp ngã lên 60 lần, gây chấn thương vô lý liên tục.
+    const stumbleP = (prof.stumbleProb || 0); // per-second rate, không nhân thêm
     if (stumbleP > 0 && Math.random() < stumbleP * deltaTime) {
       this.behaviorQueue = [{ type: 'stumble', action: 'fall_forward', duration: 1.5, completed: false }];
       this.currentBehavior = null;
@@ -1693,12 +1702,6 @@ class Agent {
       const biasedSpeed = gaitSpeed * (1.0 + kin.forwardBias * 0.3);
       const rawX = Math.cos(this.currentHeading) * biasedSpeed * deltaTime;
       const rawZ = Math.sin(this.currentHeading) * biasedSpeed * deltaTime;
-
-      // ── [FIX MOVEMENT 3] Momentum blending improvement ────────────────────
-      // Old: always used fixed mf (momentumFactor) regardless of whether agent
-      //      was accelerating or decelerating → momentum persisted during braking
-      //      → agent overshot targets by 20-40cm every time.
-      // New: reduce mf to 0.05 when close to target (< 1.5m) to allow clean stops.
       const mf = dist < 1.5
         ? Math.min(0.05, kin.momentumFactor * 0.2)  // near target: minimal momentum
         : kin.momentumFactor;
@@ -1737,38 +1740,13 @@ class Agent {
     }
 
     if (this.controller && this.world) {
-      // ─── BUG-ROOT-1 FIX: MUST use LEGS collider, NOT torso ─────────────────
-      // torso bottom = feetY + 0.324 m (0.324 m ABOVE the floor for early_toddler).
-      // With torso as the KCC reference, the y:-0.05 gravity input is NOT blocked
-      // by the floor (floor is 0.324 m below torso bottom on frame 0).
-      // The body sinks 0.05 m/frame for 7 frames (0.12 s) until torso FINALLY
-      // hits the floor — at which point the LEGS are already 0.35 m underground.
-      // Once underground, the floor pushes the torso in ALL directions (the contact
-      // normal at a buried surface is no longer purely upward — Rapier resolves it
-      // as a depenetration in the nearest exit direction, often sideways).
-      // Result: corrected XZ ≈ 0 every frame → stuckDist ≈ 0 → stuckCounter hits
-      // 45 in 0.75 s → escape teleports +0.4 m XZ (but y is NOT restored) →
-      // immediately stuck again. This produces exactly the "0.4 m jump, then freeze"
-      // pattern the user observes.
-      // FIX: legs bottom = feetY (it equals -halfH from body centre by construction).
-      // The floor blocks y:-0.05 from frame 0. No sinking. XZ movement works.
       const kccCollider = this.collider ?? this.colliders?.legs ?? this.colliders?.torso ?? null;
       if (kccCollider) {
-        // [BUG-2 FIX] _vertVel phải được tích hợp TRƯỚC khi gọi moveAgentWithController,
-        // nhưng isGrounded() phải được đọc SAU — vì computedGrounded() chỉ hợp lệ sau
-        // khi computeColliderMovement() được gọi bên trong moveAgentWithController.
-        // Old: đọc isGrounded() trước → nhận kết quả stale của frame trước
-        //      → _vertVel tích lũy xuống -20 m/s trong khi agent thực sự đang đứng
-        //      → KCC dùng hết collision budget để chống lực đẩy xuống → corrected XZ ≈ 0.
-
-        // Bước 1: dùng _vertVel hiện tại để tính desiredMove.y
         const corrected = physicsEngine.moveAgentWithController(
           this.world, this.controller, this.body, kccCollider,
           { x: moveX, y: (this._vertVel || 0) * deltaTime, z: moveZ },
           deltaTime
         );
-
-        // Bước 2: SAU KHI move xong, đọc grounded state mới nhất rồi cập nhật _vertVel
         const _isGrounded = physicsEngine.isGrounded(this.controller);
         if (_isGrounded) {
           this._vertVel = 0.0;
@@ -1783,26 +1761,6 @@ class Agent {
         const stuckDz = posNow.z - this.lastMovePos[2];
         const stuckDist = Math.sqrt(stuckDx * stuckDx + stuckDz * stuckDz);
         const intendedDist = Math.hypot(moveX, moveZ);
-
-        // ─── BUG-ROOT-3 FIX: stuck detector thresholds ──────────────────────
-        // OLD: `isEffectivelyStuck = intendedDist > 0.001 && stuckDist < intendedDist * 0.05`
-        //      PLUS: `|| stuckDist < 0.0005`
-        //
-        // Problem A — absolute 0.0005 m threshold:
-        //   The escape routine uses `moveAgentWithController(y:0)` which applies no
-        //   vertical correction. The escape teleports +0.4 m XZ but leaves body Y
-        //   unchanged. On the very next frame, the same underground condition still
-        //   exists → stuckDist is again near 0 → threshold fires again immediately.
-        //   Combined with BUG-ROOT-1 (torso KCC), this fires EVERY frame without pause.
-        //   Even after BUG-ROOT-1 is fixed, this 0.5 mm threshold still fires on any
-        //   frame where wobble cancellation or float rounding yields < 0.5 mm net XZ.
-        //
-        // Problem B — 5% ratio threshold too tight:
-        //   At 0.82 m/s walk, intended = 0.01367 m/frame. 5% = 0.00068 m.
-        //   KCC-corrected movement when sliding along a wall is commonly 1–4% of
-        //   intended → legitimate wall-sliding triggers false stuck every frame.
-        //
-        // Fix: remove absolute threshold entirely; raise ratio to 10%.
         const isEffectivelyStuck = intendedDist > 0.003 && stuckDist < intendedDist * 0.10;
         if (isEffectivelyStuck) {
           this.stuckCounter++;
@@ -1810,55 +1768,47 @@ class Agent {
           this.stuckCounter = 0;
         }
         this.lastMovePos = [posNow.x, posNow.y, posNow.z];
-
-        // [BUG-M6 FIX] Reduced stuck threshold from 90 frames (1.5s) to 45 frames (0.75s).
-        // Old: agent waited 1.5s before attempting escape → wasted time each obstacle.
-        // New: escape triggered at 0.75s → less idle time per stuck event.
-        // idleCooldown kept at 0.3–0.6s so total dead-time per stuck ≤ 1.35s (was 2.1s).
-        if (this.stuckCounter > 45) { // [BUG-M6 FIX] was 90
-          const escDist = 0.4;
-          const moveLen2 = Math.hypot(moveX, moveZ) || 1;
-          const escDirs = [
-            { x: -moveZ / moveLen2 * escDist, z:  moveX / moveLen2 * escDist },
-            { x:  moveZ / moveLen2 * escDist, z: -moveX / moveLen2 * escDist },
-            { x: -moveX / moveLen2 * escDist, z: -moveZ / moveLen2 * escDist },
-          ];
-          let bestMoveDist = 0;
-          for (const dir of escDirs) {
-            const esc = physicsEngine.moveAgentWithController(
-              this.world, this.controller, this.body, kccCollider,
-              { x: dir.x, y: 0, z: dir.z },
-              deltaTime
-            );
-            const d = Math.hypot(esc?.x || 0, esc?.z || 0);
-            if (d > bestMoveDist) bestMoveDist = d;
-          }
-
-          // ─── BUG-ROOT-2 FIX: restore body Y after escape ────────────────
-          // The original escape only corrects XZ (y:0 in escDirs).
-          // If the body has sunk underground (old torso-KCC bug, or slope edge),
-          // the body Y is never restored → agent remains underground → immediately
-          // stuck again on the very next frame → infinite 0.4 m escape loop.
-          // Fix: after escape, snap body back to expected floor Y.
-          const escBodyPos = this.body.translation();
-          const expectedBodyY = (this._knownFloorY ?? this.spawnY) + this._agentHalfH;
-          if (escBodyPos.y < expectedBodyY - 0.05) {
-            this.setSafeTranslation({ x: escBodyPos.x, y: expectedBodyY, z: escBodyPos.z });
-          }
-
+        // [BUG-FIX-STUCK] Giảm ngưỡng từ 30 → 15 để phản ứng nhanh hơn.
+        // Sau unstuck PHẢI gọi setRandomTarget để chọn đích mới — nếu chỉ set idleCooldown
+        // thì pickNextBehavior() sẽ lấy lại behavior cũ cùng targetObjectId → loop vô tận vào tường.
+        if (this.stuckCounter > 15) {
+          this.targetPosition = null;
           this.stuckCounter = 0;
-          this.targetPosition  = null;
-          this._currentSpeed   = 0;  // [FIX MOVEMENT 1] reset ramp after escape
+          this._currentSpeed = 0;
           this.state = 'IDLE';
-          this.idleCooldown = 0.3 + Math.random() * 0.3;
+          this._avoidHistory = []; // Xoá lịch sử avoid để tránh oscillation
+
+          // Xoay đầu lệch 90° so với hướng tường
+          this.currentHeading += (Math.random() > 0.5 ? Math.PI / 2 : -Math.PI / 2);
+          this.idleCooldown = 0.5;
+
+          // [BUG-FIX-STUCK] Chủ động chọn đích mới ngay lập tức thay vì để pickNextBehavior
+          // lấy lại behavior cũ. Dùng setRandomTarget với bounds hiện tại nếu có.
+          if (bounds) {
+            // Reset behavior queue để thoát behavior đang bị block
+            const BLOCKABLE_TYPES = ['walk_to', 'investigate', 'crawl', 'run', 'walk_random'];
+            if (this.currentBehavior && BLOCKABLE_TYPES.includes(this.currentBehavior.action)) {
+              this.currentBehavior.completed = true;
+              this.currentBehavior = null;
+              this.behaviorTimer = 0;
+            }
+            this.setRandomTarget(bounds);
+          }
+          return;
         }
         return;
       }
+      // [BUG-FIX-KCC-NULL] kccCollider null: controller tồn tại nhưng collider chưa được gán.
+      // Code cũ return sớm ở đây → nhân vật đứng yên hoàn toàn, totalDistance = 0.0m.
+      // Fallthrough xuống direct translation để vẫn di chuyển được.
+      console.warn(`[Agent ${this.id}] KCC collider is null — falling back to direct translation`);
     }
 
     const pos = this.body.translation();
     if (Number.isFinite(pos.x + moveX) && Number.isFinite(pos.z + moveZ)) {
       this.setSafeTranslation({ x: pos.x + moveX, y: pos.y, z: pos.z + moveZ });
+      // Cập nhật lastMovePos để stuck detection vẫn hoạt động ở fallback path
+      this.lastMovePos = [pos.x + moveX, pos.y, pos.z + moveZ];
     }
   }
 
@@ -1893,6 +1843,43 @@ class Agent {
     if (this.simTime < 3.0) return;
     if (this.recoveryTimer > 0) return;
 
+    // [BUG-FIX-WALL] Bỏ qua collision với tường và boundary — chúng không gây thương tích thực tế
+    // mà chỉ là vật cản vật lý. Không filter này → nhân vật bị chấn thương khi đứng sát tường.
+    if (objectId) {
+      const objIdLower = String(objectId).toLowerCase();
+      if (
+        objIdLower.includes('wall') ||
+        objIdLower.includes('boundary') ||
+        objIdLower.includes('floor') ||
+        objIdLower.includes('ceiling') ||
+        objIdLower.includes('tuong') ||
+        objIdLower.includes('san') ||
+        objIdLower.includes('tran')
+      ) return;
+    }
+
+    // Bộ lọc an toàn: Kiểm tra mảng vận tốc để tránh crash ngầm hệ thống
+    let actualSpeed = 0;
+    if (this.velocity && Array.isArray(this.velocity) && this.velocity.length >= 3) {
+      const vx = this.velocity[0] || 0;
+      const vz = this.velocity[2] || 0;
+      const vy = this._vertVel || 0;
+      actualSpeed = Math.sqrt(vx * vx + vy * vy + vz * vz);
+    }
+
+    // Triệt tiêu chấn thương Jittering ma thuật khi trẻ đứng im hoặc bị cản cứng tại tường
+    if (actualSpeed < 0.05 && !this.fallState) {
+      return; 
+    }
+
+    // Đảm bảo không tính chấn thương trên không trung/trần nhà nếu chân trẻ đang sát sàn
+    const pos = this.body.translation();
+    const currentFeetY = pos.y - this._agentHalfH;
+    const expectedFloorY = this._knownFloorY ?? this.spawnY;
+    if (currentFeetY > expectedFloorY + 0.15 && !this.fallState) {
+      return;
+    }
+
     if (objectId) {
       if (!this._collisionCooldowns) this._collisionCooldowns = new Map();
       if (!this._collisionCounts) this._collisionCounts = new Map();
@@ -1903,13 +1890,7 @@ class Agent {
       this._collisionCounts.set(objectId, prevCount + 1);
     }
 
-    // [BUG-M5 FIX] Severity threshold raised from 15 → 25.
-    // Old threshold (15) was too low — KCC sliding contacts and minor grazes
-    // frequently triggered the full hurt/cry/get_up chain (5.3s of inaction).
-    // Raising to 25 filters grazes and micro-collisions while still catching
-    // real impacts. Combined with reduced crying_sit (3.0s→1.5s) below,
-    // total hurt chain time drops from 5.3s to ~3.1s max, and triggers 50% less often.
-    if (severity < 25) { // [BUG-M5 FIX] was 15
+    if (severity < 25) { 
       if (objectId) {
         this.actionLog.push({ type: 'graze', severity: severity.toFixed(1), objectId });
       }
@@ -1935,15 +1916,10 @@ class Agent {
     const hurtDuration = severity > 80 ? 5.0
       : severity > 50 ? 3.0 : severity > 20 ? 2.0 : 0.5;
     const hurtEmotion = severity > 20 ? 'crying' : 'scared';
-
-    // [BUG-M5 FIX] crying_sit duration reduced from 3.0s → 1.5s.
-    // Old chain: hurt(2.0) + cry(3.0) + get_up(1.5) = 6.5s idle for severity 20–50.
-    // New chain: hurt(2.0) + cry(1.5) + get_up(1.5) = 5.0s → 23% less idle time.
-    // For severity > 50: hurt(3.0) + cry(1.5) + get_up(2.0) = 6.5s (was 8.0s).
     const chain = [{ type: 'hurt', action: hurtAction, duration: hurtDuration, completed: false }];
     if (severity > 20) {
       chain.push({ type: 'crying', action: severity > 50 ? 'crying_sit' : 'crying_stand',
-        duration: severity > 50 ? 1.5 : 1.0, completed: false }); // [BUG-M5 FIX] was 3.0 / 1.5
+        duration: severity > 50 ? 1.5 : 1.0, completed: false });
     }
     chain.push({ type: 'recovery', action: severity > 50 ? 'get_up_slow' : 'get_up_fast',
       duration: severity > 50 ? 2.0 : 0.8, completed: false });
@@ -1958,7 +1934,7 @@ class Agent {
     this.currentBehavior = null;
     this.state = 'INTERACTING';
     this._setEmotion(hurtEmotion);
-    this.recoveryTimer = hurtDuration + (severity > 20 ? 1.5 : 0.5); // [BUG-M5 FIX] was 3.0
+    this.recoveryTimer = hurtDuration + (severity > 20 ? 1.5 : 0.5);
 
     this._recordDangerZone(this.getPosition(), severity);
     this._logRiskEvent('collision', this.getPosition(), { severity, objectId: objectId });
@@ -2105,6 +2081,8 @@ class Agent {
     if (!this.handSensors || !this.body) return;
     const pos = this.body.translation();
     const ag  = getAgeGroup(this.ageGroupId);
+    
+    // Tính toán vị trí sensor tay chạy tịnh tiến mượt mà theo ma trận cơ học tuyệt đối của Server
     physicsEngine.updateHandSensorPositions(
       this.handSensors.left, this.handSensors.right,
       pos, this.currentHeading, ag?.height ?? 0.8, ag?.anthropometry ?? null
@@ -2345,9 +2323,23 @@ class Agent {
     const prof   = this._ageProfile;
     const validCheckFn = (x, z) => !this._isInsideSolidObstacle(x, z, bounds);
 
+    // [FIX REALISM] Tính MAX_RANDOM_DIST dựa trên độ tuổi và thời gian mô phỏng
+    // Tránh set target quá xa khiến nhân vật không kịp di chuyển trong 20-30s simulation
+    const ag = getAgeGroup(this.ageGroupId);
+    const avgSpeed = prof?.velocityProfile?.walk?.mean || prof?.velocityProfile?.crawl?.mean || 0.15;
+    const SIM_TIME_BUDGET = 25; // Dự kiến 20-30s simulation, trừ buffer cho actions
+    const ACTION_TIME_BUFFER = 3; // Buffer cho non-movement actions (reach, grab, etc.)
+    const ACTUAL_MOVE_TIME = Math.max(5, SIM_TIME_BUDGET - ACTION_TIME_BUFFER);
+    const MAX_RANDOM_DIST = avgSpeed * ACTUAL_MOVE_TIME * 0.8; // 80% để có margin
+    const MIN_RANDOM_DIST = Math.max(1.0, avgSpeed * 3); // Ít nhất 3 giây di chuyển
+    if (!this._distanceLogged) {
+      console.log(`[Agent ${this.id}] Distance constraints: MIN=${MIN_RANDOM_DIST.toFixed(2)}m, MAX=${MAX_RANDOM_DIST.toFixed(2)}m (speed=${avgSpeed.toFixed(3)}m/s)`);
+      this._distanceLogged = true;
+    }
+
     if (this.boredomLevel > 0.6 && this._boundsInited) {
       const pos = this.getPosition();
-      const explorationPt = this.explorationMap.getLeastVisitedCenter(pos, 1.5, validCheckFn);
+      const explorationPt = this.explorationMap.getLeastVisitedCenter(pos, Math.min(1.5, MIN_RANDOM_DIST), validCheckFn);
       if (explorationPt) {
         this.targetPosition = [explorationPt[0], floorY, explorationPt[1]];
         this.targetLockTimer = this.simTime + 2.0 + Math.random() * 2.0;
@@ -2358,35 +2350,31 @@ class Agent {
 
     if (this._boundsInited && Math.random() < 0.3) {
       const pos = this.getPosition();
-      // [BUG-M7 FIX] Minimum distance floored at 1.5m for all age groups.
-      // Old: minD = explorationBias * 1.5 → infant (bias=0.25): minD=0.375m
-      //      Agent only needed to move 0.375m → stayed near spawn point forever.
-      // New: minD = max(1.5, explorationBias * 2.0) → infant: max(1.5, 0.5)=1.5m
-      //      All agents must travel at least 1.5m to satisfy minDist filter.
-      const minD = Math.max(1.5, (prof.explorationBias || 0.5) * 2.0); // [BUG-M7 FIX] was: bias*1.5
+      const minD = Math.max(MIN_RANDOM_DIST, (prof.explorationBias || 0.5) * 2.0);
+      const maxD = MAX_RANDOM_DIST;
       const pt = this.explorationMap.getLeastVisitedCenter(pos, minD, validCheckFn);
       if (pt) {
-        this.targetPosition = [pt[0], floorY, pt[1]];
-        this.targetLockTimer = this.simTime + 2.0 + Math.random() * 2.0;
-        return;
+        const distToPt = Math.hypot(pt[0] - pos[0], pt[1] - pos[2]);
+        if (distToPt <= maxD) {
+          this.targetPosition = [pt[0], floorY, pt[1]];
+          this.targetLockTimer = this.simTime + 2.0 + Math.random() * 2.0;
+          return;
+        }
       }
     }
 
     const solidObstacles = this._buildSolidObstacles(bounds);
     const pads = [0.45, 0.30, 0.15];
     const curPos = this.getPosition();
-    
-    // [BUG-M10 FIX] Require setRandomTarget to pick a point at least 1.5m away
-    const MIN_RANDOM_DIST = 1.5;
 
     for (const pad of pads) {
       for (let attempt = 0; attempt < 30; attempt++) {
         const x = bounds.min[0] + Math.random() * (bounds.max[0] - bounds.min[0]);
         const z = bounds.min[2] + Math.random() * (bounds.max[2] - bounds.min[2]);
         
-        // Ensure distance is far enough to encourage crossing the room
+        // [FIX REALISM] Ensure distance is within realistic walking time
         const distToTarget = Math.hypot(x - curPos[0], z - curPos[2]);
-        if (distToTarget < MIN_RANDOM_DIST) continue;
+        if (distToTarget < MIN_RANDOM_DIST || distToTarget > MAX_RANDOM_DIST) continue;
 
         let blocked = false;
         for (const obs of solidObstacles) {
@@ -2399,22 +2387,34 @@ class Agent {
         if (!blocked) {
           this.targetPosition = [x, floorY, z];
           this.targetLockTimer = this.simTime + 2.0 + Math.random() * 2.0;
+          if (this.ageGroupId === 'infant' && distToTarget > 3.0) {
+            console.log(`[Agent ${this.id}] Target set: ${distToTarget.toFixed(2)}m away, infant crawl time: ${(distToTarget/avgSpeed).toFixed(1)}s`);
+          }
           return;
         }
       }
     }
+    // [FIX REALISM] Fallback: chọn random target trong bounds nhưng vẫn respect MAX_RANDOM_DIST
+    for (let fallbackAttempt = 0; fallbackAttempt < 10; fallbackAttempt++) {
+      const x = bounds.min[0] + Math.random() * (bounds.max[0] - bounds.min[0]);
+      const z = bounds.min[2] + Math.random() * (bounds.max[2] - bounds.min[2]);
+      const dist = Math.hypot(x - curPos[0], z - curPos[2]);
+      if (dist >= MIN_RANDOM_DIST && dist <= MAX_RANDOM_DIST) {
+        this.targetPosition = [x, floorY, z];
+        this.targetLockTimer = this.simTime + 2.0 + Math.random() * 2.0;
+        return;
+      }
+    }
+    // Last resort: near current position
     this.targetPosition = [
-      bounds.min[0] + Math.random() * (bounds.max[0] - bounds.min[0]),
+      curPos[0] + (Math.random() - 0.5) * MIN_RANDOM_DIST * 2,
       floorY,
-      bounds.min[2] + Math.random() * (bounds.max[2] - bounds.min[2]),
+      curPos[2] + (Math.random() - 0.5) * MIN_RANDOM_DIST * 2,
     ];
     this.targetLockTimer = this.simTime + 2.0 + Math.random() * 2.0;
   }
 
   _buildSolidObstacles(bounds) {
-    // [GEOM-2 FIX] roomW derived from actual bbox dimensions, not grid cell count.
-    // Old: max(cols, rows) × cellSize → underestimates non-square rooms.
-    // New: use bounds directly; fallback to grid estimate.
     let roomW = 10;
     if (bounds) {
       roomW = Math.max(bounds.max[0] - bounds.min[0], bounds.max[2] - bounds.min[2]);
@@ -2494,10 +2494,15 @@ class Agent {
   }
 
   loadBehaviorPolicy(behaviors) {
-    this.behaviorQueue = behaviors.map(b => ({
-      ...b, completed: false,
-      sequence: b.sequence ? b.sequence.map(a => ({ ...a, completed: false })) : [],
-    }));
+    this.behaviorQueue = behaviors.map(b => {
+      // [REALISM FIX] Normalize behavior durations on load
+      const normalized = this._adjustBehaviorDuration({
+        ...b,
+        completed: false,
+        sequence: b.sequence ? b.sequence.map(a => ({ ...a, completed: false })) : []
+      });
+      return normalized;
+    });
   }
 
   startRareEventChain(chain) {
@@ -2513,9 +2518,7 @@ class Agent {
     if (isNaN(t.x) || isNaN(t.y) || isNaN(t.z)) {
       return this.previousPosition || [0, 0, 0];
     }
-    // [BUG-M11 FIX] Export feet Y instead of centre Y.
-    // The Trajectory log is sent to the frontend. Canvas3D expects the base of the avatar.
-    // By subtracting half the capsule height, we provide the floor level coordinate.
+
     return [t.x, t.y - this._agentHalfH, t.z];
   }
 
@@ -2543,6 +2546,7 @@ class Agent {
       totalDistance: this.totalDistance, fatigue: this.fatigueLevel,
       gaitStability: this.gaitStability,
       behaviorsCompleted: this.behaviorQueue?.filter(b => b.completed).length ?? 0,
+      animation: this.currentAnimation ?? 'idle',
     };
   }
 

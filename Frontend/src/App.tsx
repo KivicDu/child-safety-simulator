@@ -12,6 +12,7 @@ const Simulator = lazy(() => import("./pages/Simulator"));
 const SafetyTips = lazy(() => import("./pages/SafetyTips"));
 const TestLab = lazy(() => import("./pages/TestLab"));
 const AboutUs = lazy(() => import("./pages/AboutUs"));
+const ActionViewer = lazy(() => import("./pages/ActionViewer"));
 const ModelDiagnostic = lazy(
   () => import("./components/SafeStepsJourney/ModelDiagnostic"),
 );
@@ -154,6 +155,14 @@ function AnimatedRoutes() {
           element={
             <Suspense fallback={<LoadingPage />}>
               <ModelDiagnostic />
+            </Suspense>
+          }
+        />
+        <Route
+          path="/action-viewer"
+          element={
+            <Suspense fallback={<LoadingPage />}>
+              <ActionViewer />
             </Suspense>
           }
         />

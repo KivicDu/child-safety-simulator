@@ -158,10 +158,12 @@ export default function HazardTable({
     /* Center X/Z, đặt đáy model xuống y=0 trong local group */
     clonedScene.position.set(-center.x, -box.min.y, -center.z);
 
-    /* ── FIX T-16: Tính 4 góc trên mặt bàn (max Y) trong world space ── */
-    const hw = (box.max.x - box.min.x) * 0.5; // half width
-    const hd = (box.max.z - box.min.z) * 0.5; // half depth
-    const ht = box.max.y - box.min.y;          // full height = vị trí mặt bàn
+    /* ── FIX T-16: RECALCULATE bbox sau reposition để lấy vị trí mặt bàn chính xác ── */
+    const boxAfter = new THREE.Box3().setFromObject(clonedScene);
+    
+    const hw = (boxAfter.max.x - boxAfter.min.x) * 0.5; // half width
+    const hd = (boxAfter.max.z - boxAfter.min.z) * 0.5; // half depth
+    const ht = boxAfter.max.y * 0.85;                    // top surface Y với offset tránh chân bàn
 
     const topCorners: THREE.Vector3[] = [
       [-hw, ht, -hd],

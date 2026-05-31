@@ -7,7 +7,7 @@
  *   baby_animation.glb     → clip "walk"       (Frame 2 đi)
  *   baby_animation.glb     → clip "idle"       (Frame 3 + 4)
  */
-import { useRef, useEffect } from "react";
+import { useRef, useEffect, useMemo } from "react";
 import { useGLTF, useAnimations } from "@react-three/drei";
 import { useFrame } from "@react-three/fiber";
 import * as THREE from "three";
@@ -151,11 +151,10 @@ function BabyModel({ active, phase }: { active: boolean; phase: BabyPhase }) {
       loopOnce ? 1 : Infinity,
     );
     a.clampWhenFinished = loopOnce;
-    /* T-07: Delay fadeIn 350ms to avoid ghost overlap with PlayModel */
-    const timer = setTimeout(() => {
+    /* T-07: FIX — Delay nhỏ trước fadeIn để clip load xong, tránh T-pose */
+    setTimeout(() => {
       a.fadeIn(0.4).play();
-    }, 350);
-    return () => clearTimeout(timer);
+    }, 16);
   }, [active, phase, actions]);
 
   useEffect(() => {
@@ -188,18 +187,34 @@ interface Props {
   scrollProgress: number;
   phase: BabyPhase;
   position?: [number, number, number];
+  walkEnd?: [number, number, number]; // Dynamic walk endpoint từ HazardTable
 }
 
 export default function BabyCharacter({
   scrollProgress,
   phase,
   position = [0, 0, 0],
+  walkEnd = WALK_END,
 }: Props) {
   const rootRef = useRef<THREE.Group>(null!);
   const worldPos = useRef(new THREE.Vector3(...WALK_START));
   const targetPos = useRef(new THREE.Vector3(...WALK_START));
   const targetRotY = useRef(0);
   const timeRef = useRef(0);
+
+  /* ── Compute buffered walkEnd (offset từ corner để em bé đứng cách xa + sang phải) ── */
+  const bufferedWalkEnd = useMemo(() => {
+    const dX = walkEnd[0] - WALK_START[0];
+    const dZ = walkEnd[2] - WALK_START[2];
+    const dist = Math.sqrt(dX * dX + dZ * dZ);
+    if (dist < 0.01) return walkEnd;
+    /* Lùi lại 0.18 unit từ walkEnd theo hướng quay về, + offset sang phải (X+) */
+    const backupDist = 0.18;
+    const backX = (dX / dist) * backupDist;
+    const backZ = (dZ / dist) * backupDist;
+    const rightOffset = 0.08; /* Offset sang phải */
+    return [walkEnd[0] - backX + rightOffset, walkEnd[1], walkEnd[2] - backZ] as [number, number, number];
+  }, [walkEnd]);
 
   useEffect(() => {
     if (phase === "play") {
@@ -209,25 +224,23 @@ export default function BabyCharacter({
     } else if (phase === "stand") {
       targetPos.current.set(...WALK_START);
       /* Bắt đầu đứng lên: Rục rịch quay người sang hướng cái bàn */
-      targetRotY.current = Math.atan2(
-        WALK_END[0] - WALK_START[0],
-        WALK_END[2] - WALK_START[2],
-      );
+      const dX = bufferedWalkEnd[0] - WALK_START[0];
+      const dZ = bufferedWalkEnd[2] - WALK_START[2];
+      targetRotY.current = Math.atan2(dX, dZ) + 0.45; /* +0.45 rad = xoay phải thêm */
     } else if (phase === "walk" || phase === "idle") {
-      /* Walk progress — baby stops when it reaches WALK_END */
+      /* Walk progress — baby stops when it reaches bufferedWalkEnd */
       const wp = Math.min(1, Math.max(0, (scrollProgress - 0.58) / 0.12));
       const ease = wp * wp * (3 - 2 * wp);
       targetPos.current.set(
-        WALK_START[0] + (WALK_END[0] - WALK_START[0]) * ease,
+        WALK_START[0] + (bufferedWalkEnd[0] - WALK_START[0]) * ease,
         0,
-        WALK_START[2] + (WALK_END[2] - WALK_START[2]) * ease,
+        WALK_START[2] + (bufferedWalkEnd[2] - WALK_START[2]) * ease,
       );
-      targetRotY.current = Math.atan2(
-        WALK_END[0] - WALK_START[0],
-        WALK_END[2] - WALK_START[2],
-      );
+      const dX = bufferedWalkEnd[0] - WALK_START[0];
+      const dZ = bufferedWalkEnd[2] - WALK_START[2];
+      targetRotY.current = Math.atan2(dX, dZ) + 0.1;
     }
-  }, [scrollProgress, phase]);
+  }, [scrollProgress, phase, bufferedWalkEnd]);
 
   useFrame((_, delta) => {
     if (!rootRef.current) return;
@@ -248,7 +261,7 @@ export default function BabyCharacter({
       position[2] + worldPos.current.z,
     );
     rootRef.current.rotation.y +=
-      (targetRotY.current - rootRef.current.rotation.y) * 0.07;
+      (targetRotY.current - rootRef.current.rotation.y) * 0.12;
   });
 
   if (scrollProgress < 0.35) return null;
